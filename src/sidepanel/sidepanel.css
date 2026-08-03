@@ -277,3 +277,140 @@ h3.article-title {
   padding: 0.1rem 0.4rem;
   border-radius: 4px;
 }
+
+/* ====== PROGRESS CARDS ====== */
+.progress-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.progress-card {
+  background: linear-gradient(135deg, #1e1e2f 0%, #252540 100%);
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.progress-card-label {
+  font-size: 0.68rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.progress-card-value {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #e0e0e0;
+}
+
+.delta {
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-left: 0.25rem;
+}
+
+.delta.positive { color: #4ade80; }
+.delta.negative { color: #f87171; }
+
+/* ====== TREND CHART ====== */
+.section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #aaa;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.chart-container {
+  margin-bottom: 1rem;
+}
+
+.chart-wrapper {
+  background: #1e1e2f;
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  height: 160px;
+  position: relative;
+}
+
+.trend-placeholder {
+  background: #1e1e2f;
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  text-align: center;
+}
+
+.trend-placeholder p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #888;
+}
+
+/* ====== SESSION COMPARISON ====== */
+.comparison-card {
+  background: #1e1e2f;
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.comparison-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.comparison-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto auto;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 0.8rem;
+}
+
+.comparison-row:last-child {
+  border-bottom: none;
+}
+
+.comparison-label {
+  color: #999;
+  font-weight: 500;
+}
+
+.comparison-before {
+  color: #f87171;
+  font-weight: 600;
+  text-align: right;
+}
+
+.comparison-arrow {
+  color: #555;
+  font-size: 0.7rem;
+}
+
+.comparison-after {
+  color: #4ade80;
+  font-weight: 600;
+  text-align: right;
+}
+
+.comparison-delta {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: right;
+  min-width: 2.5rem;
+}
+
+.comparison-delta.positive { color: #4ade80; }
+.comparison-delta.negative { color: #f87171; }

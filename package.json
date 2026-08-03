@@ -7,12 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.1",
-    "@playwright/test": "^1.61.1",
     "@types/chrome": "^0.2.2",
     "@types/dompurify": "^3.0.5",
     "@types/node": "^26.1.1",
@@ -26,6 +24,7 @@
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
+    "chart.js": "^4.5.1",
     "compromise": "^14.16.0",
     "compromise-dates": "^3.8.1",
     "compromise-numbers": "^1.4.0",

@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Chart, registerables } from 'chart.js';
 import { OllamaProvider } from '../lib/llm/ollama-provider';
 import { resolveProfile } from '../lib/profile/resolver';
 import { buildPrompt } from '../lib/prompt-builder/builder';
 import { segmentHtml } from '../lib/segmentation/segmenter';
+import { computeReadabilityReport } from '../lib/metrics/engine';
 import { DEFAULT_PROFILE, getUserProfile, saveUserProfile } from '../lib/storage/settings';
+import { recordSession, getWeeklyProgress } from '../lib/storage/progress';
 import type {
   ReadabilityReport, UserProfile, LLMAvailability, ContentNode, SimplificationResult,
 } from '../types';
+
+Chart.register(...registerables);
 
 export default function App() {
   // --- Tab state ---
@@ -32,6 +37,12 @@ export default function App() {
   const [simplifying, setSimplifying] = useState(false);
   const [results, setResults] = useState<SimplificationResult[]>([]);
   const [showOriginal, setShowOriginal] = useState(false);
+  const [simplifiedReport, setSimplifiedReport] = useState<ReadabilityReport | null>(null);
+
+  // --- Progress tracking state ---
+  const [weeklyProgress, setWeeklyProgress] = useState<{ weekStart: string; avgTargetGrade: number; sessionCount: number }[]>([]);
+  const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const chartInstanceRef = useRef<Chart | null>(null);
 
   // ============================================================
   // 1. On mount: check LLM availability, load profile, trigger extraction
@@ -49,6 +60,14 @@ export default function App() {
         setProfile(saved);
       } catch {
         // storage not available (e.g. in tests) — keep default
+      }
+
+      // Load progress history
+      try {
+        const progress = await getWeeklyProgress();
+        setWeeklyProgress(progress);
+      } catch {
+        // Non-fatal
       }
 
       // Ask background to inject the extractor into the active tab
@@ -127,6 +146,7 @@ export default function App() {
 
     setSimplifying(true);
     setResults([]);
+    setSimplifiedReport(null);
 
     try {
       // Step 1: Resolve profile → SimplificationSpec
@@ -163,6 +183,7 @@ export default function App() {
 
       // Step 5: Stream each node through the LLM
       let previousContext = '';
+      const completedTexts: string[] = [];
       for (let i = 0; i < simplifiableNodes.length; i++) {
         const node = simplifiableNodes[i];
         const prompt = buildPrompt(node, spec, report, previousContext);
@@ -183,13 +204,12 @@ export default function App() {
             ));
           }
           // Strip any leaked <think>...</think> blocks before finalizing.
-          // qwen3:4b is known to leak reasoning artifacts despite think:false
-          // and the /no_think directive — this is the last line of defense.
           fullText = stripThinkingArtifacts(fullText);
           // Mark done
           setResults(prev => prev.map((r, idx) =>
             idx === i ? { ...r, simplifiedText: fullText, status: 'done' } : r
           ));
+          completedTexts.push(fullText);
           // Carry forward context for next chunk
           const sentences = fullText.split(/[.!?]\s/);
           previousContext = sentences[sentences.length - 1] || '';
@@ -200,12 +220,98 @@ export default function App() {
           ));
         }
       }
+
+      // Step 6: Compute "after" readability report on the full simplified text
+      if (completedTexts.length > 0) {
+        const combinedSimplifiedText = completedTexts.join('\n\n');
+        const afterReport = computeReadabilityReport(combinedSimplifiedText);
+        setSimplifiedReport(afterReport);
+
+        // Step 7: Record session for progress tracking
+        try {
+          await recordSession(spec.targetGrade);
+          const progress = await getWeeklyProgress();
+          setWeeklyProgress(progress);
+        } catch {
+          // Non-fatal — progress tracking failure shouldn't break simplification
+        }
+      }
     } catch (err) {
       console.error('Simplification pipeline failed:', err);
     } finally {
       setSimplifying(false);
     }
   }, [report, articleHtml, articleTitle, contentHash, profile]);
+
+  // ============================================================
+  // 5. Chart.js effect — render/update the trend chart when data or tab changes
+  // ============================================================
+  useEffect(() => {
+    if (activeTab !== 'profile') return;
+    if (weeklyProgress.length < 2) return;
+
+    // Wait a frame for the canvas to be in the DOM
+    const timeoutId = setTimeout(() => {
+      const canvas = chartCanvasRef.current;
+      if (!canvas) return;
+
+      // Destroy previous chart instance if any
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+        chartInstanceRef.current = null;
+      }
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      chartInstanceRef.current = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: weeklyProgress.map(w => {
+            const d = new Date(w.weekStart);
+            return `${d.getMonth() + 1}/${d.getDate()}`;
+          }),
+          datasets: [{
+            label: 'Avg Target Grade',
+            data: weeklyProgress.map(w => w.avgTargetGrade),
+            borderColor: '#7c83ff',
+            backgroundColor: 'rgba(124, 131, 255, 0.15)',
+            borderWidth: 2,
+            pointRadius: 4,
+            pointBackgroundColor: '#a78bfa',
+            fill: true,
+            tension: 0.3,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+          },
+          scales: {
+            x: {
+              ticks: { color: '#888', font: { size: 11 } },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+            },
+            y: {
+              ticks: { color: '#888', font: { size: 11 } },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+              title: { display: true, text: 'Grade Level', color: '#888', font: { size: 11 } },
+            },
+          },
+        },
+      });
+    }, 50);
+
+    return () => {
+      clearTimeout(timeoutId);
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+        chartInstanceRef.current = null;
+      }
+    };
+  }, [activeTab, weeklyProgress]);
 
   // ============================================================
   // Render helpers
@@ -220,6 +326,14 @@ export default function App() {
   const statusText = availability === 'checking' ? '⏳ Checking Ollama…'
     : availability === 'available' ? '● Ollama Ready'
     : '✗ Ollama Not Reachable';
+
+  // Progress summary calculations
+  const totalSessions = weeklyProgress.reduce((sum, w) => sum + w.sessionCount, 0);
+  const thisWeekData = weeklyProgress.length > 0 ? weeklyProgress[weeklyProgress.length - 1] : null;
+  const earliestData = weeklyProgress.length > 0 ? weeklyProgress[0] : null;
+  const gradeDelta = (thisWeekData && earliestData && weeklyProgress.length >= 2)
+    ? thisWeekData.avgTargetGrade - earliestData.avgTargetGrade
+    : null;
 
   // ============================================================
   // Render
@@ -283,6 +397,68 @@ export default function App() {
         {activeTab === 'profile' && (
           <div className="tab-content profile">
             <h2>Reading Profile</h2>
+
+            {/* ---- Progress Summary Cards ---- */}
+            <div className="progress-cards">
+              <div className="progress-card">
+                <div className="progress-card-label">Total Sessions</div>
+                <div className="progress-card-value">{totalSessions}</div>
+              </div>
+              <div className="progress-card">
+                <div className="progress-card-label">This Week Avg Grade</div>
+                <div className="progress-card-value">
+                  {thisWeekData ? thisWeekData.avgTargetGrade.toFixed(1) : '—'}
+                  {gradeDelta !== null && (
+                    <span className={`delta ${gradeDelta >= 0 ? 'positive' : 'negative'}`}>
+                      {' '}{gradeDelta >= 0 ? '▲' : '▼'}{Math.abs(gradeDelta).toFixed(1)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* ---- Trend Chart ---- */}
+            {weeklyProgress.length >= 2 ? (
+              <div className="chart-container">
+                <h3 className="section-title">Reading Level Trend</h3>
+                <div className="chart-wrapper">
+                  <canvas ref={chartCanvasRef} />
+                </div>
+              </div>
+            ) : (
+              <div className="trend-placeholder">
+                <p>📈 Keep reading to see your trend — at least 2 weeks of data needed.</p>
+              </div>
+            )}
+
+            {/* ---- Session Comparison Card ---- */}
+            {report && simplifiedReport && (
+              <div className="comparison-card">
+                <h3 className="section-title">This Session</h3>
+                <div className="comparison-grid">
+                  <ComparisonRow
+                    label="Grade Level"
+                    before={report.estimatedGradeLevel}
+                    after={simplifiedReport.estimatedGradeLevel}
+                  />
+                  <ComparisonRow
+                    label="Jargon Density"
+                    before={report.jargonDensity}
+                    after={simplifiedReport.jargonDensity}
+                    unit="%"
+                  />
+                  <ComparisonRow
+                    label="Avg Sentence Len"
+                    before={report.avgSentenceLength}
+                    after={simplifiedReport.avgSentenceLength}
+                    unit=" words"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* ---- Profile Settings Form ---- */}
+            <h3 className="section-title" style={{ marginTop: '1rem' }}>Settings</h3>
 
             <label htmlFor="age-group">Age Group</label>
             <select
@@ -410,6 +586,32 @@ export default function App() {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+// ============================================================
+// Sub-components
+// ============================================================
+function ComparisonRow({ label, before, after, unit = '' }: {
+  label: string;
+  before: number;
+  after: number;
+  unit?: string;
+}) {
+  const delta = after - before;
+  // For all three metrics (grade level, jargon density, sentence length),
+  // a decrease is an improvement.
+  const improved = delta < 0;
+  return (
+    <div className="comparison-row">
+      <span className="comparison-label">{label}</span>
+      <span className="comparison-before">{before.toFixed(1)}{unit}</span>
+      <span className="comparison-arrow">→</span>
+      <span className="comparison-after">{after.toFixed(1)}{unit}</span>
+      <span className={`comparison-delta ${improved ? 'positive' : delta > 0 ? 'negative' : ''}`}>
+        {delta >= 0 ? '+' : ''}{delta.toFixed(1)}
+      </span>
     </div>
   );
 }
