@@ -1,0 +1,288 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { getUserProfile, saveUserProfile, DEFAULT_PROFILE } from '../../lib/storage/settings';
+import { clearAllDocuments } from '../../lib/storage/documents';
+import { resolveTargetGrade } from '../../lib/profile/resolver';
+import type { UserProfile, DisplayPrefs } from '../../types';
+
+interface SettingsProps {
+  displayPrefs: DisplayPrefs;
+  onUpdatePrefs: (patch: Partial<DisplayPrefs>) => void;
+}
+
+type SaveStatus = 'idle' | 'saved' | 'error';
+
+export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
+  const [profile, setProfile]               = useState<UserProfile>(DEFAULT_PROFILE);
+  const [customWords, setCustomWords]       = useState('');
+  const [wordStatus, setWordStatus]         = useState<SaveStatus>('idle');
+  const [docStatus, setDocStatus]           = useState<SaveStatus>('idle');
+  const [progressStatus, setProgressStatus] = useState<SaveStatus>('idle');
+
+  // ── Load on mount ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    getUserProfile().then(p => setProfile(p));
+    chrome.storage.sync.get('customWords').then(data => {
+      if (typeof data.customWords === 'string') setCustomWords(data.customWords);
+    });
+  }, []);
+
+  // ── Profile update ──────────────────────────────────────────────────────────
+  const updateProfile = useCallback(async (patch: Partial<UserProfile>) => {
+    setProfile(prev => {
+      const next = { ...prev, ...patch };
+      saveUserProfile(next);   // fire-and-forget; non-critical if it fails
+      return next;
+    });
+  }, []);
+
+  // ── Custom words save ───────────────────────────────────────────────────────
+  const handleSaveWords = async () => {
+    try {
+      await chrome.storage.sync.set({ customWords });
+      flash(setWordStatus, 'saved');
+    } catch {
+      flash(setWordStatus, 'error');
+    }
+  };
+
+  // ── Clear documents (docs:index + doc:* — leaves progress:weekly untouched) ─
+  const handleClearDocuments = async () => {
+    try {
+      await clearAllDocuments();
+      flash(setDocStatus, 'saved');
+    } catch {
+      flash(setDocStatus, 'error');
+    }
+  };
+
+  // ── Reset progress (progress:weekly only) ──────────────────────────────────
+  const handleResetProgress = async () => {
+    try {
+      await chrome.storage.local.remove('progress:weekly');
+      flash(setProgressStatus, 'saved');
+    } catch {
+      flash(setProgressStatus, 'error');
+    }
+  };
+
+  const effectiveGrade = resolveTargetGrade(profile);
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+  return (
+    <div className="page settings-page">
+      <h1 className="page-heading">Settings</h1>
+
+      {/* ── 1. Reading Profile ──────────────────────────────────────────────── */}
+      <section className="settings-section">
+        <h2 className="settings-section-title">Reading Profile</h2>
+
+        <div className="form-group">
+          <label htmlFor="age-group">Age Group</label>
+          <select
+            id="age-group"
+            value={profile.ageGroup}
+            onChange={e => updateProfile({ ageGroup: e.target.value as UserProfile['ageGroup'] })}
+          >
+            <option value="child">Child (grades 1–5)</option>
+            <option value="teen">Teen (grades 6–10)</option>
+            <option value="adult">Adult (grades 11+)</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="target-grade">
+            Target Grade Level
+            <span className="form-hint"> — controls how much the AI simplifies text</span>
+          </label>
+          <div className="slider-row">
+            <input
+              id="target-grade"
+              type="range"
+              min={1}
+              max={16}
+              value={effectiveGrade}
+              onChange={e => updateProfile({ targetGradeLevel: parseInt(e.target.value, 10) })}
+            />
+            <span className="slider-value">
+              {profile.targetGradeLevel === 'auto' ? `Auto (${effectiveGrade})` : `Grade ${effectiveGrade}`}
+            </span>
+            {profile.targetGradeLevel !== 'auto' && (
+              <button className="reset-btn" onClick={() => updateProfile({ targetGradeLevel: 'auto' })}>
+                Reset to Auto
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="purpose">Reading Purpose</label>
+          <select
+            id="purpose"
+            value={profile.readingPurpose}
+            onChange={e => updateProfile({ readingPurpose: e.target.value as UserProfile['readingPurpose'] })}
+          >
+            <option value="general">General</option>
+            <option value="esl">ESL / English learner</option>
+            <option value="dyslexia-friendly">Dyslexia-friendly</option>
+            <option value="expert-to-lay">Expert → Layperson</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="style">Preferred Style</label>
+          <select
+            id="style"
+            value={profile.preferredStyle}
+            onChange={e => updateProfile({ preferredStyle: e.target.value as UserProfile['preferredStyle'] })}
+          >
+            <option value="plain">Plain language</option>
+            <option value="bullet-summary">Bullet summary</option>
+            <option value="eli5">ELI5 (explain like I'm 5)</option>
+            <option value="concise">Concise</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="familiarity">Domain Familiarity</label>
+          <select
+            id="familiarity"
+            value={profile.domainFamiliarity}
+            onChange={e => updateProfile({ domainFamiliarity: e.target.value as UserProfile['domainFamiliarity'] })}
+          >
+            <option value="novice">Novice</option>
+            <option value="intermediate">Intermediate</option>
+            <option value="expert">Expert</option>
+          </select>
+        </div>
+      </section>
+
+      {/* ── 2. Display Preferences ─────────────────────────────────────────── */}
+      <section className="settings-section">
+        <h2 className="settings-section-title">Display</h2>
+
+        <div className="form-group form-group-inline">
+          <label htmlFor="dyslexia-toggle">Dyslexia-friendly font (OpenDyslexic)</label>
+          <button
+            id="dyslexia-toggle"
+            className={`toggle-switch ${displayPrefs.dyslexiaFont ? 'on' : ''}`}
+            onClick={() => onUpdatePrefs({ dyslexiaFont: !displayPrefs.dyslexiaFont })}
+            role="switch"
+            aria-checked={displayPrefs.dyslexiaFont}
+          >
+            <span className="toggle-thumb" />
+          </button>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="text-size">Text Size in Reading view</label>
+          <select
+            id="text-size"
+            value={displayPrefs.textSize}
+            onChange={e => onUpdatePrefs({ textSize: e.target.value as DisplayPrefs['textSize'] })}
+          >
+            <option value="normal">Normal (16px)</option>
+            <option value="large">Large (19px)</option>
+            <option value="xlarge">Extra Large (22px)</option>
+          </select>
+        </div>
+
+        <div className="form-group form-group-inline">
+          <label htmlFor="focus-toggle">
+            Focus mode
+            <span className="form-hint"> — dims paragraphs you're not hovering over</span>
+          </label>
+          <button
+            id="focus-toggle"
+            className={`toggle-switch ${displayPrefs.focusMode ? 'on' : ''}`}
+            onClick={() => onUpdatePrefs({ focusMode: !displayPrefs.focusMode })}
+            role="switch"
+            aria-checked={displayPrefs.focusMode}
+          >
+            <span className="toggle-thumb" />
+          </button>
+        </div>
+      </section>
+
+      {/* ── 3. Vocabulary ──────────────────────────────────────────────────── */}
+      <section className="settings-section">
+        <h2 className="settings-section-title">Custom Common Words</h2>
+        <p className="settings-hint">
+          Words listed here won't be counted as jargon in readability reports.
+          One word per line or comma-separated.
+        </p>
+        <textarea
+          rows={6}
+          className="word-textarea"
+          value={customWords}
+          onChange={e => setCustomWords(e.target.value)}
+          placeholder={'quantum\nphotosynthesis\nmitochondria'}
+          spellCheck={false}
+        />
+        <div className="form-actions">
+          <button className="btn-primary" onClick={handleSaveWords}>Save words</button>
+          <StatusTag status={wordStatus} />
+        </div>
+      </section>
+
+      {/* ── 4. Data ────────────────────────────────────────────────────────── */}
+      <section className="settings-section">
+        <h2 className="settings-section-title">Data</h2>
+
+        <div className="data-row">
+          <div className="data-row-text">
+            <div className="data-row-label">Clear document history</div>
+            <div className="settings-hint">
+              Removes all captured documents and simplified results.
+              Progress tracking data is <strong>not</strong> affected.
+            </div>
+          </div>
+          <div className="data-row-action">
+            <button className="btn-destructive" onClick={handleClearDocuments}>Clear</button>
+            <StatusTag status={docStatus} />
+          </div>
+        </div>
+
+        <div className="data-row">
+          <div className="data-row-text">
+            <div className="data-row-label">Reset progress history</div>
+            <div className="settings-hint">
+              Clears the weekly reading level trend only. Documents are <strong>not</strong> affected.
+            </div>
+          </div>
+          <div className="data-row-action">
+            <button className="btn-destructive" onClick={handleResetProgress}>Reset</button>
+            <StatusTag status={progressStatus} />
+          </div>
+        </div>
+      </section>
+
+      {/* ── 5. About ───────────────────────────────────────────────────────── */}
+      <section className="settings-section settings-section-about">
+        <h2 className="settings-section-title">About</h2>
+        <p className="settings-hint">
+          <strong>Clarity</strong> v1.0.0 · All AI processing runs locally via Ollama — no text ever
+          leaves your device.
+          <br />
+          Set <code>OLLAMA_ORIGINS=chrome-extension://emnnfgmpahidhdpdakmblphimmamckon</code> and restart
+          Ollama for the extension to connect.
+        </p>
+      </section>
+    </div>
+  );
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function flash(setter: React.Dispatch<React.SetStateAction<SaveStatus>>, value: 'saved' | 'error') {
+  setter(value);
+  setTimeout(() => setter('idle'), 2500);
+}
+
+function StatusTag({ status }: { status: SaveStatus }) {
+  if (status === 'idle') return null;
+  return (
+    <span className={`status-tag ${status === 'saved' ? 'status-ok' : 'status-err'}`}>
+      {status === 'saved' ? '✓ Done' : '✗ Failed'}
+    </span>
+  );
+}

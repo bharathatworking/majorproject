@@ -1,0 +1,105 @@
+/**
+ * Extracts text from a text-based PDF and creates a Clarity document.
+ *
+ * Uses pdfjs-dist v6.x (ESM) with a bundled worker loaded via Vite's ?url import
+ * so the worker script resolves to chrome-extension://…/pdf.worker.min.mjs at
+ * runtime — this satisfies MV3's script-src 'self' CSP without any relaxation.
+ *
+ * isEvalSupported: false prevents pdf.js from using eval(), which would violate
+ * the extension CSP even if we added 'unsafe-eval'.
+ *
+ * OCR is NOT supported. This module only works with text-based (not scanned) PDFs.
+ */
+
+import * as pdfjsLib from 'pdfjs-dist';
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { upsertDocument } from '../storage/documents';
+import type { ClarityDocument } from '../../types';
+
+// Configure pdf.js to use the bundled worker.
+// The ?url import resolves to the worker's chrome-extension:// path after build.
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+
+const MIN_TEXT_LENGTH = 100;
+
+export async function createDocumentFromPDF(file: File): Promise<ClarityDocument> {
+  if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+    throw new Error('Only PDF files (.pdf) are supported.');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+
+  const loadingTask = pdfjsLib.getDocument({
+    data: new Uint8Array(arrayBuffer),
+    isEvalSupported: false,      // respects CSP — no eval()
+    disableFontFace: true,       // no external font requests
+    useSystemFonts: false,
+  });
+
+  const pdf = await loadingTask.promise;
+
+  // Extract text page by page. Each page becomes a paragraph block.
+  const pageTexts: string[] = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+
+    // Join text items, inserting a space between items and a newline when
+    // the item marks the end of a line (hasEOL).
+    let pageText = '';
+    for (const item of textContent.items) {
+      if ('str' in item) {
+        pageText += item.str;
+        if ('hasEOL' in item && item.hasEOL) pageText += '\n';
+        else pageText += ' ';
+      }
+    }
+    pageText = pageText.replace(/\s+/g, ' ').trim();
+    if (pageText) pageTexts.push(pageText);
+  }
+
+  const textContent = pageTexts.join('\n\n');
+
+  if (textContent.trim().length < MIN_TEXT_LENGTH) {
+    throw new Error(
+      'No readable text found in this PDF. ' +
+      'Make sure it is a text-based PDF, not a scanned image.',
+    );
+  }
+
+  // Title: filename without extension
+  const title = file.name.replace(/\.pdf$/i, '').trim() || 'PDF document';
+
+  // HTML: one <p> per page
+  const html = pageTexts.map(p => `<p>${escapeHtml(p)}</p>`).join('\n');
+
+  // SHA-256 hash for dedup
+  const contentHash = await sha256(textContent);
+
+  return upsertDocument({
+    source: 'pdf',
+    title,
+    fileName: file.name,
+    contentHash,
+    html,
+    textContent,
+    report: null,
+  });
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function sha256(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}

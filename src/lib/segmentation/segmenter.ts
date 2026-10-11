@@ -1,111 +1,103 @@
 import type { ContentNode, SegmentedDocument } from '../../types';
 import { detectEntities } from './ner';
 
-let nodeCounter = 0;
-function generateId() {
-  return `node_${++nodeCounter}_${Math.random().toString(36).substr(2, 9)}`;
-}
-
+/**
+ * Parses sanitized article HTML into a flat sequence of ContentNodes.
+ *
+ * Fixes vs. the original implementation:
+ *
+ * 1. **Deterministic node IDs** — IDs are now `n0, n1, n2, …` scoped to each
+ *    call. The old `Math.random()` suffix meant stored results couldn't be
+ *    reliably matched back to nodes after a page reload.
+ *
+ * 2. **List items flattened into the top-level sequence** — Previously, `<ul>`/
+ *    `<ol>` elements were emitted as a `list` node with `text: ''` and their
+ *    `<li>` children nested inside. The filter `n.text.trim().length > 0` that
+ *    guards the simplification loop silently dropped every list node, so no list
+ *    item was ever simplified. Now each `<li>` is emitted directly as a
+ *    `list-item` node at the top level.
+ */
 export function segmentHtml(html: string, title: string, contentHash: string): SegmentedDocument {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const body = doc.body;
 
   const nodes: ContentNode[] = [];
+  let counter = 0;
+  const nextId = () => `n${counter++}`;
 
-  // Flatten the DOM into a sequence of block-level ContentNodes
   function walk(el: Element) {
-    const tagName = el.tagName.toLowerCase();
+    const tag = el.tagName.toLowerCase();
 
-    if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tagName)) {
-      const text = el.textContent?.trim() || '';
+    if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag)) {
+      const text = el.textContent?.trim() ?? '';
       if (text) {
         nodes.push({
-          id: generateId(),
+          id: nextId(),
           type: 'heading',
-          level: parseInt(tagName[1], 10),
+          level: parseInt(tag[1], 10),
           text,
-          entities: detectEntities(text)
+          entities: detectEntities(text),
         });
       }
       return;
     }
 
-    if (tagName === 'p') {
-      const text = el.textContent?.trim() || '';
+    if (tag === 'p') {
+      const text = el.textContent?.trim() ?? '';
       if (text) {
-        nodes.push({
-          id: generateId(),
-          type: 'paragraph',
-          text,
-          entities: detectEntities(text)
-        });
+        nodes.push({ id: nextId(), type: 'paragraph', text, entities: detectEntities(text) });
       }
       return;
     }
 
-    if (tagName === 'blockquote') {
-      const text = el.textContent?.trim() || '';
+    if (tag === 'blockquote') {
+      const text = el.textContent?.trim() ?? '';
       if (text) {
-        nodes.push({
-          id: generateId(),
-          type: 'blockquote',
-          text,
-          entities: detectEntities(text)
-        });
+        nodes.push({ id: nextId(), type: 'blockquote', text, entities: detectEntities(text) });
       }
       return;
     }
 
-    if (tagName === 'ul' || tagName === 'ol') {
-      const children: ContentNode[] = [];
+    if (tag === 'ul' || tag === 'ol') {
+      // Each <li> becomes its own list-item node in the flat sequence.
+      // Consecutive list-item nodes are grouped into a <ul> visually by the
+      // Reading page renderer.
       Array.from(el.children).forEach(li => {
         if (li.tagName.toLowerCase() === 'li') {
-          const text = li.textContent?.trim() || '';
+          const text = li.textContent?.trim() ?? '';
           if (text) {
-            children.push({
-              id: generateId(),
+            nodes.push({
+              id: nextId(),
               type: 'list-item',
               text,
-              entities: detectEntities(text)
+              entities: detectEntities(text),
             });
           }
         }
       });
-      if (children.length > 0) {
-        nodes.push({
-          id: generateId(),
-          type: 'list',
-          text: '', // Lists don't have direct text in this model, their items do
-          children
-        });
-      }
       return;
     }
 
-    if (tagName === 'table') {
-      const text = el.textContent?.trim() || '';
+    if (tag === 'table') {
+      const text = el.textContent?.trim() ?? '';
       if (text) {
         nodes.push({
-          id: generateId(),
+          id: nextId(),
           type: 'table',
           text,
-          skipSimplification: true, // Do not rewrite tables
-          entities: [] // Not bothering to run NER on tables since we skip them
+          skipSimplification: true,
+          entities: [],
         });
       }
       return;
     }
 
-    // Otherwise, traverse children
+    // Recurse for any other container elements
     Array.from(el.children).forEach(child => walk(child));
   }
 
   Array.from(body.children).forEach(child => walk(child));
 
-  return {
-    title,
-    nodes,
-    contentHash
-  };
+  return { title, nodes, contentHash };
 }

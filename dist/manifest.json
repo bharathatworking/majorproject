@@ -9,7 +9,7 @@
     "activeTab",
     "scripting",
     "storage",
-    "sidePanel"
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "http://localhost:11434/*"
@@ -19,9 +19,6 @@
     "type": "module"
   },
   "content_scripts": [],
-  "side_panel": {
-    "default_path": "src/sidepanel/index.html"
-  },
   "action": {
     "default_title": "Open Clarity",
     "default_icon": {
@@ -38,7 +35,7 @@
     "128": "icons/icon128.png"
   },
   "options_ui": {
-    "page": "src/options/index.html",
+    "page": "src/app/index.html",
     "open_in_tab": true
   },
   "content_security_policy": {

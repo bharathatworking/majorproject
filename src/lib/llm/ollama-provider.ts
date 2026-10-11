@@ -1,7 +1,7 @@
 import type { LLMAvailability } from '../../types';
 
 const OLLAMA_BASE_URL = 'http://localhost:11434';
-const OLLAMA_MODEL = 'qwen2.5:3b';
+export const OLLAMA_MODEL = 'qwen2.5:3b';
 
 export class OllamaProvider {
   private systemPrompt: string = '';
@@ -47,7 +47,9 @@ export class OllamaProvider {
     });
 
     if (!response.ok || !response.body) {
-      throw new Error(`Ollama request failed: ${response.status}`);
+      const err = new Error(`Ollama request failed: ${response.status}`);
+      (err as any).status = response.status;
+      throw err;
     }
 
     const reader = response.body.getReader();

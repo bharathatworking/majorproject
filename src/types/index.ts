@@ -69,14 +69,53 @@ export interface SimplificationResult {
   status: 'pending' | 'streaming' | 'done' | 'error';
 }
 
+/**
+ * A SimplificationResult that has been persisted to storage.
+ * Carries the node's structural type and heading level so the Reading page
+ * can render it correctly (h2/h3 vs p vs blockquote vs li) without needing
+ * to re-segment the HTML on every load.
+ */
+export interface StoredResult extends SimplificationResult {
+  type: 'heading' | 'paragraph' | 'list-item' | 'blockquote';
+  level?: number;
+}
+
 export interface SegmentedDocument {
   title: string;
   nodes: ContentNode[];
   contentHash: string;
 }
 
-export interface CacheEntry {
-  report: ReadabilityReport;
-  results: SimplificationResult[];
-  timestamp: number;
+/** One document in the Clarity store. */
+export interface ClarityDocument {
+  id: string;                           // crypto.randomUUID()
+  source: 'page' | 'paste' | 'pdf';
+  title: string;
+  sourceUrl?: string;                   // pages only
+  fileName?: string;                    // pdfs only
+  createdAt: number;
+  updatedAt: number;
+  contentHash: string;                  // SHA-256 of textContent
+  html: string;                         // sanitized HTML for segmentHtml
+  textContent: string;
+  report: ReadabilityReport | null;     // null until the app computes it
+  results: StoredResult[];              // empty until first Simplify run
+  simplifiedReport: ReadabilityReport | null;
+  lastRunAt?: number;
+}
+
+/** Lightweight entry kept in docs:index for the sidebar list. */
+export interface DocumentIndexEntry {
+  id: string;
+  title: string;
+  source: 'page' | 'paste' | 'pdf';
+  updatedAt: number;
+  hasResults: boolean;
+}
+
+/** User's display preferences (dyslexia font, text size, focus mode). */
+export interface DisplayPrefs {
+  dyslexiaFont: boolean;
+  textSize: 'normal' | 'large' | 'xlarge';
+  focusMode: boolean;
 }

@@ -1,123 +1,167 @@
-import { computeReadabilityReport } from '../lib/metrics/engine';
-import { BASE_COMMON_WORDS } from '../lib/metrics/common-words';
-// The ?script query tells crxjs to bundle this file as a standalone IIFE
-// content script and replace this import with the resolved output path string.
-// This is the documented crxjs pattern for dynamically-injected content scripts.
+/**
+ * Background service worker.
+ *
+ * Architecture notes:
+ * - NO module-level state. MV3 workers are killed when idle; any variables are
+ *   lost on shutdown. All state lives in chrome.storage.session (ephemeral) or
+ *   chrome.storage.local (persistent).
+ * - capture:status (session): { state: 'extracting'|'error', tabTitle?, error?, at }
+ *   The app reads this on mount and via storage.onChanged to show loading/error UI.
+ * - appTabId (session): the tab id of the open Clarity tab, used for reuse.
+ *
+ * Message types handled:
+ *   EXTRACTION_RESULT  — from content script: store document, clear capture status.
+ *   EXTRACTION_FAILED  — from content script: write error into capture status.
+ *
+ * Removed (old side-panel architecture):
+ *   EXTRACT_PAGE, GET_RESULTS, EXTRACTION_COMPLETE — no longer used.
+ */
+
+import { upsertDocument } from '../lib/storage/documents';
+
+// crxjs resolves this ?script import to the IIFE bundle path at build time.
 import extractorScriptPath from '../content-scripts/extractor.ts?script';
 
-chrome.runtime.onInstalled.addListener(() => {
-  // Do NOT call setPanelBehavior({ openPanelOnActionClick: true }) here.
-  // That mode opens the panel asynchronously, breaking the activeTab grant:
-  // by the time the panel sends EXTRACT_PAGE and the background calls
-  // chrome.tabs.query(), Chrome no longer considers the tab "active" in the
-  // grant sense, and scripting.executeScript() is rejected with a host
-  // permission error. Use an explicit onClicked listener instead (below).
-});
+const APP_PATH = 'src/app/index.html';
 
-// Primary extraction trigger: called synchronously within the user's click
-// gesture, so the activeTab permission covers the target tab for the entire
-// duration of the executeScript call.
+const RESTRICTED_PAGE_MESSAGE =
+  "Chrome doesn't let extensions read this page (chrome:// pages, the Web Store " +
+  'and built-in viewers are blocked). Paste the text or upload the file instead.';
+
+const MIN_TEXT_LENGTH = 100;
+const NO_TEXT_MESSAGE = 'No readable article text found on this page.';
+
+// ─── Action click: capture + open/focus the app ──────────────────────────────
+
 chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab.id) return;
+  // If the user clicked the icon while already on the Clarity tab itself, just
+  // focus it — there's nothing on that page to extract.
+  if (tab.url?.startsWith(chrome.runtime.getURL(''))) {
+    await openOrFocusApp();
+    return;
+  }
 
-  // Open the side panel for this specific tab first.
-  await chrome.sidePanel.open({ tabId: tab.id });
+  if (!tab.id) {
+    await openOrFocusApp();
+    return;
+  }
 
+  // Signal "extracting" so the app can show a loading state immediately.
+  await chrome.storage.session.set({
+    'capture:status': {
+      state: 'extracting',
+      tabTitle: tab.title ?? '',
+      at: Date.now(),
+    },
+  });
+
+  // Inject FIRST — the activeTab grant is tied to this click gesture and must
+  // be consumed synchronously before we yield to any async work.
   try {
     console.log('[Clarity] Injecting content script into tab', tab.id);
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      // crxjs resolves this import to the actual IIFE output path at build time.
       files: [extractorScriptPath],
     });
   } catch (err) {
     console.error('[Clarity] Failed to inject content script:', err);
+    await chrome.storage.session.set({
+      'capture:status': {
+        state: 'error',
+        error: RESTRICTED_PAGE_MESSAGE,
+        at: Date.now(),
+      },
+    });
+  }
+
+  await openOrFocusApp();
+});
+
+// ─── Tab cleanup ──────────────────────────────────────────────────────────────
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const { appTabId } = await chrome.storage.session.get('appTabId');
+  if (appTabId === tabId) {
+    await chrome.storage.session.remove('appTabId');
   }
 });
 
-// Store extracted data so the side panel can poll for it after injection completes.
-let latestExtraction: {
-  title: string;
-  textContent: string;
-  content: string;
-  contentHash: string;
-} | null = null;
+// ─── Message handling ─────────────────────────────────────────────────────────
 
-let latestReport: ReturnType<typeof computeReadabilityReport> | null = null;
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  // --- Side panel asks background to inject the content script ---
-  if (request.type === 'EXTRACT_PAGE') {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const activeTab = tabs[0];
-      if (!activeTab?.id) {
-        sendResponse({ status: 'error', error: 'No active tab' });
-        return;
-      }
-      chrome.scripting.executeScript({
-        target: { tabId: activeTab.id },
-        // extractorScriptPath is resolved by crxjs at build time to the
-        // actual output path of the bundled IIFE (e.g. src/content-scripts/extractor.js)
-        files: [extractorScriptPath],
-      }).then(() => {
-        console.log('[Clarity] Content script injected into tab', activeTab.id);
-        sendResponse({ status: 'injected' });
-      }).catch(err => {
-        console.error('[Clarity] Failed to inject content script:', err);
-        sendResponse({ status: 'error', error: err.message });
-      });
-    });
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+  if (request.type === 'EXTRACTION_RESULT') {
+    handleExtractionResult(request.data).then(() => sendResponse({ status: 'ok' }));
     return true; // keep channel open for async sendResponse
   }
 
-  // --- Content script sends back extracted article data ---
-  if (request.type === 'EXTRACTION_RESULT') {
-    latestExtraction = {
-      title: request.data.title,
-      textContent: request.data.textContent,
-      content: request.data.content,
-      contentHash: request.data.contentHash,
-    };
-    console.log('[Clarity] EXTRACTION_RESULT received:', latestExtraction.title,
-      `(${latestExtraction.textContent.length} chars)`);
-    // Compute readability report right here in the background
-    latestReport = computeReadabilityReport(latestExtraction.textContent, BASE_COMMON_WORDS);
-    // Broadcast to any listening side panel
-    chrome.runtime.sendMessage({
-      type: 'EXTRACTION_COMPLETE',
-      extraction: latestExtraction,
-      report: latestReport,
-    }).catch(() => {
-      // Side panel may not be listening yet — that's fine, it will poll via GET_RESULTS
-    });
-    sendResponse({ status: 'ok' });
-    return;
-  }
-
-  // --- Content script reports an extraction failure ---
   if (request.type === 'EXTRACTION_FAILED') {
-    const error = request.error ?? 'Unknown extraction error';
-    console.error('[Clarity] EXTRACTION_FAILED received:', error);
-    // Clear any stale data from a previous successful extraction
-    latestExtraction = null;
-    latestReport = null;
-    // Broadcast to the side panel so it can show an error state
-    chrome.runtime.sendMessage({
-      type: 'EXTRACTION_FAILED',
-      error,
-    }).catch(() => {
-      // Side panel may not be open yet — nothing to do
+    const error: string = request.error ?? 'Unknown extraction error';
+    console.error('[Clarity] EXTRACTION_FAILED:', error);
+    chrome.storage.session.set({
+      'capture:status': { state: 'error', error, at: Date.now() },
     });
     sendResponse({ status: 'ok' });
-    return;
-  }
-
-  // --- Side panel polls for results (backup if it missed the broadcast) ---
-  if (request.type === 'GET_RESULTS') {
-    sendResponse({
-      extraction: latestExtraction,
-      report: latestReport,
-    });
     return;
   }
 });
+
+async function handleExtractionResult(data: {
+  title: string;
+  content: string;
+  textContent: string;
+  contentHash: string;
+  url: string;
+}) {
+  console.log('[Clarity] EXTRACTION_RESULT:', data.title, `(${data.textContent.length} chars)`);
+
+  if (data.textContent.trim().length < MIN_TEXT_LENGTH) {
+    await chrome.storage.session.set({
+      'capture:status': { state: 'error', error: NO_TEXT_MESSAGE, at: Date.now() },
+    });
+    return;
+  }
+
+  try {
+    // The app computes the readability report from textContent — not the background.
+    // This keeps the service worker lean and puts metric computation (which can be
+    // slow on long pages) in a context where we can show "Analyzing…" in the UI.
+    await upsertDocument({
+      source: 'page',
+      title: data.title || data.url,
+      sourceUrl: data.url,
+      contentHash: data.contentHash,
+      html: data.content,
+      textContent: data.textContent,
+      report: null,
+    });
+
+    // Clear capture status — docs:active was updated by upsertDocument, which will
+    // trigger a storage.onChanged event in the app, switching it to the new doc.
+    await chrome.storage.session.remove('capture:status');
+  } catch (err) {
+    console.error('[Clarity] Failed to store document:', err);
+    await chrome.storage.session.set({
+      'capture:status': { state: 'error', error: String(err), at: Date.now() },
+    });
+  }
+}
+
+// ─── Tab reuse ────────────────────────────────────────────────────────────────
+
+async function openOrFocusApp(): Promise<void> {
+  const { appTabId } = await chrome.storage.session.get('appTabId');
+
+  if (appTabId) {
+    try {
+      const t = await chrome.tabs.get(appTabId as number);
+      await chrome.tabs.update(appTabId as number, { active: true });
+      await chrome.windows.update(t.windowId, { focused: true });
+      return;
+    } catch {
+      // Tab was closed between when we stored the id and now — fall through.
+    }
+  }
+
+  const t = await chrome.tabs.create({ url: chrome.runtime.getURL(APP_PATH) });
+  await chrome.storage.session.set({ appTabId: t.id });
+}
