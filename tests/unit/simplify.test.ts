@@ -154,4 +154,14 @@ describe('runSimplification', () => {
     const saved = await getDocument(doc.id);
     expect(saved?.results.map(r => r.simplifiedText)).toEqual(['Simple n0.', 'Simple n1.', 'Simple n2.']);
   });
+
+  it('names uncommon words from the node in the prompt', async () => {
+    // Grade 16 against the default adult target 12 → 'moderate', so the hint is sent
+    const doc = await upsertDocument(makeDocInput('hash-hint', { report: makeReport({ estimatedGradeLevel: 16 }) }));
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    // "Alpha" and "text" are common; "paragraph" is not
+    expect(prompts[0]).toContain('Replace them with simpler words or briefly explain them: paragraph\n');
+  });
 });

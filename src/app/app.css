@@ -1060,6 +1060,52 @@ ol.node-list { list-style: decimal; }
 
 .settings-section-about { gap: 0.5rem; }
 
+.settings-subheading {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-top: 0.4rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Reading presets */
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.6rem;
+}
+
+.preset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  text-align: left;
+  padding: 0.75rem 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  transition: border-color var(--transition), background var(--transition);
+}
+.preset-card:hover { background: var(--surface-hover); }
+.preset-card.selected {
+  border-color: var(--accent);
+  background: rgba(124,131,255,0.1);
+}
+
+.preset-card-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.preset-card.selected .preset-card-name { color: var(--accent-light); }
+
+.preset-card-desc {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 /* Form groups */
 .form-group {
   display: flex;

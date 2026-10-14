@@ -78,3 +78,43 @@ describe('resolveProfile', () => {
     expect(spec.preserveEntities).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// resolveProfile — readingPurpose and domainFamiliarity → rule flags
+// ---------------------------------------------------------------------------
+describe('resolveProfile reader flags', () => {
+  const intermediate = { domainFamiliarity: 'intermediate' } as const;
+
+  it.each([
+    ['general', { avoidIdioms: false, oneIdeaPerSentence: false, explainTerms: false }],
+    ['esl', { avoidIdioms: true, oneIdeaPerSentence: false, explainTerms: false }],
+    ['dyslexia-friendly', { avoidIdioms: false, oneIdeaPerSentence: true, explainTerms: false }],
+    ['expert-to-lay', { avoidIdioms: false, oneIdeaPerSentence: false, explainTerms: true }],
+  ] as const)('purpose %s (intermediate reader)', (readingPurpose, flags) => {
+    expect(resolveProfile(profile({ readingPurpose, ...intermediate }), 14)).toMatchObject(flags);
+  });
+
+  it.each([
+    ['novice', { explainTerms: true, keepTerms: false }],
+    ['intermediate', { explainTerms: false, keepTerms: false }],
+    ['expert', { explainTerms: false, keepTerms: true }],
+  ] as const)('familiarity %s (general purpose)', (domainFamiliarity, flags) => {
+    expect(resolveProfile(profile({ domainFamiliarity }), 14)).toMatchObject(flags);
+  });
+
+  it('keeps terms for an expert reader even with the expert-to-lay purpose', () => {
+    const spec = resolveProfile(profile({ readingPurpose: 'expert-to-lay', domainFamiliarity: 'expert' }), 14);
+    expect(spec.keepTerms).toBe(true);
+    expect(spec.explainTerms).toBe(false);
+  });
+
+  it.each(['esl', 'dyslexia-friendly'] as const)('caps sentences at 15 words for %s', readingPurpose => {
+    expect(resolveProfile(profile({ readingPurpose }), 14).maxSentenceLength).toBe(15);  // light: 20
+    expect(resolveProfile(profile({ readingPurpose }), 20).maxSentenceLength).toBe(12);  // aggressive stays shorter
+  });
+
+  it("does not cap sentences in the 'none' tier or for general readers", () => {
+    expect(resolveProfile(profile({ readingPurpose: 'esl' }), 12).maxSentenceLength).toBe(25);
+    expect(resolveProfile(profile({ readingPurpose: 'general' }), 14).maxSentenceLength).toBe(20);
+  });
+});

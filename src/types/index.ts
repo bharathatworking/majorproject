@@ -32,12 +32,23 @@ export type ReadabilityReport = {
   estimatedGradeLevel: number;
 };
 
+/** One-click reading presets shown as cards in Settings (see lib/profile/presets.ts). */
+export type PresetId =
+  | 'beginner'
+  | 'student'
+  | 'dyslexic-friendly'
+  | 'non-native'
+  | 'elderly'
+  | 'technical-learner';
+
 export type UserProfile = {
   ageGroup: 'child' | 'teen' | 'adult';
   targetGradeLevel: number | 'auto';
   readingPurpose: 'general' | 'esl' | 'dyslexia-friendly' | 'expert-to-lay';
   domainFamiliarity: 'novice' | 'intermediate' | 'expert';
   preferredStyle: 'plain' | 'bullet-summary' | 'eli5' | 'concise';
+  /** Preset the fields came from; 'custom' once any field is edited. Missing on old profiles. */
+  preset?: PresetId | 'custom';
 };
 
 export type SimplificationSpec = {
@@ -48,6 +59,14 @@ export type SimplificationSpec = {
   maxSentenceLength: number;
   allowBullets: boolean;
   tone: string;
+  /** Explain technical terms in brackets the first time they appear. */
+  explainTerms: boolean;
+  /** Reader knows the field: keep terms, simplify only structure. Overrides explainTerms. */
+  keepTerms: boolean;
+  /** Avoid idioms, phrasal verbs and figurative language (ESL readers). */
+  avoidIdioms: boolean;
+  /** One idea per sentence and short paragraphs (dyslexia-friendly). */
+  oneIdeaPerSentence: boolean;
 };
 
 export type LLMAvailability = 'available' | 'downloadable' | 'downloading' | 'unavailable';
@@ -123,6 +142,17 @@ export interface DisplayPrefs {
   dyslexiaFont: boolean;
   textSize: 'normal' | 'large' | 'xlarge';
   focusMode: boolean;
+}
+
+/** A named profile plus the display prefs recommended with it. */
+export interface ReadingPreset {
+  id: PresetId;
+  name: string;
+  /** One line shown under the name on the Settings card. */
+  description: string;
+  profile: UserProfile;
+  /** Focus mode is a personal choice, so presets leave it alone. */
+  displayPrefs: Pick<DisplayPrefs, 'dyslexiaFont' | 'textSize'>;
 }
 
 /** Hash routes of the app tab (#/dashboard, #/reading, ...). */

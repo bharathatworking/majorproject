@@ -1,5 +1,41 @@
 import type { ContentNode, SimplificationSpec, ReadabilityReport } from '../../types';
 
+// ─── Reader rules ─────────────────────────────────────────────────────────────
+
+/**
+ * Turns the spec's reader flags (from readingPurpose and domainFamiliarity)
+ * into explicit instructions. keepTerms and explainTerms are mutually
+ * exclusive in resolveProfile; keepTerms is checked first regardless.
+ */
+export function readerRules(spec: SimplificationSpec): string[] {
+  const rules: string[] = [];
+  if (spec.avoidIdioms) {
+    rules.push(
+      "Avoid idioms, phrasal verbs (such as 'put off' or 'figure out') and figurative language. " +
+      'Prefer common, everyday words. Keep sentences short.',
+    );
+  }
+  if (spec.oneIdeaPerSentence) {
+    rules.push(
+      'Put only one idea in each sentence. Keep paragraphs short (at most 3 sentences); ' +
+      'separate paragraphs with a blank line.',
+    );
+  }
+  if (spec.keepTerms) {
+    rules.push(
+      'The reader knows this field. Keep technical terms as they are; simplify only the sentence structure.',
+    );
+  } else if (spec.explainTerms) {
+    rules.push(
+      'The first time a technical term appears, explain it briefly in brackets, ' +
+      "e.g. 'photosynthesis (how plants make food from sunlight)'.",
+    );
+  }
+  return rules;
+}
+
+// ─── Prompt ───────────────────────────────────────────────────────────────────
+
 /**
  * Returns the grade-level description for a given depth tier.
  * Having this as a named function (rather than an inline object index) means
@@ -29,13 +65,21 @@ function gradeLevelDescription(spec: SimplificationSpec): string {
  *    (headings stay short; list-items stay parallel; etc.)
  *  - An optional entity preservation instruction
  *  - An optional rolling context sentence from the previous node
+ *  - An optional lexical hint listing words the common-word list flags as
+ *    hard (findDifficultWords). It is left out when the reader keeps terms or
+ *    the tier is 'none', where it would contradict the system prompt.
  */
 export function buildPrompt(
   node: ContentNode,
   spec: SimplificationSpec,
   report: ReadabilityReport,
   previousContext: string = '',
+  difficultWords: string[] = [],
 ): { system: string; user: string } {
+
+  const extraRules = readerRules(spec)
+    .map((rule, i) => `${7 + i}. ${rule}\n`)
+    .join('');
 
   // ── System prompt (reused for all nodes in the session) ──────────────────
   const system = `You are an expert editor and plain-language summarizer. \
@@ -53,7 +97,7 @@ text and nothing else.
 ${spec.allowBullets
     ? "6. You may use bullet points where they aid clarity. Put each bullet on its own line starting with '- '. Use no other markdown."
     : '6. Write plain sentences. No bullets or lists.'}
-`;
+${extraRules}`;
 
   // ── User prompt (per-node) ────────────────────────────────────────────────
 
@@ -86,6 +130,12 @@ ${spec.allowBullets
   if (spec.preserveEntities && node.entities && node.entities.length > 0) {
     const entityList = node.entities.map(e => e.text).join(', ');
     user += `IMPORTANT: Preserve the following entities EXACTLY as written: ${entityList}\n\n`;
+  }
+
+  if (difficultWords.length > 0 && !spec.keepTerms && spec.depthTier !== 'none') {
+    user +=
+      'These words may be hard for the reader. Replace them with simpler words ' +
+      `or briefly explain them: ${difficultWords.join(', ')}\n\n`;
   }
 
   user += `TEXT TO REWRITE:\n${node.text}`;

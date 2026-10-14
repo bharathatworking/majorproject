@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { getUserProfile, saveUserProfile, DEFAULT_PROFILE } from '../../lib/storage/settings';
 import { clearAllDocuments } from '../../lib/storage/documents';
 import { resolveTargetGrade } from '../../lib/profile/resolver';
-import type { UserProfile, DisplayPrefs } from '../../types';
+import { PRESETS, editProfile } from '../../lib/profile/presets';
+import type { UserProfile, DisplayPrefs, ReadingPreset } from '../../types';
 
 interface SettingsProps {
   displayPrefs: DisplayPrefs;
@@ -27,13 +28,21 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
   }, []);
 
   // ── Profile update ──────────────────────────────────────────────────────────
+  // Any field edit means the profile no longer matches a preset → 'custom'.
   const updateProfile = useCallback(async (patch: Partial<UserProfile>) => {
     setProfile(prev => {
-      const next = { ...prev, ...patch };
+      const next = editProfile(prev, patch);
       saveUserProfile(next);   // fire-and-forget; non-critical if it fails
       return next;
     });
   }, []);
+
+  // ── Preset selection ────────────────────────────────────────────────────────
+  const applyPreset = useCallback((preset: ReadingPreset) => {
+    setProfile(preset.profile);
+    saveUserProfile(preset.profile);   // fire-and-forget, as above
+    onUpdatePrefs(preset.displayPrefs);
+  }, [onUpdatePrefs]);
 
   // ── Custom words save ───────────────────────────────────────────────────────
   const handleSaveWords = async () => {
@@ -75,6 +84,29 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
       {/* ── 1. Reading Profile ──────────────────────────────────────────────── */}
       <section className="settings-section">
         <h2 className="settings-section-title">Reading Profile</h2>
+
+        <div className="preset-grid" role="radiogroup" aria-label="Reading presets">
+          {PRESETS.map(preset => {
+            const selected = profile.preset === preset.id;
+            return (
+              <button
+                key={preset.id}
+                className={`preset-card ${selected ? 'selected' : ''}`}
+                role="radio"
+                aria-checked={selected}
+                onClick={() => applyPreset(preset)}
+              >
+                <span className="preset-card-name">{preset.name}</span>
+                <span className="preset-card-desc">{preset.description}</span>
+              </button>
+            );
+          })}
+        </div>
+        {(profile.preset === undefined || profile.preset === 'custom') && (
+          <p className="settings-hint">Custom settings: pick a preset above, or adjust the fields below.</p>
+        )}
+
+        <h3 className="settings-subheading">Advanced</h3>
 
         <div className="form-group">
           <label htmlFor="age-group">Age Group</label>

@@ -27,6 +27,7 @@ import { segmentHtml } from '../segmentation/segmenter';
 import { getUserProfile } from '../storage/settings';
 import { getCommonWordSet } from '../metrics/word-set';
 import { computeReadabilityReport } from '../metrics/engine';
+import { findDifficultWords } from '../metrics/difficult-words';
 import { saveDocument } from '../storage/documents';
 import { recordSession } from '../storage/progress';
 import { toPlainText } from '../render/format-output';
@@ -191,7 +192,10 @@ export async function runSimplification(
 
     // Use the report for grade context; fall back to empty report-like object if missing
     const promptObj = doc.report
-      ? buildPrompt(node, spec, doc.report, previousContext)
+      ? buildPrompt(
+          node, spec, doc.report, previousContext,
+          findDifficultWords(node.text, node.entities ?? [], wordSet),
+        )
       : { system: firstPromptObj?.system ?? '', user: node.text };
 
     try {
