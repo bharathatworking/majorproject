@@ -38,7 +38,10 @@ A Chrome extension that rewrites any web page, pasted text, or PDF at **your** r
 ```powershell
 # Install Ollama from https://ollama.com, then:
 ollama pull qwen2.5:3b
+ollama pull all-minilm   # meaning checker (optional, ~46 MB)
 ```
+
+`all-minilm` is a small Sentence-BERT embedding model. Clarity uses it to check that each simplified paragraph keeps the original meaning, and retries a paragraph once if it doesn't. Without it, simplification still works, but no meaning scores are shown.
 
 ### 2 — Set OLLAMA_ORIGINS (required)
 
@@ -135,6 +138,7 @@ src/
 | **"Can't reach Ollama at localhost:11434"** | Start Ollama (`ollama serve`) |
 | **"Ollama refused the request (403)"** | Set `OLLAMA_ORIGINS` (see Step 2 above) and **fully restart** Ollama |
 | **"Model not found"** | Run `ollama pull qwen2.5:3b` |
+| **"Install the meaning checker"** banner | Run `ollama pull all-minilm`. The run still finishes without it, just without meaning scores |
 | **No text extracted from PDF** | The PDF is likely a scanned image — only text-based PDFs are supported |
 | **Extension ID changed** | Never remove the `key` field from `src/manifest.ts` |
 | **Sidebar chip shows "Not reachable"** | Ollama not running, or OLLAMA_ORIGINS not set correctly |

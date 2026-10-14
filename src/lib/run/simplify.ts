@@ -13,6 +13,15 @@
  * Every node result — success or error — is persisted as soon as it finishes,
  * so a failure after the last success is not lost.
  *
+ * Semantic preservation (stage 6C, lib/quality/semantic.ts): each finished
+ * node that passes shouldCheckNode is scored for meaning (embedding cosine
+ * vs the original) and for dropped entities. A failing node is retried once
+ * with MEANING_RETRY_INSTRUCTION and the better version is kept; its
+ * similarity is stored on the result. The check never fails a run: a missing
+ * embedding model (404) shows one notice and disables the meaning score for
+ * the rest of the run, other embed errors skip it for that node, and a failed
+ * retry keeps the first version.
+ *
  * Error handling:
  *   HTTP 403 → OLLAMA_ORIGINS not set
  *   HTTP 404 → model not pulled
@@ -20,7 +29,7 @@
  *   All others → surfaced as-is
  */
 
-import { OllamaHttpError, OllamaProvider, OLLAMA_MODEL } from '../llm/ollama-provider';
+import { EMBED_MODEL, OllamaHttpError, OllamaProvider, OLLAMA_MODEL } from '../llm/ollama-provider';
 import { resolveProfile } from '../profile/resolver';
 import { buildPrompt } from '../prompt-builder/builder';
 import { segmentHtml } from '../segmentation/segmenter';
@@ -31,7 +40,11 @@ import { findDifficultWords } from '../metrics/difficult-words';
 import { saveDocument } from '../storage/documents';
 import { recordSession } from '../storage/progress';
 import { toPlainText } from '../render/format-output';
-import type { ClarityDocument, ContentNode, RunMode, StoredResult } from '../../types';
+import {
+  checkMeaning, findMissingEntities, MEANING_RETRY_INSTRUCTION, passesChecks,
+  pickBetterVersion, shouldCheckNode,
+} from '../quality/semantic';
+import type { ClarityDocument, ContentNode, MeaningCandidate, RunMode, StoredResult } from '../../types';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -39,9 +52,12 @@ export interface RunCallbacks {
   onProgress: (nodesDone: number, nodesTotal: number) => void;
   onNodeStart:  (nodeId: string) => void;
   onNodeChunk:  (nodeId: string, accumulated: string) => void;
-  onNodeDone:   (nodeId: string, finalText: string) => void;
+  /** `similarity` is set when the meaning check scored the kept version. */
+  onNodeDone:   (nodeId: string, finalText: string, similarity?: number) => void;
   onNodeError:  (nodeId: string) => void;
   onBannerError: (message: string) => void;
+  /** Non-fatal information for the user (e.g. meaning checker not installed). */
+  onNotice: (message: string) => void;
   onComplete: () => void;
   signal: AbortSignal;
 }
@@ -91,6 +107,9 @@ function classifyError(err: unknown): string {
   }
   return String(err);
 }
+
+/** Shown once per run when the embedding model is missing (HTTP 404). */
+export const EMBED_MISSING_NOTICE = `Install the meaning checker: ollama pull ${EMBED_MODEL}`;
 
 // Maps ContentNode.type → StoredResult.type (handles the now-removed 'list' type too)
 const STORED_TYPE: Record<ContentNode['type'], StoredResult['type']> = {
@@ -175,6 +194,46 @@ export async function runSimplification(
 
   let firstError: string | null = null;
 
+  // Meaning check: per-run flag, turned off after the first 404 from /api/embed
+  let embedAvailable = true;
+
+  /** Streams one model reply, forwarding chunks to the UI; null if aborted. */
+  async function streamText(nodeId: string, userPrompt: string): Promise<string | null> {
+    const stream = await llm.simplifyChunk(userPrompt);
+    if (signal.aborted) return null;
+    let fullText = '';
+    for await (const chunk of stream) {
+      if (signal.aborted) return null;
+      fullText += chunk;
+      callbacks.onNodeChunk(nodeId, fullText);
+    }
+    if (signal.aborted) return null;
+    return stripThinkingArtifacts(fullText);
+  }
+
+  /** Scores one version of a node; never throws for embedding failures. */
+  async function assess(node: ContentNode, text: string): Promise<MeaningCandidate> {
+    const plainText = toPlainText(text);
+    const candidate: MeaningCandidate = {
+      text,
+      missingEntities: findMissingEntities(node.entities ?? [], plainText),
+    };
+    if (!embedAvailable) return candidate;
+    try {
+      const { similarity } = await checkMeaning(node.text, plainText, texts => llm.embed(texts));
+      candidate.similarity = similarity;
+    } catch (err) {
+      if (err instanceof OllamaHttpError && err.status === 404) {
+        embedAvailable = false;
+        console.log(`[Clarity] Embedding model ${EMBED_MODEL} not installed; meaning check skipped`);
+        if (!signal.aborted) callbacks.onNotice(EMBED_MISSING_NOTICE);
+      } else {
+        console.warn('[Clarity] Meaning check failed for node', node.id, err);
+      }
+    }
+    return candidate;
+  }
+
   for (const node of simplifiable) {
     if (signal.aborted) break;
 
@@ -199,19 +258,34 @@ export async function runSimplification(
       : { system: firstPromptObj?.system ?? '', user: node.text };
 
     try {
-      const stream = await llm.simplifyChunk(promptObj.user);
-      if (signal.aborted) break;
+      const firstText = await streamText(node.id, promptObj.user);
+      if (firstText === null) break;
 
-      let fullText = '';
-      for await (const chunk of stream) {
+      // Stage 6C: meaning + entity check, one retry on failure
+      let chosen: MeaningCandidate = { text: firstText, missingEntities: [] };
+      if (shouldCheckNode(node)) {
+        chosen = await assess(node, firstText);
         if (signal.aborted) break;
-        fullText += chunk;
-        callbacks.onNodeChunk(node.id, fullText);
-      }
-      if (signal.aborted) break;
 
-      fullText = stripThinkingArtifacts(fullText);
-      callbacks.onNodeDone(node.id, fullText);
+        if (!passesChecks(chosen)) {
+          try {
+            const retryText = await streamText(
+              node.id, `${MEANING_RETRY_INSTRUCTION}\n\n${promptObj.user}`,
+            );
+            if (retryText === null) break;
+            const retry = await assess(node, retryText);
+            if (signal.aborted) break;
+            chosen = pickBetterVersion(chosen, retry);
+          } catch (err) {
+            if (signal.aborted) break;
+            // The first version is still usable; don't fail the node over the retry
+            console.warn('[Clarity] Meaning retry failed for node', node.id, err);
+          }
+        }
+      }
+
+      const fullText = chosen.text;
+      callbacks.onNodeDone(node.id, fullText, chosen.similarity);
       doneCount++;
       // Metrics and rolling context use marker-free text (one sentence per
       // bullet); the raw text with markers is what gets stored and rendered.
@@ -226,6 +300,7 @@ export async function runSimplification(
         status: 'done',
         type: STORED_TYPE[node.type] ?? 'paragraph',
         level: node.level,
+        ...(chosen.similarity !== undefined && { similarity: chosen.similarity }),
       };
       upsertResult(result);
       doc = { ...doc, results: storedResults, lastRunAt: Date.now() };

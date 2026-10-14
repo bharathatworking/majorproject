@@ -337,6 +337,13 @@ a:focus-visible,
   justify-content: space-between;
 }
 
+.banner-info {
+  background: rgba(124, 131, 255, 0.08);
+  border: 1px solid rgba(124, 131, 255, 0.3);
+  color: var(--accent);
+  justify-content: space-between;
+}
+
 .banner-dismiss {
   background: none;
   border: none;
@@ -842,6 +849,30 @@ ol.node-list { list-style: decimal; }
 .reading-content.dyslexia-font .node-list { padding-left: 1.9em; }
 .reading-content.dyslexia-font .node-list li { margin: 0.45em 0; }
 
+/* Meaning-check badge: hidden until the paragraph is hovered or focused */
+.meaning-badge {
+  position: absolute;
+  top: -0.6rem;
+  right: 0;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: system-ui, sans-serif;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+.node-block:hover .meaning-badge,
+.node-block:focus-within .meaning-badge { opacity: 1; }
+.meaning-badge.meaning-low {
+  color: var(--warning);
+  border-color: rgba(250, 204, 21, 0.4);
+}
+
 /* Streaming node highlight */
 .node-block.node-streaming .node-text {
   color: var(--text-primary);
@@ -1034,6 +1065,7 @@ ol.node-list { list-style: decimal; }
 .comparison-delta  { font-size: 0.78rem; font-weight: 600; color: var(--text-muted); }
 .comparison-delta.positive { color: var(--success); }
 .comparison-delta.negative { color: var(--error); }
+.comparison-row.meaning-row { grid-template-columns: 1fr auto; }
 
 /* ── Settings page ─────────────────────────────────────────── */
 .settings-page { max-width: 640px; }

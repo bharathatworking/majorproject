@@ -3,6 +3,11 @@ import { parseOllamaStream } from './ollama-stream';
 
 const OLLAMA_BASE_URL = 'http://localhost:11434';
 export const OLLAMA_MODEL = 'qwen2.5:3b';
+/**
+ * Sentence-BERT embedding model (all-MiniLM-L6-v2, ~23M params) used by the
+ * meaning check in lib/quality/semantic.ts. Optional: a 404 skips the check.
+ */
+export const EMBED_MODEL = 'all-minilm';
 
 // ─── Errors ───────────────────────────────────────────────────────────────────
 
@@ -64,6 +69,28 @@ export class OllamaProvider {
     }
 
     return parseOllamaStream(readerChunks(response.body.getReader()));
+  }
+
+  /**
+   * One embedding vector per input text, in order. Throws OllamaHttpError on a
+   * non-OK response (404 = EMBED_MODEL not pulled). Same origin as /api/chat,
+   * so the existing CSP connect-src and host_permissions already cover it.
+   */
+  async embed(texts: string[]): Promise<number[][]> {
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: EMBED_MODEL, input: texts, keep_alive: '10m' }),
+    });
+
+    if (!response.ok) throw new OllamaHttpError(response.status);
+
+    const data = (await response.json()) as { embeddings?: unknown };
+    const { embeddings } = data;
+    if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
+      throw new Error('Ollama /api/embed returned an unexpected response');
+    }
+    return embeddings as number[][];
   }
 
   destroy() {

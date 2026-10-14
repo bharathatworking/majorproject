@@ -7,6 +7,8 @@ import type { ClarityDocument, RunMode } from '../../types';
 export interface LiveNodeState {
   text: string;
   status: 'pending' | 'streaming' | 'done' | 'error';
+  /** Meaning-check score of the kept version, once done (if checked). */
+  similarity?: number;
 }
 
 export interface RunState {
@@ -15,6 +17,8 @@ export interface RunState {
   nodesDone: number;
   nodesTotal: number;
   errorBanner: string | null;
+  /** Non-fatal info banner (e.g. meaning checker not installed). */
+  notice: string | null;
   liveResults: Record<string, LiveNodeState>;
 }
 
@@ -23,6 +27,7 @@ export interface UseRunStateReturn {
   startRun: (doc: ClarityDocument, mode: RunMode) => Promise<void>;
   cancelRun: () => void;
   dismissError: () => void;
+  dismissNotice: () => void;
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -50,6 +55,7 @@ export function useRunState(): UseRunStateReturn {
       nodesDone: 0,
       nodesTotal: 0,
       errorBanner: null,
+      notice: null,
       liveResults: {},
     });
 
@@ -80,14 +86,14 @@ export function useRunState(): UseRunStateReturn {
           };
         }),
 
-      onNodeDone: (nodeId, finalText) =>
+      onNodeDone: (nodeId, finalText, similarity) =>
         setRunState(prev => {
           if (!prev) return null;
           return {
             ...prev,
             liveResults: {
               ...prev.liveResults,
-              [nodeId]: { text: finalText, status: 'done' },
+              [nodeId]: { text: finalText, status: 'done', similarity },
             },
           };
         }),
@@ -107,6 +113,9 @@ export function useRunState(): UseRunStateReturn {
       onBannerError: (message) =>
         setRunState(prev => prev ? { ...prev, errorBanner: message } : null),
 
+      onNotice: (message) =>
+        setRunState(prev => prev ? { ...prev, notice: message } : null),
+
       onComplete: () =>
         setRunState(prev => prev ? { ...prev, active: false } : null),
     };
@@ -124,5 +133,9 @@ export function useRunState(): UseRunStateReturn {
     setRunState(prev => prev ? { ...prev, errorBanner: null } : null);
   }, []);
 
-  return { runState, startRun, cancelRun, dismissError };
+  const dismissNotice = useCallback(() => {
+    setRunState(prev => prev ? { ...prev, notice: null } : null);
+  }, []);
+
+  return { runState, startRun, cancelRun, dismissError, dismissNotice };
 }

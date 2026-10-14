@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
 import { getWeeklyProgress } from '../../lib/storage/progress';
+import { averageSimilarity } from '../../lib/quality/semantic';
 import type { ClarityDocument } from '../../types';
 
 Chart.register(...registerables);
@@ -102,6 +103,7 @@ export function Progress({ activeDoc }: ProgressProps) {
 
   const report          = activeDoc?.report ?? null;
   const simplifiedReport = activeDoc?.simplifiedReport ?? null;
+  const meaningKept = activeDoc ? averageSimilarity(activeDoc.results) : null;
 
   // ── Render ──────────────────────────────────────────────────────────────────
   if (loading) {
@@ -170,6 +172,14 @@ export function Progress({ activeDoc }: ProgressProps) {
             <ComparisonRow label="Grade Level"        before={report.estimatedGradeLevel} after={simplifiedReport.estimatedGradeLevel} />
             <ComparisonRow label="Jargon Density"     before={report.jargonDensity}        after={simplifiedReport.jargonDensity}        unit="%" />
             <ComparisonRow label="Avg Sentence Length" before={report.avgSentenceLength}   after={simplifiedReport.avgSentenceLength}    unit=" words" />
+            {meaningKept !== null && (
+              <div className="comparison-row meaning-row">
+                <span className="comparison-label">Meaning Kept</span>
+                <span className="comparison-after" title="Average similarity of checked paragraphs to the original">
+                  {Math.round(meaningKept * 100)}%
+                </span>
+              </div>
+            )}
           </div>
         </div>
       ) : (

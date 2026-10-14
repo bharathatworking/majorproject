@@ -45,7 +45,7 @@ export default function App() {
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { docs, activeId, activeDoc, loading, switchDoc, removeDoc, setActiveDoc } = useDocuments();
-  const { runState, startRun, cancelRun, dismissError } = useRunState();
+  const { runState, startRun, cancelRun, dismissError, dismissNotice } = useRunState();
   const { prefs: displayPrefs, updatePrefs } = useDisplayPrefs();
 
   // ── 1. Register this tab ────────────────────────────────────────────────────
@@ -214,6 +214,7 @@ export default function App() {
             onStartRun={handleStartRun}
             onCancelRun={cancelRun}
             onDismissError={dismissError}
+            onDismissNotice={dismissNotice}
             onUpdatePrefs={updatePrefs}
           />
         )}

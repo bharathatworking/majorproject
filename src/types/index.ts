@@ -97,6 +97,23 @@ export interface SimplificationResult {
 export interface StoredResult extends SimplificationResult {
   type: 'heading' | 'paragraph' | 'list-item' | 'blockquote';
   level?: number;
+  /** 0–1 embedding cosine vs the original; absent when not checked (see lib/quality/semantic.ts). */
+  similarity?: number;
+}
+
+/** Result of the embedding meaning check for one simplified node. */
+export interface MeaningCheck {
+  similarity: number;
+  passed: boolean;
+}
+
+/** One simplified version of a node, scored by the meaning and entity checks. */
+export interface MeaningCandidate {
+  text: string;
+  /** Absent when the embedding model is unavailable. */
+  similarity?: number;
+  /** Entity texts from the original that the version dropped. */
+  missingEntities: string[];
 }
 
 /** One rendered block of simplified model output (see lib/render/format-output.ts). */

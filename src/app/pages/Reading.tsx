@@ -2,6 +2,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import { segmentHtml } from '../../lib/segmentation/segmenter';
 import { parseSimplifiedText } from '../../lib/render/format-output';
 import { getHostname } from '../../lib/utils/url';
+import { SIMILARITY_THRESHOLD } from '../../lib/quality/semantic';
 import type { Block, ClarityDocument, ContentNode, StoredResult, DisplayPrefs, RunMode } from '../../types';
 import type { RunState, LiveNodeState } from '../hooks/useRunState';
 
@@ -14,6 +15,7 @@ interface ReadingProps {
   onStartRun: (doc: ClarityDocument, mode: RunMode) => void;
   onCancelRun: () => void;
   onDismissError: () => void;
+  onDismissNotice: () => void;
   onUpdatePrefs: (patch: Partial<DisplayPrefs>) => void;
 }
 
@@ -24,6 +26,7 @@ type NodeGroup =
 interface NodeResult {
   text: string;
   status: 'pending' | 'streaming' | 'done' | 'error';
+  similarity?: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -58,7 +61,8 @@ function headingTag(level?: number): HeadingTag {
 // ─── Reading page ─────────────────────────────────────────────────────────────
 
 export function Reading({
-  activeDoc, runState, displayPrefs, onStartRun, onCancelRun, onDismissError, onUpdatePrefs,
+  activeDoc, runState, displayPrefs, onStartRun, onCancelRun, onDismissError, onDismissNotice,
+  onUpdatePrefs,
 }: ReadingProps) {
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
   const [hoveredId,  setHoveredId]   = useState<string | null>(null);
@@ -95,10 +99,10 @@ export function Reading({
   const getResult = useCallback((nodeId: string): NodeResult => {
     if (isLiveRun && runState!.liveResults[nodeId]) {
       const live: LiveNodeState = runState!.liveResults[nodeId];
-      return { text: live.text, status: live.status };
+      return { text: live.text, status: live.status, similarity: live.similarity };
     }
     const s = storedById.get(nodeId);
-    if (s) return { text: s.simplifiedText, status: s.status };
+    if (s) return { text: s.simplifiedText, status: s.status, similarity: s.similarity };
     return { text: '', status: 'pending' };
   }, [isLiveRun, runState, storedById]);
 
@@ -232,6 +236,14 @@ export function Reading({
         <div className="banner banner-error">
           <span>{runState.errorBanner}</span>
           <button className="banner-dismiss" onClick={onDismissError} aria-label="Dismiss">×</button>
+        </div>
+      )}
+
+      {/* ── Notice banner (non-fatal, e.g. meaning checker missing) ── */}
+      {runState?.notice && runState.docId === activeDoc.id && (
+        <div className="banner banner-info" role="status">
+          <span>{runState.notice}</span>
+          <button className="banner-dismiss" onClick={onDismissNotice} aria-label="Dismiss">×</button>
         </div>
       )}
 
@@ -375,6 +387,16 @@ function NodeBlock({
           </p>
         )}
       </Tag>
+
+      {/* Meaning-check score; CSS shows it on hover/focus */}
+      {isDone && result.similarity !== undefined && (
+        <span
+          className={`meaning-badge ${result.similarity < SIMILARITY_THRESHOLD ? 'meaning-low' : ''}`}
+          title="How closely the simplified text keeps the original meaning"
+        >
+          meaning {Math.round(result.similarity * 100)}%
+        </span>
+      )}
 
       {/* Click-to-reveal original */}
       {isDone && isRevealed && (
