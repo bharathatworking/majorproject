@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { segmentHtml } from '../../lib/segmentation/segmenter';
-import type { ClarityDocument, ContentNode, StoredResult, DisplayPrefs } from '../../types';
+import { parseSimplifiedText } from '../../lib/render/format-output';
+import type { Block, ClarityDocument, ContentNode, StoredResult, DisplayPrefs } from '../../types';
 import type { RunState, LiveNodeState } from '../hooks/useRunState';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -305,8 +306,13 @@ function NodeBlock({
     dimmed      ? 'node-dimmed'    : '',
   ].filter(Boolean).join(' ');
 
+  // A <div> rather than <p>: simplified output can contain <ul>/<ol>, which
+  // is invalid inside a paragraph.
   const Tag: keyof JSX.IntrinsicElements =
-    node.type === 'blockquote' ? 'blockquote' : 'p';
+    node.type === 'blockquote' ? 'blockquote' : 'div';
+
+  // Re-parsed on every streamed chunk; cheap (linear in a single node's text)
+  const blocks = useMemo(() => parseSimplifiedText(result.text), [result.text]);
 
   return (
     <div
@@ -326,14 +332,22 @@ function NodeBlock({
         onClick={isDone ? onReveal : undefined}
         onKeyDown={isDone ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReveal(); } } : undefined}
       >
-        {isPending && <span className="node-original-text">{node.text}</span>}
-        {(isStreaming || isDone) && (result.text || node.text)}
-        {isStreaming && <span className="caret" aria-hidden="true" />}
+        {isPending && <p className="node-para node-original-text">{node.text}</p>}
+        {(isStreaming || isDone) && (
+          blocks.length > 0
+            ? <FormattedBlocks blocks={blocks} showCaret={isStreaming} />
+            : (
+              <p className="node-para">
+                {node.text}
+                {isStreaming && <span className="caret" aria-hidden="true" />}
+              </p>
+            )
+        )}
         {isError && (
-          <>
+          <p className="node-para">
             <span className="error-tag" aria-label="Simplification failed">⚠ failed</span>
             {node.text}
-          </>
+          </p>
         )}
       </Tag>
 
@@ -345,5 +359,46 @@ function NodeBlock({
         </div>
       )}
     </div>
+  );
+}
+
+// ─── FormattedBlocks ──────────────────────────────────────────────────────────
+
+/**
+ * Renders parsed model output as real React elements (never innerHTML).
+ * The streaming caret goes inside the last block so it trails the newest text.
+ */
+function FormattedBlocks({ blocks, showCaret }: { blocks: Block[]; showCaret: boolean }) {
+  const caret = <span className="caret" aria-hidden="true" />;
+  const lastBlock = blocks.length - 1;
+
+  return (
+    <>
+      {blocks.map((block, bi) => {
+        const isLastBlock = bi === lastBlock;
+
+        if (block.kind === 'paragraph') {
+          return (
+            <p key={bi} className="node-para">
+              {block.text}
+              {showCaret && isLastBlock && caret}
+            </p>
+          );
+        }
+
+        const ListTag = block.ordered ? 'ol' : 'ul';
+        const lastItem = block.items.length - 1;
+        return (
+          <ListTag key={bi} className="node-list">
+            {block.items.map((item, ii) => (
+              <li key={ii}>
+                {item}
+                {showCaret && isLastBlock && ii === lastItem && caret}
+              </li>
+            ))}
+          </ListTag>
+        );
+      })}
+    </>
   );
 }

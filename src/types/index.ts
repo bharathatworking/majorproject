@@ -80,6 +80,11 @@ export interface StoredResult extends SimplificationResult {
   level?: number;
 }
 
+/** One rendered block of simplified model output (see lib/render/format-output.ts). */
+export type Block =
+  | { kind: 'paragraph'; text: string }
+  | { kind: 'list'; ordered: boolean; items: string[] };
+
 export interface SegmentedDocument {
   title: string;
   nodes: ContentNode[];

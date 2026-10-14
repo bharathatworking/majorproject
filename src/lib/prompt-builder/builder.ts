@@ -20,10 +20,11 @@ function gradeLevelDescription(spec: SimplificationSpec): string {
 }
 
 /**
- * Builds a per-node {system, user} prompt pair for the LanguageModel API.
+ * Builds a per-node {system, user} prompt pair for the Ollama chat API.
  *
- * The system prompt is shared across all nodes in a session (set once via
- * initialPrompts). The user prompt is node-specific and includes:
+ * The system prompt is shared across all nodes in a run (stored once by
+ * OllamaProvider.createBaseSession and sent with every /api/chat request).
+ * The user prompt is node-specific and includes:
  *  - A node-type hint so the model knows structural constraints
  *    (headings stay short; list-items stay parallel; etc.)
  *  - An optional entity preservation instruction
@@ -44,14 +45,14 @@ CRITICAL INSTRUCTIONS:
 Current reading level is estimated at grade ${report.estimatedGradeLevel.toFixed(1)}.
 2. Tone/Style: ${spec.style}. ${spec.tone ? `Tone should be ${spec.tone}.` : ''}
 3. Preserve meaning, facts, and structure. Do NOT add new information, opinions, or meta-commentary.
-4. Output ONLY the rewritten text. Do NOT add markdown unless requested. \
+4. Output ONLY the rewritten text. Do NOT add markdown (no headings, bold, italics or tables). \
 Do NOT explain your reasoning, list which entities were preserved, add a verification \
 checklist, or include any commentary about the rewrite itself — output the rewritten \
 text and nothing else.
 5. Max sentence length: ${spec.maxSentenceLength} words.
 ${spec.allowBullets
-    ? '6. You may use bullet points where they aid clarity.'
-    : '6. Do NOT use bullet points or dashes for list formatting.'}
+    ? "6. You may use bullet points where they aid clarity. Put each bullet on its own line starting with '- '. Use no other markdown."
+    : '6. Write plain sentences. No bullets or lists.'}
 `;
 
   // ── User prompt (per-node) ────────────────────────────────────────────────

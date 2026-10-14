@@ -819,6 +819,29 @@ h6.reading-heading { font-size: 1rem; }
   text-underline-offset: 3px;
 }
 
+/* Simplified output blocks (paragraphs + bullet lists parsed from model text).
+   em units so spacing scales with large text and the dyslexia font. */
+.node-para { margin: 0; }
+.node-para + .node-para,
+.node-para + .node-list,
+.node-list + .node-para { margin-top: 0.6em; }
+
+.node-list {
+  margin: 0.35em 0 0;
+  padding-left: 1.6em;
+}
+.node-list:first-child { margin-top: 0; }
+ul.node-list { list-style: disc; }
+ol.node-list { list-style: decimal; }
+.node-list li {
+  margin: 0.3em 0;
+  padding-left: 0.25em;
+}
+.node-list li::marker { color: var(--accent); }
+
+.reading-content.dyslexia-font .node-list { padding-left: 1.9em; }
+.reading-content.dyslexia-font .node-list li { margin: 0.45em 0; }
+
 /* Streaming node highlight */
 .node-block.node-streaming .node-text {
   color: var(--text-primary);

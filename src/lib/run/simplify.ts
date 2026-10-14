@@ -21,6 +21,7 @@ import { getCommonWordSet } from '../metrics/word-set';
 import { computeReadabilityReport } from '../metrics/engine';
 import { saveDocument } from '../storage/documents';
 import { recordSession } from '../storage/progress';
+import { toPlainText } from '../render/format-output';
 import type { ClarityDocument, ContentNode, StoredResult } from '../../types';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -164,7 +165,10 @@ export async function runSimplification(
       fullText = stripThinkingArtifacts(fullText);
       callbacks.onNodeDone(node.id, fullText);
       doneCount++;
-      completedTexts.push(fullText);
+      // Metrics and rolling context use marker-free text (one sentence per
+      // bullet); the raw text with markers is what gets stored and rendered.
+      const plainText = toPlainText(fullText);
+      completedTexts.push(plainText);
 
       // Persist this node's result immediately
       const result: StoredResult = {
@@ -180,7 +184,7 @@ export async function runSimplification(
       await saveDocument(doc);
 
       // Rolling context: last sentence of the simplified output
-      const sentences = fullText.split(/(?<=[.!?])\s+/);
+      const sentences = plainText.split(/(?<=[.!?])\s+/);
       previousContext = sentences[sentences.length - 1] ?? '';
 
       callbacks.onProgress(doneCount, simplifiable.length);
