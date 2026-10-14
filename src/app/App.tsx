@@ -10,7 +10,7 @@ import { useDocuments } from './hooks/useDocuments';
 import { useRunState } from './hooks/useRunState';
 import { useDisplayPrefs } from './hooks/useDisplayPrefs';
 import { OllamaProvider } from '../lib/llm/ollama-provider';
-import type { CaptureStatus, ClarityDocument, LLMAvailability, NavPage } from '../types';
+import type { CaptureStatus, ClarityDocument, LLMAvailability, NavPage, NewDocTab, RunMode } from '../types';
 import type { ToastItem } from './components/Toast';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -31,7 +31,8 @@ function parseHash(): NavPage {
 export default function App() {
   const [nav, setNav] = useState<NavPage>(parseHash);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [showNewDoc, setShowNewDoc] = useState(false);
+  // Tab the New document dialog opens on; null while the dialog is closed
+  const [newDocTab, setNewDocTab] = useState<NewDocTab | null>(null);
   const [availability, setAvailability] = useState<LLMAvailability | 'checking'>('checking');
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -165,10 +166,10 @@ export default function App() {
     setReadingDoc(prev => prev?.id === doc.id ? doc : prev);
   }, [setActiveDoc]);
 
-  const handleStartRun = useCallback(async (doc: ClarityDocument) => {
+  const handleStartRun = useCallback(async (doc: ClarityDocument, mode: RunMode) => {
     setReadingDoc(doc);            // lock the reading view to this doc
     navigate('reading');           // switch to Reading tab
-    await startRun(doc);
+    await startRun(doc, mode);
   }, [startRun, navigate]);
 
   if (loading) {
@@ -191,7 +192,7 @@ export default function App() {
         onSwitchDoc={handleSwitchDoc}
         onRemoveDoc={removeDoc}
         onNav={navigate}
-        onNewDoc={() => setShowNewDoc(true)}
+        onNewDoc={() => setNewDocTab('paste')}
       />
 
       <main className="main-content" id="main-content">
@@ -201,7 +202,7 @@ export default function App() {
             captureStatus={captureStatus}
             onClearCaptureStatus={() => setCaptureStatus(null)}
             onStartReading={() => navigate('reading')}
-            onNewDoc={() => setShowNewDoc(true)}
+            onNewDoc={setNewDocTab}
             onDocUpdated={handleDocUpdated}
           />
         )}
@@ -220,10 +221,11 @@ export default function App() {
         {nav === 'settings' && <Settings displayPrefs={displayPrefs} onUpdatePrefs={updatePrefs} />}
       </main>
 
-      {showNewDoc && (
+      {newDocTab && (
         <NewDocDialog
-          onClose={() => setShowNewDoc(false)}
-          onSuccess={() => { setShowNewDoc(false); navigate('dashboard'); }}
+          initialTab={newDocTab}
+          onClose={() => setNewDocTab(null)}
+          onSuccess={() => { setNewDocTab(null); navigate('dashboard'); }}
         />
       )}
 

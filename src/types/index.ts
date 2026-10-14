@@ -135,3 +135,12 @@ export interface CaptureStatus {
   error?: string;
   at: number;
 }
+
+/**
+ * Which nodes a simplification run processes: `remaining` skips nodes already
+ * `done` ("Simplify again"); `all` re-runs every node ("Re-simplify all").
+ */
+export type RunMode = 'remaining' | 'all';
+
+/** Tab shown when the New document dialog opens. */
+export type NewDocTab = 'paste' | 'pdf';

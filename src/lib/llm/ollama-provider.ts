@@ -1,4 +1,5 @@
 import type { LLMAvailability } from '../../types';
+import { parseOllamaStream } from './ollama-stream';
 
 const OLLAMA_BASE_URL = 'http://localhost:11434';
 export const OLLAMA_MODEL = 'qwen2.5:3b';
@@ -62,33 +63,31 @@ export class OllamaProvider {
       throw new OllamaHttpError(response.status);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-
-    return (async function* () {
-      let buffer = '';
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            const parsed = JSON.parse(line);
-            // Ollama's stream yields deltas in message.content, same as
-            // Chrome's promptStreaming — accumulate in the caller, don't overwrite.
-            if (parsed.message?.content) yield parsed.message.content;
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
-    })();
+    return parseOllamaStream(readerChunks(response.body.getReader()));
   }
 
   destroy() {
     this.systemPrompt = '';
+  }
+}
+
+// ─── Stream helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Adapts a stream reader to an async iterable. The `finally` also runs when
+ * the parser stops early (done line, error line) or the consumer breaks, so
+ * the lock is always released.
+ */
+async function* readerChunks(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): AsyncGenerator<Uint8Array, void, undefined> {
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    reader.releaseLock();
   }
 }

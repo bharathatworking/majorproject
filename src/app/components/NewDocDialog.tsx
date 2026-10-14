@@ -1,18 +1,18 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { createDocumentFromPaste } from '../../lib/input/paste';
 import { createDocumentFromPDF } from '../../lib/input/pdf';
-import type { ClarityDocument } from '../../types';
-
-type DialogTab = 'paste' | 'pdf';
+import type { ClarityDocument, NewDocTab } from '../../types';
 
 interface NewDocDialogProps {
+  /** Tab to show first (the Dashboard's "Upload PDF" button opens 'pdf'). */
+  initialTab?: NewDocTab;
   onClose: () => void;
   /** Called with the newly created document. Parent handles navigation. */
   onSuccess: (doc: ClarityDocument) => void;
 }
 
-export function NewDocDialog({ onClose, onSuccess }: NewDocDialogProps) {
-  const [tab,       setTab]       = useState<DialogTab>('paste');
+export function NewDocDialog({ initialTab = 'paste', onClose, onSuccess }: NewDocDialogProps) {
+  const [tab,       setTab]       = useState<NewDocTab>(initialTab);
   const [pasteText, setPasteText] = useState('');
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState<string | null>(null);

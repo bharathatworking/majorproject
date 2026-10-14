@@ -5,6 +5,14 @@
  * async function that drives the LLM, persists results node-by-node, and calls
  * back into React via the callbacks object.
  *
+ * Run modes (RunMode): 'remaining' skips nodes already stored as `done`
+ * ("Simplify again"); 'all' re-runs every node ("Re-simplify all"). Skipped
+ * nodes still feed the rolling context and the post-run simplified report, so
+ * both reflect the whole document rather than only the nodes re-run.
+ *
+ * Every node result — success or error — is persisted as soon as it finishes,
+ * so a failure after the last success is not lost.
+ *
  * Error handling:
  *   HTTP 403 → OLLAMA_ORIGINS not set
  *   HTTP 404 → model not pulled
@@ -22,7 +30,7 @@ import { computeReadabilityReport } from '../metrics/engine';
 import { saveDocument } from '../storage/documents';
 import { recordSession } from '../storage/progress';
 import { toPlainText } from '../render/format-output';
-import type { ClarityDocument, ContentNode, StoredResult } from '../../types';
+import type { ClarityDocument, ContentNode, RunMode, StoredResult } from '../../types';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -42,6 +50,27 @@ export interface RunCallbacks {
 /** Strip any leaked <think>…</think> blocks (qwen3 residue — harmless no-op on qwen2.5). */
 function stripThinkingArtifacts(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
+/** Last sentence of marker-free text, used as rolling context for the next node. */
+function lastSentence(plainText: string): string {
+  const sentences = plainText.split(/(?<=[.!?])\s+/);
+  return sentences[sentences.length - 1] ?? '';
+}
+
+/**
+ * Picks the nodes a run should send to the model.
+ * 'remaining' keeps nodes without a `done` result (pending, error, or never
+ * run); 'all' keeps every node.
+ */
+export function selectNodesToRun(
+  nodes: ContentNode[],
+  results: StoredResult[],
+  mode: RunMode,
+): ContentNode[] {
+  if (mode === 'all') return nodes;
+  const doneIds = new Set(results.filter(r => r.status === 'done').map(r => r.nodeId));
+  return nodes.filter(n => !doneIds.has(n.id));
 }
 
 function classifyError(err: unknown): string {
@@ -77,6 +106,7 @@ const STORED_TYPE: Record<ContentNode['type'], StoredResult['type']> = {
 export async function runSimplification(
   doc: ClarityDocument,
   callbacks: RunCallbacks,
+  mode: RunMode = 'remaining',
 ): Promise<void> {
   const { signal } = callbacks;
 
@@ -103,17 +133,21 @@ export async function runSimplification(
     n => n.type !== 'table' && !n.skipSimplification && n.text.trim().length > 0,
   );
 
-  if (simplifiable.length === 0) {
+  const toRun = selectNodesToRun(simplifiable, doc.results, mode);
+
+  if (toRun.length === 0) {
     callbacks.onComplete();
     return;
   }
+  const runIds = new Set(toRun.map(n => n.id));
+  const storedById = new Map(doc.results.map(r => [r.nodeId, r]));
 
-  callbacks.onProgress(0, simplifiable.length);
+  callbacks.onProgress(0, toRun.length);
 
   // 4. Bootstrap the LLM session with the first node's system prompt
   const llm = new OllamaProvider();
   const firstPromptObj = doc.report
-    ? buildPrompt(simplifiable[0], spec, doc.report)
+    ? buildPrompt(toRun[0], spec, doc.report)
     : null;
 
   try {
@@ -142,6 +176,16 @@ export async function runSimplification(
 
   for (const node of simplifiable) {
     if (signal.aborted) break;
+
+    if (!runIds.has(node.id)) {
+      // Already done ('remaining' mode): reuse its stored text for context and report
+      const plainText = toPlainText(storedById.get(node.id)?.simplifiedText ?? '');
+      if (plainText) {
+        completedTexts.push(plainText);
+        previousContext = lastSentence(plainText);
+      }
+      continue;
+    }
 
     callbacks.onNodeStart(node.id);
 
@@ -184,10 +228,9 @@ export async function runSimplification(
       await saveDocument(doc);
 
       // Rolling context: last sentence of the simplified output
-      const sentences = plainText.split(/(?<=[.!?])\s+/);
-      previousContext = sentences[sentences.length - 1] ?? '';
+      previousContext = lastSentence(plainText);
 
-      callbacks.onProgress(doneCount, simplifiable.length);
+      callbacks.onProgress(doneCount, toRun.length);
 
     } catch (err) {
       if (signal.aborted) break;
@@ -203,6 +246,9 @@ export async function runSimplification(
         type: STORED_TYPE[node.type] ?? 'paragraph',
         level: node.level,
       });
+      // Persist now: a failure after the last success would otherwise be lost
+      doc = { ...doc, results: storedResults, lastRunAt: Date.now() };
+      await saveDocument(doc);
     }
   }
 
@@ -212,7 +258,8 @@ export async function runSimplification(
   // Show error banner for the first failure (if any)
   if (firstError) callbacks.onBannerError(firstError);
 
-  // 6. Post-run: compute simplified report and record session (≥1 node done)
+  // 6. Post-run: compute simplified report (over stored + new results) and
+  //    record session, if this run simplified at least one node
   if (doneCount > 0) {
     const combinedText = completedTexts.join('\n\n');
     const wordSet2 = await getCommonWordSet();

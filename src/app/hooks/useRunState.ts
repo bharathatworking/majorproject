@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { runSimplification, type RunCallbacks } from '../../lib/run/simplify';
-import type { ClarityDocument } from '../../types';
+import type { ClarityDocument, RunMode } from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -20,7 +20,7 @@ export interface RunState {
 
 export interface UseRunStateReturn {
   runState: RunState | null;
-  startRun: (doc: ClarityDocument) => Promise<void>;
+  startRun: (doc: ClarityDocument, mode: RunMode) => Promise<void>;
   cancelRun: () => void;
   dismissError: () => void;
 }
@@ -38,7 +38,7 @@ export function useRunState(): UseRunStateReturn {
   const [runState, setRunState] = useState<RunState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const startRun = useCallback(async (doc: ClarityDocument) => {
+  const startRun = useCallback(async (doc: ClarityDocument, mode: RunMode) => {
     // Cancel any in-flight run before starting a new one
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -111,7 +111,7 @@ export function useRunState(): UseRunStateReturn {
         setRunState(prev => prev ? { ...prev, active: false } : null),
     };
 
-    await runSimplification(doc, callbacks);
+    await runSimplification(doc, callbacks, mode);
   }, []);
 
   const cancelRun = useCallback(() => {

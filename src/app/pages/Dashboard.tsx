@@ -1,15 +1,16 @@
 import React, { useEffect, useCallback, useRef } from 'react';
-import type { CaptureStatus, ClarityDocument, ReadabilityReport } from '../../types';
+import type { CaptureStatus, ClarityDocument, NewDocTab, ReadabilityReport } from '../../types';
 import { computeReadabilityReport } from '../../lib/metrics/engine';
 import { getCommonWordSet } from '../../lib/metrics/word-set';
 import { saveDocument } from '../../lib/storage/documents';
+import { getHostname } from '../../lib/utils/url';
 
 interface DashboardProps {
   activeDoc: ClarityDocument | null;
   captureStatus: CaptureStatus | null;
   onClearCaptureStatus: () => void;
   onStartReading: () => void;
-  onNewDoc: () => void;
+  onNewDoc: (tab: NewDocTab) => void;
   onDocUpdated: (doc: ClarityDocument) => void;
 }
 
@@ -41,6 +42,7 @@ export function Dashboard({
   }, [activeDoc?.id]);  // re-run only when the active document id changes
 
   const report = activeDoc?.report ?? null;
+  const hostname = activeDoc?.sourceUrl ? getHostname(activeDoc.sourceUrl) : null;
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -66,8 +68,8 @@ export function Dashboard({
           <h2>Welcome to Clarity</h2>
           <p>Simplify any article to your reading level.</p>
           <div className="empty-actions">
-            <button className="btn-primary" onClick={onNewDoc}>📋 Paste text</button>
-            <button className="btn-primary" onClick={onNewDoc}>📄 Upload PDF</button>
+            <button className="btn-primary" onClick={() => onNewDoc('paste')}>📋 Paste text</button>
+            <button className="btn-primary" onClick={() => onNewDoc('pdf')}>📄 Upload PDF</button>
           </div>
           <p className="empty-hint">or click the Clarity icon on any page</p>
         </div>
@@ -79,9 +81,7 @@ export function Dashboard({
           <div className="doc-header">
             <h1 className="doc-title">{activeDoc.title}</h1>
             <div className="doc-source-line">
-              {activeDoc.source === 'page' && activeDoc.sourceUrl && (
-                <span>{new URL(activeDoc.sourceUrl).hostname}</span>
-              )}
+              {activeDoc.source === 'page' && hostname && <span>{hostname}</span>}
               {activeDoc.source === 'paste' && <span>Pasted text</span>}
               {activeDoc.source === 'pdf' && <span>{activeDoc.fileName ?? 'PDF'}</span>}
               <span className="dot" aria-hidden="true">·</span>

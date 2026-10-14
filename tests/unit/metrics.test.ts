@@ -46,7 +46,7 @@ describe('syllables', () => {
 //     Ch = 51 alpha characters ([a-zA-Z] only — punctuation/spaces excluded)
 //     CW = 0 complex words (none ≥3 syllables)
 //
-//   Derived formula values (verified by running the engine in Node, see scratch/compute_values.js):
+//   Derived formula values (verified by running the engine in Node):
 //     FRE  = 206.835 − 1.015×(17/3) − 84.6×(17/17) = 116.483
 //     FKGL = 0.39×(17/3) + 11.8 − 15.59            = −1.580
 //     GFI  = 0.4×(17/3 + 0)                         = 2.267

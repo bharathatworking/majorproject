@@ -1,7 +1,8 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { segmentHtml } from '../../lib/segmentation/segmenter';
 import { parseSimplifiedText } from '../../lib/render/format-output';
-import type { Block, ClarityDocument, ContentNode, StoredResult, DisplayPrefs } from '../../types';
+import { getHostname } from '../../lib/utils/url';
+import type { Block, ClarityDocument, ContentNode, StoredResult, DisplayPrefs, RunMode } from '../../types';
 import type { RunState, LiveNodeState } from '../hooks/useRunState';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -10,7 +11,7 @@ interface ReadingProps {
   activeDoc: ClarityDocument | null;
   runState: RunState | null;
   displayPrefs: DisplayPrefs;
-  onStartRun: (doc: ClarityDocument) => void;
+  onStartRun: (doc: ClarityDocument, mode: RunMode) => void;
   onCancelRun: () => void;
   onDismissError: () => void;
   onUpdatePrefs: (patch: Partial<DisplayPrefs>) => void;
@@ -119,6 +120,10 @@ export function Reading({
     : nodes.length;
 
   const hasAnyResults = (activeDoc?.results.filter(r => r.status === 'done').length ?? 0) > 0;
+  // Nodes "Simplify again" would run: anything without a done result
+  const remainingCount = nodes.filter(n => storedById.get(n.id)?.status !== 'done').length;
+
+  const hostname = activeDoc?.sourceUrl ? getHostname(activeDoc.sourceUrl) : null;
 
   // ── Display class names ─────────────────────────────────────────────────────
   const contentClasses = [
@@ -147,7 +152,7 @@ export function Reading({
       <div className="reading-header">
         <div className="reading-title-row">
           <h1 className="reading-doc-title">{activeDoc.title}</h1>
-          {activeDoc.source === 'page' && activeDoc.sourceUrl && (
+          {activeDoc.source === 'page' && activeDoc.sourceUrl && hostname && (
             <a
               className="reading-source-link"
               href={activeDoc.sourceUrl}
@@ -155,7 +160,7 @@ export function Reading({
               rel="noopener noreferrer"
               title="Open original page"
             >
-              ↗ {new URL(activeDoc.sourceUrl).hostname}
+              ↗ {hostname}
             </a>
           )}
         </div>
@@ -196,12 +201,27 @@ export function Reading({
               )}
               <button
                 className="btn-primary"
-                onClick={() => onStartRun(activeDoc)}
-                disabled={!activeDoc.report}
-                title={!activeDoc.report ? 'Waiting for readability analysis…' : undefined}
+                onClick={() => onStartRun(activeDoc, 'remaining')}
+                disabled={!activeDoc.report || (hasAnyResults && remainingCount === 0)}
+                title={
+                  !activeDoc.report ? 'Waiting for readability analysis…'
+                  : hasAnyResults && remainingCount === 0 ? 'All paragraphs are simplified'
+                  : hasAnyResults ? 'Simplify only pending and failed paragraphs'
+                  : undefined
+                }
               >
                 {hasAnyResults ? 'Simplify again' : 'Simplify now'}
               </button>
+              {hasAnyResults && (
+                <button
+                  className="btn-secondary"
+                  onClick={() => onStartRun(activeDoc, 'all')}
+                  disabled={!activeDoc.report}
+                  title="Simplify every paragraph again, replacing current results"
+                >
+                  Re-simplify all
+                </button>
+              )}
             </>
           )}
         </div>

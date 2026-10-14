@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { sha256 } from '../../src/lib/utils/hash';
 import { escapeHtml } from '../../src/lib/utils/html';
+import { getHostname } from '../../src/lib/utils/url';
 
 // ---------------------------------------------------------------------------
 // sha256 — shared content hash used for document dedup
@@ -42,5 +43,26 @@ describe('escapeHtml', () => {
 
   it('leaves plain text unchanged', () => {
     expect(escapeHtml("It's plain text.")).toBe("It's plain text.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getHostname — non-throwing hostname for display
+// ---------------------------------------------------------------------------
+describe('getHostname', () => {
+  it('returns the hostname of a valid URL', () => {
+    expect(getHostname('https://www.example.com/a/b?c=1')).toBe('www.example.com');
+  });
+
+  it('returns null for a malformed URL', () => {
+    expect(getHostname('not a url')).toBeNull();
+  });
+
+  it('returns null for an empty string', () => {
+    expect(getHostname('')).toBeNull();
+  });
+
+  it('returns null for a URL without a host', () => {
+    expect(getHostname('about:blank')).toBeNull();
   });
 });
