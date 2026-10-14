@@ -16,6 +16,11 @@ export interface WeeklyProgressRecord {
 }
 
 const KEY = 'progress:weekly';
+
+/** Typed view of the progress key in chrome.storage.local, for `get<…>()`. */
+interface ProgressLocalArea {
+  [KEY]?: WeeklyProgressRecord[];
+}
 const RETENTION_DAYS = 30;
 
 /** Returns the ISO date string (YYYY-MM-DD) of the Monday of the given date's week. */
@@ -41,9 +46,8 @@ function withinRetention(weekStart: string): boolean {
  * Call this once after the simplified-text readability report is successfully computed.
  */
 export async function recordSession(resolvedTargetGrade: number): Promise<void> {
-  const { [KEY]: existing } = await chrome.storage.local.get(KEY);
-  let records: WeeklyProgressRecord[] = (existing || [])
-    .filter((r: WeeklyProgressRecord) => withinRetention(r.weekStart));
+  const { [KEY]: existing } = await chrome.storage.local.get<ProgressLocalArea>(KEY);
+  let records = (existing ?? []).filter(r => withinRetention(r.weekStart));
 
   const weekStart = getWeekStart(new Date());
   const idx = records.findIndex(r => r.weekStart === weekStart);
@@ -64,9 +68,8 @@ export async function getWeeklyProgress(): Promise<{
   avgTargetGrade: number;
   sessionCount: number;
 }[]> {
-  const { [KEY]: existing } = await chrome.storage.local.get(KEY);
-  const records: WeeklyProgressRecord[] = (existing || [])
-    .filter((r: WeeklyProgressRecord) => withinRetention(r.weekStart));
+  const { [KEY]: existing } = await chrome.storage.local.get<ProgressLocalArea>(KEY);
+  const records = (existing ?? []).filter(r => withinRetention(r.weekStart));
 
   return records.map(r => ({
     weekStart: r.weekStart,

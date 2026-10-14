@@ -9,8 +9,8 @@ export const DEFAULT_PROFILE: UserProfile = {
 };
 
 export async function getUserProfile(): Promise<UserProfile> {
-  const data = await chrome.storage.sync.get('userProfile');
-  return data.userProfile || DEFAULT_PROFILE;
+  const { userProfile } = await chrome.storage.sync.get<{ userProfile?: UserProfile }>('userProfile');
+  return userProfile || DEFAULT_PROFILE;
 }
 
 export async function saveUserProfile(profile: UserProfile): Promise<void> {

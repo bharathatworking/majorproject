@@ -1,15 +1,8 @@
 import React, { useEffect, useCallback, useRef } from 'react';
-import type { ClarityDocument, ReadabilityReport } from '../../types';
+import type { CaptureStatus, ClarityDocument, ReadabilityReport } from '../../types';
 import { computeReadabilityReport } from '../../lib/metrics/engine';
 import { getCommonWordSet } from '../../lib/metrics/word-set';
 import { saveDocument } from '../../lib/storage/documents';
-
-interface CaptureStatus {
-  state: 'extracting' | 'error';
-  tabTitle?: string;
-  error?: string;
-  at: number;
-}
 
 interface DashboardProps {
   activeDoc: ClarityDocument | null;

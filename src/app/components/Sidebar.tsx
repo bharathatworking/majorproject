@@ -1,8 +1,6 @@
 import React from 'react';
 import { DocumentList } from './DocumentList';
-import type { DocumentIndexEntry, LLMAvailability } from '../../types';
-
-type NavPage = 'dashboard' | 'reading' | 'progress' | 'settings';
+import type { DocumentIndexEntry, LLMAvailability, NavPage } from '../../types';
 
 interface SidebarProps {
   docs: DocumentIndexEntry[];

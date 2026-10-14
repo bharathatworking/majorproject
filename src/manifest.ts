@@ -41,7 +41,7 @@ export default defineManifest({
   content_security_policy: {
     // script-src 'self': extension pages only load same-origin scripts.
     // connect-src http://localhost:11434: Ollama API.
-    // No 'unsafe-eval' — pdf.js will use isEvalSupported: false in Phase 4.
+    // No 'unsafe-eval' — pdf.js v6 has no eval() code path, so none is needed.
     extension_pages: "script-src 'self'; object-src 'none'; connect-src 'self' http://localhost:11434;",
   },
 });

@@ -19,7 +19,7 @@ export function useDisplayPrefs() {
 
   // Initial load
   useEffect(() => {
-    chrome.storage.sync.get(STORAGE_KEY).then(data => {
+    chrome.storage.sync.get<{ [STORAGE_KEY]?: Partial<DisplayPrefs> }>(STORAGE_KEY).then(data => {
       if (data[STORAGE_KEY]) {
         setPrefs({ ...DEFAULT_DISPLAY_PREFS, ...data[STORAGE_KEY] });
       }

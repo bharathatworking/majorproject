@@ -44,9 +44,14 @@ function groupNodes(nodes: ContentNode[]): NodeGroup[] {
   return groups;
 }
 
-function headingTag(level?: number): keyof JSX.IntrinsicElements {
+// Narrow literal unions (not keyof React.JSX.IntrinsicElements) so JSX can
+// resolve the element's props when the tag is rendered dynamically.
+type HeadingTag = 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+const HEADING_TAGS: readonly HeadingTag[] = ['h2', 'h3', 'h4', 'h5', 'h6'];
+
+function headingTag(level?: number): HeadingTag {
   const l = level ?? 2;
-  return (['h2', 'h3', 'h4', 'h5', 'h6'][l - 2] ?? 'h2') as keyof JSX.IntrinsicElements;
+  return HEADING_TAGS[l - 2] ?? 'h2';
 }
 
 // ─── Reading page ─────────────────────────────────────────────────────────────
@@ -308,7 +313,7 @@ function NodeBlock({
 
   // A <div> rather than <p>: simplified output can contain <ul>/<ol>, which
   // is invalid inside a paragraph.
-  const Tag: keyof JSX.IntrinsicElements =
+  const Tag: 'blockquote' | 'div' =
     node.type === 'blockquote' ? 'blockquote' : 'div';
 
   // Re-parsed on every streamed chunk; cheap (linear in a single node's text)

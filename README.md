@@ -25,7 +25,7 @@ A Chrome extension that rewrites any web page, pasted text, or PDF at **your** r
 
 ## Requirements
 
-- **Chrome** 120 or later (Manifest V3)
+- **Chrome** 138 or later (Manifest V3)
 - **Node.js** 18+ and npm (for building from source)
 - **Ollama** installed and running — https://ollama.com
 
@@ -75,7 +75,7 @@ npm install
 npm run build
 ```
 
-This produces a `dist/` folder.
+This produces a `dist/` folder. `dist/` is not committed to git, so rebuild it after every clone or pull.
 
 ### 4 — Load in Chrome
 
@@ -99,6 +99,7 @@ This produces a `dist/` folder.
 npm run build        # production build → dist/
 npm run dev          # watch mode (hot-reload via crxjs)
 npm test             # unit tests (Vitest)
+npm run typecheck    # strict TypeScript check (tsc --noEmit)
 ```
 
 ### Project layout
@@ -120,6 +121,7 @@ src/
     run/                  # runSimplification (the main AI loop)
     segmentation/         # segmentHtml (deterministic node IDs)
     storage/              # documents.ts, progress.ts, settings.ts
+    utils/                # sha256, escapeHtml (shared by all input paths)
   types/                  # Shared TypeScript interfaces
   manifest.ts             # Chrome manifest (DO NOT touch the key field)
 ```
@@ -142,7 +144,7 @@ src/
 ## Architecture notes
 
 - **No side panel** — the toolbar icon opens (or focuses) one persistent Clarity tab
-- **No eval** — pdf.js runs with `isEvalSupported: false`; no CSP relaxation needed
+- **No eval** — pdf.js v6 has no eval code path; the CSP has no `'unsafe-eval'` and needs no relaxation
 - **Write queue** — `documents.ts` serialises all storage writes to prevent read-modify-write races on the 10-document index
 - **Deterministic node IDs** — segmenter produces `n0, n1, …` per call so stored results survive page reloads
 - **Run loop at App level** — simplification streams continue even when navigating between tabs within the app

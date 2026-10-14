@@ -14,7 +14,7 @@ import { BASE_COMMON_WORDS } from './common-words';
 export async function getCommonWordSet(): Promise<Set<string>> {
   const wordSet = new Set(BASE_COMMON_WORDS);
   try {
-    const { customWords } = await chrome.storage.sync.get('customWords');
+    const { customWords } = await chrome.storage.sync.get<{ customWords?: string }>('customWords');
     if (customWords && typeof customWords === 'string') {
       for (const word of customWords.split(/[\n,]+/)) {
         const trimmed = word.trim().toLowerCase();

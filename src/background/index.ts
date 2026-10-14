@@ -80,7 +80,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 // ─── Tab cleanup ──────────────────────────────────────────────────────────────
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const { appTabId } = await chrome.storage.session.get('appTabId');
+  const { appTabId } = await chrome.storage.session.get<{ appTabId?: number }>('appTabId');
   if (appTabId === tabId) {
     await chrome.storage.session.remove('appTabId');
   }
@@ -149,12 +149,12 @@ async function handleExtractionResult(data: {
 // ─── Tab reuse ────────────────────────────────────────────────────────────────
 
 async function openOrFocusApp(): Promise<void> {
-  const { appTabId } = await chrome.storage.session.get('appTabId');
+  const { appTabId } = await chrome.storage.session.get<{ appTabId?: number }>('appTabId');
 
   if (appTabId) {
     try {
-      const t = await chrome.tabs.get(appTabId as number);
-      await chrome.tabs.update(appTabId as number, { active: true });
+      const t = await chrome.tabs.get(appTabId);
+      await chrome.tabs.update(appTabId, { active: true });
       await chrome.windows.update(t.windowId, { focused: true });
       return;
     } catch {

@@ -10,19 +10,8 @@ import { useDocuments } from './hooks/useDocuments';
 import { useRunState } from './hooks/useRunState';
 import { useDisplayPrefs } from './hooks/useDisplayPrefs';
 import { OllamaProvider } from '../lib/llm/ollama-provider';
-import type { ClarityDocument, LLMAvailability } from '../types';
+import type { CaptureStatus, ClarityDocument, LLMAvailability, NavPage } from '../types';
 import type { ToastItem } from './components/Toast';
-
-// ─── Types ─────────────────────────────────────────────────────────────────
-
-type NavPage = 'dashboard' | 'reading' | 'progress' | 'settings';
-
-interface CaptureStatus {
-  state: 'extracting' | 'error';
-  tabTitle?: string;
-  error?: string;
-  at: number;
-}
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -73,8 +62,8 @@ export default function App() {
 
   // ── 2. Load initial capture:status ─────────────────────────────────────────
   useEffect(() => {
-    chrome.storage.session.get('capture:status').then(data => {
-      setCaptureStatus((data['capture:status'] as CaptureStatus) ?? null);
+    chrome.storage.session.get<{ 'capture:status'?: CaptureStatus }>('capture:status').then(data => {
+      setCaptureStatus(data['capture:status'] ?? null);
     });
   }, []);
 

@@ -124,3 +124,14 @@ export interface DisplayPrefs {
   textSize: 'normal' | 'large' | 'xlarge';
   focusMode: boolean;
 }
+
+/** Hash routes of the app tab (#/dashboard, #/reading, ...). */
+export type NavPage = 'dashboard' | 'reading' | 'progress' | 'settings';
+
+/** Capture progress written by the background worker to session `capture:status`. */
+export interface CaptureStatus {
+  state: 'extracting' | 'error';
+  tabTitle?: string;
+  error?: string;
+  at: number;
+}

@@ -26,6 +26,15 @@ interface InternalIndexEntry extends DocumentIndexEntry {
   contentHash: string;
 }
 
+/** Typed view of the docs:* keys in chrome.storage.local, for `get<…>()`. */
+interface DocsLocalArea {
+  [INDEX_KEY]?: InternalIndexEntry[];
+  [ACTIVE_KEY]?: string | null;
+}
+
+/** Typed view of a single `doc:<id>` lookup. */
+type DocEntry = Record<string, ClarityDocument | undefined>;
+
 // ─── Write queue ─────────────────────────────────────────────────────────────
 // Ensures that concurrent upserts/saves/deletes don't interleave their reads
 // and writes. Each enqueued fn executes only after the previous one resolves
@@ -41,19 +50,19 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
 // ─── Read helpers (no queue needed — reads are idempotent) ───────────────────
 
 export async function listDocuments(): Promise<DocumentIndexEntry[]> {
-  const { [INDEX_KEY]: raw } = await chrome.storage.local.get(INDEX_KEY);
-  return ((raw as InternalIndexEntry[]) ?? []).map(toPublicEntry);
+  const { [INDEX_KEY]: raw } = await chrome.storage.local.get<DocsLocalArea>(INDEX_KEY);
+  return (raw ?? []).map(toPublicEntry);
 }
 
 export async function getDocument(id: string): Promise<ClarityDocument | null> {
   const key = `${DOC_PREFIX}${id}`;
-  const { [key]: doc } = await chrome.storage.local.get(key);
-  return (doc as ClarityDocument) ?? null;
+  const { [key]: doc } = await chrome.storage.local.get<DocEntry>(key);
+  return doc ?? null;
 }
 
 export async function getActiveId(): Promise<string | null> {
-  const { [ACTIVE_KEY]: id } = await chrome.storage.local.get(ACTIVE_KEY);
-  return (id as string) ?? null;
+  const { [ACTIVE_KEY]: id } = await chrome.storage.local.get<DocsLocalArea>(ACTIVE_KEY);
+  return id ?? null;
 }
 
 // ─── Write helpers ────────────────────────────────────────────────────────────
@@ -76,20 +85,28 @@ export function upsertDocument(
   incoming: Omit<ClarityDocument, 'id' | 'createdAt' | 'updatedAt' | 'results' | 'simplifiedReport'>,
 ): Promise<ClarityDocument> {
   return enqueue(async () => {
-    const stored = await chrome.storage.local.get([INDEX_KEY, ACTIVE_KEY]);
+    const stored = await chrome.storage.local.get<DocsLocalArea>([INDEX_KEY, ACTIVE_KEY]);
     let index: InternalIndexEntry[] = stored[INDEX_KEY] ?? [];
     const currentActiveId: string | null = stored[ACTIVE_KEY] ?? null;
 
     // Fast dedup: index stores contentHash so we don't load all full documents
     const existingEntry = index.find(e => e.contentHash === incoming.contentHash);
+    const existingKey = existingEntry ? `${DOC_PREFIX}${existingEntry.id}` : null;
+    const existing = existingKey
+      ? (await chrome.storage.local.get<DocEntry>(existingKey))[existingKey]
+      : undefined;
+
+    // An index entry whose document is missing is stale: drop it and treat the
+    // content as new rather than refreshing a document that doesn't exist.
+    if (existingEntry && !existing) {
+      index = index.filter(e => e.id !== existingEntry.id);
+    }
 
     let doc: ClarityDocument;
 
-    if (existingEntry) {
-      // Load and refresh the existing document
-      const key = `${DOC_PREFIX}${existingEntry.id}`;
-      const { [key]: raw } = await chrome.storage.local.get(key);
-      const existing = raw as ClarityDocument;
+    if (existingKey && existing) {
+      // Refresh the existing document
+      const key = existingKey;
       doc = {
         ...existing,
         title: incoming.title,
@@ -150,7 +167,7 @@ export function saveDocument(doc: ClarityDocument): Promise<void> {
     const updated: ClarityDocument = { ...doc, updatedAt: now };
     await chrome.storage.local.set({ [`${DOC_PREFIX}${doc.id}`]: updated });
 
-    const { [INDEX_KEY]: rawIndex } = await chrome.storage.local.get(INDEX_KEY);
+    const { [INDEX_KEY]: rawIndex } = await chrome.storage.local.get<DocsLocalArea>(INDEX_KEY);
     let index: InternalIndexEntry[] = rawIndex ?? [];
     index = index.map(e =>
       e.id === doc.id
@@ -170,7 +187,7 @@ export function saveDocument(doc: ClarityDocument): Promise<void> {
 export function deleteDocument(id: string): Promise<void> {
   return enqueue(async () => {
     await chrome.storage.local.remove(`${DOC_PREFIX}${id}`);
-    const stored = await chrome.storage.local.get([INDEX_KEY, ACTIVE_KEY]);
+    const stored = await chrome.storage.local.get<DocsLocalArea>([INDEX_KEY, ACTIVE_KEY]);
     let index: InternalIndexEntry[] = stored[INDEX_KEY] ?? [];
     const activeId: string | null = stored[ACTIVE_KEY] ?? null;
     index = index.filter(e => e.id !== id);
@@ -187,7 +204,7 @@ export function deleteDocument(id: string): Promise<void> {
  */
 export function clearAllDocuments(): Promise<void> {
   return enqueue(async () => {
-    const { [INDEX_KEY]: rawIndex } = await chrome.storage.local.get(INDEX_KEY);
+    const { [INDEX_KEY]: rawIndex } = await chrome.storage.local.get<DocsLocalArea>(INDEX_KEY);
     const index: InternalIndexEntry[] = rawIndex ?? [];
     const docKeys = index.map(e => `${DOC_PREFIX}${e.id}`);
     if (docKeys.length > 0) await chrome.storage.local.remove(docKeys);

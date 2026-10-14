@@ -5,8 +5,9 @@
  * so the worker script resolves to chrome-extension://…/pdf.worker.min.mjs at
  * runtime — this satisfies MV3's script-src 'self' CSP without any relaxation.
  *
- * isEvalSupported: false prevents pdf.js from using eval(), which would violate
- * the extension CSP even if we added 'unsafe-eval'.
+ * pdf.js v6 has no eval()/new Function() code path (the old isEvalSupported
+ * option was removed), so it runs under the extension CSP (no 'unsafe-eval')
+ * without any configuration.
  *
  * OCR is NOT supported. This module only works with text-based (not scanned) PDFs.
  */
@@ -14,6 +15,8 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { upsertDocument } from '../storage/documents';
+import { sha256 } from '../utils/hash';
+import { escapeHtml } from '../utils/html';
 import type { ClarityDocument } from '../../types';
 
 // Configure pdf.js to use the bundled worker.
@@ -31,7 +34,6 @@ export async function createDocumentFromPDF(file: File): Promise<ClarityDocument
 
   const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(arrayBuffer),
-    isEvalSupported: false,      // respects CSP — no eval()
     disableFontFace: true,       // no external font requests
     useSystemFonts: false,
   });
@@ -85,21 +87,4 @@ export async function createDocumentFromPDF(file: File): Promise<ClarityDocument
     textContent,
     report: null,
   });
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-async function sha256(text: string): Promise<string> {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
 }

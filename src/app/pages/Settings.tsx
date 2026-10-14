@@ -21,7 +21,7 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
   // ── Load on mount ───────────────────────────────────────────────────────────
   useEffect(() => {
     getUserProfile().then(p => setProfile(p));
-    chrome.storage.sync.get('customWords').then(data => {
+    chrome.storage.sync.get<{ customWords?: string }>('customWords').then(data => {
       if (typeof data.customWords === 'string') setCustomWords(data.customWords);
     });
   }, []);

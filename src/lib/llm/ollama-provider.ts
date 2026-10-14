@@ -3,6 +3,18 @@ import type { LLMAvailability } from '../../types';
 const OLLAMA_BASE_URL = 'http://localhost:11434';
 export const OLLAMA_MODEL = 'qwen2.5:3b';
 
+// ─── Errors ───────────────────────────────────────────────────────────────────
+
+/** Non-OK HTTP response from Ollama; `status` lets callers map 403/404 to advice. */
+export class OllamaHttpError extends Error {
+  constructor(public readonly status: number) {
+    super(`Ollama request failed: ${status}`);
+    this.name = 'OllamaHttpError';
+  }
+}
+
+// ─── Provider ─────────────────────────────────────────────────────────────────
+
 export class OllamaProvider {
   private systemPrompt: string = '';
 
@@ -47,9 +59,7 @@ export class OllamaProvider {
     });
 
     if (!response.ok || !response.body) {
-      const err = new Error(`Ollama request failed: ${response.status}`);
-      (err as any).status = response.status;
-      throw err;
+      throw new OllamaHttpError(response.status);
     }
 
     const reader = response.body.getReader();

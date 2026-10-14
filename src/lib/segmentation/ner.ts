@@ -1,40 +1,52 @@
+/**
+ * Named-entity detection for prompt building (entities the model must preserve).
+ *
+ * Uses compromise plus its dates and numbers plugins. Plugin methods are typed
+ * by passing their method interfaces to the generic `nlp<…>()` call, since
+ * `nlp.plugin()` itself returns `any`. Offsets come from `.out('offset')`.
+ * Overlapping matches are resolved by start position, then longest match,
+ * then type priority.
+ */
+
 import nlp from 'compromise';
-import datePlugin from 'compromise-dates';
-import numberPlugin from 'compromise-numbers';
+import datePlugin, { type DatesMethods } from 'compromise-dates';
+import numberPlugin, { type NumbersMethods } from 'compromise-numbers';
 import type { Entity } from '../../types';
 
 nlp.plugin(datePlugin);
 nlp.plugin(numberPlugin);
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+/** Shape of each item returned by compromise's `.out('offset')`. */
+interface OffsetMatch {
+  text: string;
+  offset: { start: number; length: number };
+}
+
+// ─── Detection ────────────────────────────────────────────────────────────────
+
 export function detectEntities(text: string): Entity[] {
   try {
-    const doc = nlp(text);
+    const doc = nlp<DatesMethods & NumbersMethods>(text);
     const entities: Entity[] = [];
 
-    // Persons
-    const people = doc.people().out('offsets');
-    people.forEach((p: any) => entities.push({ text: p.text, type: 'person', start: p.offset.start, end: p.offset.start + p.offset.length }));
+    const collect = (matches: OffsetMatch[], type: Entity['type']) => {
+      for (const m of matches) {
+        entities.push({ text: m.text, type, start: m.offset.start, end: m.offset.start + m.offset.length });
+      }
+    };
 
-    // Organizations
-    const orgs = doc.organizations().out('offsets');
-    orgs.forEach((o: any) => entities.push({ text: o.text, type: 'org', start: o.offset.start, end: o.offset.start + o.offset.length }));
-
-    // Places
-    const places = doc.places().out('offsets');
-    places.forEach((p: any) => entities.push({ text: p.text, type: 'place', start: p.offset.start, end: p.offset.start + p.offset.length }));
-
-    // Dates
-    const dates = doc.dates().out('offsets');
-    dates.forEach((d: any) => entities.push({ text: d.text, type: 'date', start: d.offset.start, end: d.offset.start + d.offset.length }));
-
-    // Numbers (values)
-    const numbers = doc.numbers().out('offsets');
-    numbers.forEach((n: any) => entities.push({ text: n.text, type: 'number', start: n.offset.start, end: n.offset.start + n.offset.length }));
+    collect(doc.people().out('offset'), 'person');
+    collect(doc.organizations().out('offset'), 'org');
+    collect(doc.places().out('offset'), 'place');
+    collect(doc.dates().out('offset'), 'date');
+    collect(doc.numbers().out('offset'), 'number');
 
     // Deduplicate entities (compromise might match a word as multiple things, e.g. a date and a number)
     // We prefer person > org > place > date > number
     const typePriority: Record<string, number> = { 'person': 5, 'org': 4, 'place': 3, 'date': 2, 'number': 1 };
-    
+
     // Sort by start position, then by priority
     entities.sort((a, b) => {
       if (a.start === b.start) {
@@ -57,7 +69,7 @@ export function detectEntities(text: string): Entity[] {
 
     return filtered;
   } catch (e) {
-    console.error('NER detection failed', e);
+    console.error('[Clarity] NER detection failed', e);
     return [];
   }
 }

@@ -12,7 +12,7 @@
  *   All others → surfaced as-is
  */
 
-import { OllamaProvider, OLLAMA_MODEL } from '../llm/ollama-provider';
+import { OllamaHttpError, OllamaProvider, OLLAMA_MODEL } from '../llm/ollama-provider';
 import { resolveProfile } from '../profile/resolver';
 import { buildPrompt } from '../prompt-builder/builder';
 import { segmentHtml } from '../segmentation/segmenter';
@@ -48,7 +48,7 @@ function classifyError(err: unknown): string {
   if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
     return "Can't reach Ollama at localhost:11434. Is it running?";
   }
-  const status = (err as any)?.status as number | undefined;
+  const status = err instanceof OllamaHttpError ? err.status : undefined;
   if (status === 403) {
     return (
       `Ollama refused the request (403). ` +

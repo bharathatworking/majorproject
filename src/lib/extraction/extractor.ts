@@ -1,13 +1,7 @@
 import { Readability } from '@mozilla/readability';
 import DOMPurify from 'dompurify';
 import type { ExtractedArticle } from '../../types';
-
-async function digestMessage(message: string): Promise<string> {
-  const msgUint8 = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-}
+import { sha256 } from '../utils/hash';
 
 export function stripNoise(doc: Document): void {
   const noiseSelectors = [
@@ -100,7 +94,7 @@ export async function extractArticle(doc: Document): Promise<ExtractedArticle> {
   }
 
   const cleanContent = DOMPurify.sanitize(content);
-  const contentHash = await digestMessage(textContent);
+  const contentHash = await sha256(textContent);
 
   return { title, byline, content: cleanContent, textContent, excerpt, siteName, contentHash };
 }

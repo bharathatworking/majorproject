@@ -15,7 +15,6 @@ export interface UseDocumentsReturn {
   loading: boolean;
   switchDoc: (id: string) => Promise<void>;
   removeDoc: (id: string) => Promise<void>;
-  refreshActiveDoc: () => Promise<void>;
   setActiveDoc: React.Dispatch<React.SetStateAction<ClarityDocument | null>>;
 }
 
@@ -98,11 +97,5 @@ export function useDocuments(): UseDocumentsReturn {
     // storage.onChanged updates state
   }, []);
 
-  const refreshActiveDoc = useCallback(async () => {
-    if (!activeId) return;
-    const doc = await getDocument(activeId);
-    setActiveDoc(doc);
-  }, [activeId]);
-
-  return { docs, activeId, activeDoc, loading, switchDoc, removeDoc, refreshActiveDoc, setActiveDoc };
+  return { docs, activeId, activeDoc, loading, switchDoc, removeDoc, setActiveDoc };
 }

@@ -8,6 +8,8 @@
  */
 
 import { upsertDocument } from '../storage/documents';
+import { sha256 } from '../utils/hash';
+import { escapeHtml } from '../utils/html';
 import type { ClarityDocument } from '../../types';
 
 const MIN_LENGTH = 50;
@@ -39,21 +41,4 @@ export async function createDocumentFromPaste(rawText: string): Promise<ClarityD
     textContent: trimmed,
     report: null,
   });
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-async function sha256(text: string): Promise<string> {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
 }
