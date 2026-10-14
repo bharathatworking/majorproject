@@ -18,6 +18,7 @@
  */
 
 import { upsertDocument } from '../lib/storage/documents';
+import { isRestrictedPageError, isRestrictedUrl } from '../lib/utils/restricted-pages';
 
 // crxjs resolves this ?script import to the IIFE bundle path at build time.
 import extractorScriptPath from '../content-scripts/extractor.ts?script';
@@ -27,6 +28,9 @@ const APP_PATH = 'src/app/index.html';
 const RESTRICTED_PAGE_MESSAGE =
   "Chrome doesn't let extensions read this page (chrome:// pages, the Web Store " +
   'and built-in viewers are blocked). Paste the text or upload the file instead.';
+
+const INJECT_FAILED_MESSAGE =
+  "Couldn't read this page. Reload it and try again, or paste the text instead.";
 
 const MIN_TEXT_LENGTH = 100;
 const NO_TEXT_MESSAGE = 'No readable article text found on this page.';
@@ -42,6 +46,15 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 
   if (!tab.id) {
+    await openOrFocusApp();
+    return;
+  }
+
+  // Known off-limits page (chrome://, Web Store, …): don't even try to inject.
+  // This is an expected user action, so it's logged, not reported as an error.
+  if (tab.url && isRestrictedUrl(tab.url)) {
+    console.log('[Clarity] Page cannot be captured (restricted URL):', tab.url);
+    await setCaptureError(RESTRICTED_PAGE_MESSAGE);
     await openOrFocusApp();
     return;
   }
@@ -64,18 +77,24 @@ chrome.action.onClicked.addListener(async (tab) => {
       files: [extractorScriptPath],
     });
   } catch (err) {
-    console.error('[Clarity] Failed to inject content script:', err);
-    await chrome.storage.session.set({
-      'capture:status': {
-        state: 'error',
-        error: RESTRICTED_PAGE_MESSAGE,
-        at: Date.now(),
-      },
-    });
+    if (isRestrictedPageError(err)) {
+      // Protected page the URL check couldn't spot (PDF viewer, policy, file://).
+      console.log('[Clarity] Page cannot be captured:', String(err));
+      await setCaptureError(RESTRICTED_PAGE_MESSAGE);
+    } else {
+      console.error('[Clarity] Failed to inject content script:', err);
+      await setCaptureError(`${INJECT_FAILED_MESSAGE} (${String(err)})`);
+    }
   }
 
   await openOrFocusApp();
 });
+
+async function setCaptureError(error: string): Promise<void> {
+  await chrome.storage.session.set({
+    'capture:status': { state: 'error', error, at: Date.now() },
+  });
+}
 
 // ─── Tab cleanup ──────────────────────────────────────────────────────────────
 
