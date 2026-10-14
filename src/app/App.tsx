@@ -117,6 +117,12 @@ export default function App() {
     if (!runState?.active) setReadingDoc(activeDoc);
   }, [runState?.active]);
 
+  // Keep readingDoc fresh when the same document is re-saved (per-node results,
+  // simplifiedReport). The final save can land after the run-end sync above.
+  useEffect(() => {
+    if (activeDoc) setReadingDoc(prev => (prev?.id === activeDoc.id ? activeDoc : prev));
+  }, [activeDoc]);
+
   // ── 5. Ollama availability polling ─────────────────────────────────────────
   const checkAvailability = useCallback(async () => {
     const status = await ollamaProvider.checkAvailability();

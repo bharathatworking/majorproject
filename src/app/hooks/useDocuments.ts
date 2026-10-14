@@ -70,6 +70,17 @@ export function useDocuments(): UseDocumentsReturn {
         } else {
           setActiveDoc(null);
         }
+        return;
+      }
+
+      // The active document itself was rewritten (e.g. saveDocument after each
+      // simplified node, or the post-run simplifiedReport). Without this, the
+      // app keeps the pre-run copy and finished results vanish when the run ends.
+      for (const [key, change] of Object.entries(changes)) {
+        if (!key.startsWith('doc:')) continue;
+        const updated = (change.newValue as ClarityDocument | undefined) ?? null;
+        if (!updated) continue;
+        setActiveDoc(prev => (prev?.id === updated.id ? updated : prev));
       }
     };
     chrome.storage.onChanged.addListener(listener);
