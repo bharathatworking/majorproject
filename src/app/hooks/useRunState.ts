@@ -127,9 +127,15 @@ export function useRunState(): UseRunStateReturn {
         setRunState(prev => prev ? { ...prev, active: false } : null),
     };
 
-    const { runSimplification } = await import('../../lib/run/simplify');
-    if (controller.signal.aborted) return;
-    await runSimplification(doc, callbacks, mode, startIndex);
+    try {
+      const { runSimplification } = await import('../../lib/run/simplify');
+      if (controller.signal.aborted) return;
+      await runSimplification(doc, callbacks, mode, startIndex);
+    } catch (err) {
+      // The run never rejects by design; if it does, don't leave it "active"
+      console.error('[Clarity] Simplification run failed', err);
+      setRunState(prev => prev ? { ...prev, active: false, errorBanner: prev.errorBanner ?? String(err) } : null);
+    }
   }, []);
 
   const cancelRun = useCallback(() => {

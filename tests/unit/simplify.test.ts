@@ -71,6 +71,7 @@ const {
 } = await import('../../src/lib/run/simplify');
 const { DEFAULT_PROFILE } = await import('../../src/lib/storage/settings');
 const { getDocument, upsertDocument, saveDocument } = await import('../../src/lib/storage/documents');
+const { beforeAfterOf, getWeeklyProgress } = await import('../../src/lib/storage/progress');
 const { OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
 const { MEANING_RETRY_INSTRUCTION, driftReason, unsupportedReason } = await import('../../src/lib/quality/meaning');
 const {
@@ -1175,6 +1176,72 @@ describe('runSimplification run log', () => {
       premiseStrategy: 'summac-sentences+pairs/top3', contradictionAggregation: NLI_CONTRADICTION_AGG,
       paragraphRule: NLI_PARAGRAPH_RULE,
     });
+  });
+
+  it('after a run: keeps the report, saves the simplified report and records one session', async () => {
+    const doc = await storedDoc();
+    const cb = callbacks();
+
+    await runSimplification(doc, cb, 'all');
+
+    const saved = await getDocument(doc.id);
+    expect(saved?.report).toEqual(makeReport());
+    expect(beforeAfterOf(saved)).not.toBeNull();
+    expect((await getWeeklyProgress()).map(w => w.sessionCount)).toEqual([1]);
+    expect(vi.mocked(console.log).mock.calls.map(c => String(c[0]))).toContain('[Clarity] Session recorded (1 this week)');
+    expect(cb.onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts every finished run as a session', async () => {
+    const doc = await storedDoc();
+    await runSimplification(doc, callbacks(), 'all');
+    await runSimplification((await getDocument(doc.id))!, callbacks(), 'all');
+    expect((await getWeeklyProgress()).map(w => w.sessionCount)).toEqual([2]);
+  });
+
+  it('records the session when the cancel arrives after the last node', async () => {
+    const doc = await storedDoc();
+    const controller = new AbortController();
+    let done = 0;
+    const cb = {
+      ...callbacks(),
+      signal: controller.signal,
+      onNodeDone: vi.fn(() => { if (++done === NODES.length) controller.abort(); }),
+    };
+
+    await runSimplification(doc, cb, 'all');
+
+    expect((await getWeeklyProgress()).map(w => w.sessionCount)).toEqual([1]);
+    expect(beforeAfterOf(await getDocument(doc.id))).not.toBeNull();
+  });
+
+  it('a run cancelled midway saves the simplified report of its done nodes but records no session', async () => {
+    const doc = await storedDoc();
+    const controller = new AbortController();
+    const cb = { ...callbacks(), signal: controller.signal, onNodeDone: vi.fn(() => controller.abort()) };
+
+    await runSimplification(doc, cb, 'all');
+
+    expect(mock.areas.local.data.has('progress:weekly')).toBe(false);
+    expect((await getDocument(doc.id))?.simplifiedReport).not.toBeNull();
+  });
+
+  it('still records the session and completes when saving the simplified report fails', async () => {
+    const doc = await storedDoc();
+    const realSet = mock.areas.local.set.bind(mock.areas.local);
+    vi.spyOn(mock.areas.local, 'set').mockImplementation(async (items: Record<string, unknown>) => {
+      const value = items[`doc:${doc.id}`] as { simplifiedReport?: unknown } | undefined;
+      if (value?.simplifiedReport) throw new Error('QUOTA_BYTES quota exceeded');
+      return realSet(items);
+    });
+    const cb = callbacks();
+
+    await runSimplification(doc, cb, 'all');
+
+    expect((await getWeeklyProgress()).map(w => w.sessionCount)).toEqual([1]);
+    expect(cb.onComplete).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(console.error).mock.calls.map(c => String(c[0])))
+      .toContain('[Clarity] Saving the simplified report failed');
   });
 
   it('saves a log marked cancelled when the run is cancelled', async () => {

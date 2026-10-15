@@ -928,17 +928,18 @@ export async function runSimplification(
   const saveRunLog = () =>
     addRunLog(doc.id, runLog).catch(err => console.warn('[Clarity] Run log save failed', err));
 
-  if (signal.aborted) {
-    await saveRunLog();
-    callbacks.onComplete();
-    return;
-  }
+  // Every node of the run finished (done or error); a cancel that arrives
+  // during the last node's save doesn't undo a complete run
+  const finishedAll = timings.length === toRun.length;
 
   // Show error banner for the first failure (if any)
-  if (firstError) callbacks.onBannerError(firstError);
+  if (firstError && !signal.aborted) callbacks.onBannerError(firstError);
 
-  // 6. Post-run: compute simplified report (over stored + new results, in
-  //    document order) and record session, if this run finished any node
+  // 6. Post-run: the simplified report (over stored + new results, in
+  //    document order) whenever this run finished a node, also when
+  //    cancelled, and a session when the run is complete. Each write is
+  //    guarded, so one failure can't skip the other, the run log or
+  //    onComplete.
   if (doneCount > 0) {
     const combinedText = simplifiable
       .map(n => plainById.get(n.id))
@@ -946,8 +947,19 @@ export async function runSimplification(
       .join('\n\n');
     const simplifiedReport = computeReadabilityReport(combinedText, wordSet);
     doc = { ...doc, simplifiedReport, lastRunAt: Date.now() };
-    await saveDocument(doc);
-    await recordSession(spec.targetGrade);
+    try {
+      await saveDocument(doc);
+    } catch (err) {
+      console.error('[Clarity] Saving the simplified report failed', err);
+    }
+    if (!signal.aborted || finishedAll) {
+      try {
+        const sessions = await recordSession(spec.targetGrade);
+        console.log(`[Clarity] Session recorded (${sessions} this week)`);
+      } catch (err) {
+        console.error('[Clarity] Recording the session failed', err);
+      }
+    }
   }
 
   await saveRunLog();

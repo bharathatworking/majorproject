@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
-import { getWeeklyProgress } from '../../lib/storage/progress';
+import { beforeAfterOf, getWeeklyProgress } from '../../lib/storage/progress';
 import { getDocument, listDocuments } from '../../lib/storage/documents';
 // similarity.ts and config.ts are import-free of compromise and Transformers.js
 import { meaningOverview, passRateLabel, type MeaningOverview } from '../../lib/quality/similarity';
@@ -54,9 +54,10 @@ export function Progress({ activeDoc }: ProgressProps) {
       chartRef.current = new Chart(ctx, {
         type: 'line',
         data: {
+          // Week keys are local dates; read the parts, not new Date() (UTC)
           labels: weekly.map(w => {
-            const d = new Date(w.weekStart);
-            return `${d.getMonth() + 1}/${d.getDate()}`;
+            const [, month, day] = w.weekStart.split('-').map(Number);
+            return `${month}/${day}`;
           }),
           datasets: [{
             label: 'Avg Target Grade',
@@ -106,8 +107,7 @@ export function Progress({ activeDoc }: ProgressProps) {
       ? latest.avgTargetGrade - earliest.avgTargetGrade
       : null;
 
-  const report          = activeDoc?.report ?? null;
-  const simplifiedReport = activeDoc?.simplifiedReport ?? null;
+  const comparison = beforeAfterOf(activeDoc);
   // Same row as the Meaning Preserved table, so the card can't disagree with it
   const meaningRows = useMeaningRows();
   const activeMeaning = activeDoc ? meaningRows.find(r => r.id === activeDoc.id) ?? null : null;
@@ -172,13 +172,13 @@ export function Progress({ activeDoc }: ProgressProps) {
       )}
 
       {/* ── Before → After comparison ── */}
-      {report && simplifiedReport ? (
+      {comparison ? (
         <div className="comparison-card">
           <h2 className="section-heading">Last Session — Before vs. After</h2>
           <div className="comparison-grid">
-            <ComparisonRow label="Grade Level"        before={report.estimatedGradeLevel} after={simplifiedReport.estimatedGradeLevel} />
-            <ComparisonRow label="Jargon Density"     before={report.jargonDensity}        after={simplifiedReport.jargonDensity}        unit="%" />
-            <ComparisonRow label="Avg Sentence Length" before={report.avgSentenceLength}   after={simplifiedReport.avgSentenceLength}    unit=" words" />
+            <ComparisonRow label="Grade Level"        before={comparison.before.estimatedGradeLevel} after={comparison.after.estimatedGradeLevel} />
+            <ComparisonRow label="Jargon Density"     before={comparison.before.jargonDensity}        after={comparison.after.jargonDensity}        unit="%" />
+            <ComparisonRow label="Avg Sentence Length" before={comparison.before.avgSentenceLength}   after={comparison.after.avgSentenceLength}    unit=" words" />
             {activeMeaning && activeMeaning.avgSimilarity !== null && (
               <div className="comparison-row meaning-row">
                 <span className="comparison-label">Avg similarity</span>
