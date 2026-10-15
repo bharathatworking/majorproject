@@ -103,8 +103,12 @@ export const NLI_LOAD_TIMEOUT_MS = 60_000;
 /** One scoring request may take this long before it fails for that node. */
 export const NLI_SCORE_TIMEOUT_MS = 30_000;
 
-/** Average NLI time per paragraph above which the run log warns (thesis budget). */
-export const NLI_SLOW_MS = 500;
+/**
+ * Thesis budget for the average NLI time per paragraph. A run above it logs
+ * "NLI above budget" once with console.info, never console.warn: warnings go
+ * to the chrome://extensions Errors page, which stays for real errors.
+ */
+export const NLI_BUDGET_MS = 1000;
 
 // ─── Quality mode (lib/quality/mode.ts) ──────────────────────────────────────
 

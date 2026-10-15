@@ -115,7 +115,7 @@ import { PREMISE_STRATEGY } from '../quality/premises';
 import { failureBreakdown, failuresFromReasons, formatFailureBreakdown } from '../quality/verdict';
 import {
   CONTRADICTION_MAX, ENTAILMENT_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
-  NLI_CONTRADICTION_AGG, NLI_MODEL_ID, NLI_PARAGRAPH_RULE, NLI_SLOW_MS, QUALITY_THRESHOLD, SIMILARITY_THRESHOLD,
+  NLI_CONTRADICTION_AGG, NLI_MODEL_ID, NLI_PARAGRAPH_RULE, NLI_BUDGET_MS, QUALITY_THRESHOLD, SIMILARITY_THRESHOLD,
   THESIS_COVERAGE_MIN, WEIGHTS,
 } from '../quality/config';
 import { isFullyChecked, meaningStatusOf, summarizeMeaning } from '../quality/similarity';
@@ -862,9 +862,11 @@ export async function runSimplification(
       `the pass rate is not thesis-grade for this run`,
     );
   }
-  if (meaning.avgNliMs !== null && meaning.avgNliMs > NLI_SLOW_MS) {
-    console.warn(
-      `[Clarity] NLI averages ${Math.round(meaning.avgNliMs)} ms per paragraph, above the ${NLI_SLOW_MS} ms budget`,
+  // Info, not a warning: chrome://extensions → Errors stays for real errors
+  if (meaning.avgNliMs !== null && meaning.avgNliMs > NLI_BUDGET_MS) {
+    console.info(
+      `[Clarity] NLI above budget: ${Math.round(meaning.avgNliMs)} ms per paragraph on average ` +
+      `(budget ${NLI_BUDGET_MS} ms)`,
     );
   }
 

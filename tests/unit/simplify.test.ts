@@ -608,6 +608,31 @@ describe('runSimplification thesis meaning standard', () => {
     expect(node?.candidates[1]).toMatchObject({ text: GOOD_CURIE, failures: [] });
   });
 
+  it('logs "NLI above budget" once with console.info, never console.warn', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    nodes = [CURIE, DARWIN];
+    replies = { n0: [GOOD_CURIE], n1: [GOOD_DARWIN] };
+    nliResults = { [GOOD_CURIE]: makeEntailment({ ms: 1500 }), [GOOD_DARWIN]: makeEntailment({ ms: 1300 }) };
+
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(String(info.mock.calls[0][0]))
+      .toBe('[Clarity] NLI above budget: 1400 ms per paragraph on average (budget 1000 ms)');
+    expect(vi.mocked(console.warn).mock.calls.map(c => String(c[0]))).not.toContainEqual(expect.stringMatching(/NLI|budget/));
+  });
+
+  it('stays quiet within the NLI budget', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    nodes = [CURIE];
+    replies = { n0: [GOOD_CURIE] };
+    nliResults = { [GOOD_CURIE]: makeEntailment({ ms: 1000 }) };
+
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+
+    expect(info).not.toHaveBeenCalled();
+  });
+
   it('records glossary exemptions in the run log', async () => {
     nodes = [CURIE];
     replies = { n0: [GOOD_CURIE] };
