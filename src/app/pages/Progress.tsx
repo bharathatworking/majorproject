@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
 import { getWeeklyProgress } from '../../lib/storage/progress';
-import { averageSimilarity } from '../../lib/quality/semantic';
+import { averageSimilarity } from '../../lib/quality/similarity';
 import type { ClarityDocument } from '../../types';
 
 Chart.register(...registerables);

@@ -873,6 +873,25 @@ ol.node-list { list-style: decimal; }
   border-color: rgba(250, 204, 21, 0.4);
 }
 
+/* "already simple" tag: kept-as-is nodes; faint until hovered */
+.simple-badge {
+  position: absolute;
+  top: -0.6rem;
+  right: 0;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: system-ui, sans-serif;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  pointer-events: none;
+  opacity: 0.45;
+  transition: opacity var(--transition);
+}
+.node-block:hover .simple-badge,
+.node-block:focus-within .simple-badge { opacity: 1; }
+
 /* Streaming node highlight */
 .node-block.node-streaming .node-text {
   color: var(--text-primary);

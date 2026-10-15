@@ -99,6 +99,14 @@ export interface StoredResult extends SimplificationResult {
   level?: number;
   /** 0–1 embedding cosine vs the original; absent when not checked (see lib/quality/semantic.ts). */
   similarity?: number;
+  /** Node was already at or below the target grade; simplifiedText is the original. */
+  skipped?: boolean;
+}
+
+/** One cached model output for a node (see lib/storage/cache.ts). */
+export interface CachedResult {
+  text: string;
+  similarity?: number;
 }
 
 /** Result of the embedding meaning check for one simplified node. */

@@ -1,4 +1,12 @@
+/**
+ * User settings in chrome.storage.sync: the reading profile (`userProfile`)
+ * and the chat model (`llmModel`). Both fall back to defaults when unset.
+ */
+
+import { DEFAULT_LLM_MODEL } from '../llm/ollama-provider';
 import type { UserProfile } from '../../types';
+
+// ─── Profile ──────────────────────────────────────────────────────────────────
 
 export const DEFAULT_PROFILE: UserProfile = {
   ageGroup: 'adult',
@@ -15,4 +23,16 @@ export async function getUserProfile(): Promise<UserProfile> {
 
 export async function saveUserProfile(profile: UserProfile): Promise<void> {
   await chrome.storage.sync.set({ userProfile: profile });
+}
+
+// ─── Model ────────────────────────────────────────────────────────────────────
+
+/** Saved Ollama chat model, or DEFAULT_LLM_MODEL when unset or invalid. */
+export async function getLlmModel(): Promise<string> {
+  const { llmModel } = await chrome.storage.sync.get<{ llmModel?: unknown }>('llmModel');
+  return typeof llmModel === 'string' && llmModel.trim() ? llmModel.trim() : DEFAULT_LLM_MODEL;
+}
+
+export async function saveLlmModel(model: string): Promise<void> {
+  await chrome.storage.sync.set({ llmModel: model });
 }

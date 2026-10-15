@@ -9,19 +9,18 @@
  * option was removed), so it runs under the extension CSP (no 'unsafe-eval')
  * without any configuration.
  *
+ * pdf.js (~450 kB) is imported dynamically on the first PDF, so it stays out of
+ * the app's main chunk. The worker ?url import is only a path string, so it
+ * stays static.
+ *
  * OCR is NOT supported. This module only works with text-based (not scanned) PDFs.
  */
 
-import * as pdfjsLib from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { upsertDocument } from '../storage/documents';
 import { sha256 } from '../utils/hash';
 import { escapeHtml } from '../utils/html';
 import type { ClarityDocument } from '../../types';
-
-// Configure pdf.js to use the bundled worker.
-// The ?url import resolves to the worker's chrome-extension:// path after build.
-pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 const MIN_TEXT_LENGTH = 100;
 
@@ -29,6 +28,10 @@ export async function createDocumentFromPDF(file: File): Promise<ClarityDocument
   if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
     throw new Error('Only PDF files (.pdf) are supported.');
   }
+
+  const pdfjsLib = await import('pdfjs-dist');
+  // Use the bundled worker; the ?url import resolves to its chrome-extension:// path
+  pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
   const arrayBuffer = await file.arrayBuffer();
 

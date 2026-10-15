@@ -28,6 +28,10 @@ describe('detectEntities', () => {
     }
   });
 
+  it('finds organizations in a paragraph (moved from the segmenter test)', () => {
+    expect(detectEntities('NASA launched the probe in 2024.').map(e => e.text)).toContain('NASA');
+  });
+
   it('returns an empty list for empty text', () => {
     expect(detectEntities('')).toEqual([]);
   });

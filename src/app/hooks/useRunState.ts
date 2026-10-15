@@ -1,5 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
-import { runSimplification, type RunCallbacks } from '../../lib/run/simplify';
+// Type-only: the run module (and compromise, via NER and the entity check) is
+// loaded on the first run, keeping it out of the main chunk.
+import type { RunCallbacks } from '../../lib/run/simplify';
 import type { ClarityDocument, RunMode } from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -9,6 +11,8 @@ export interface LiveNodeState {
   status: 'pending' | 'streaming' | 'done' | 'error';
   /** Meaning-check score of the kept version, once done (if checked). */
   similarity?: number;
+  /** Node was already simple; text is the original. */
+  skipped?: boolean;
 }
 
 export interface RunState {
@@ -24,7 +28,8 @@ export interface RunState {
 
 export interface UseRunStateReturn {
   runState: RunState | null;
-  startRun: (doc: ClarityDocument, mode: RunMode) => Promise<void>;
+  /** `startIndex`: index of the first node to simplify (see runSimplification). */
+  startRun: (doc: ClarityDocument, mode: RunMode, startIndex?: number) => Promise<void>;
   cancelRun: () => void;
   dismissError: () => void;
   dismissNotice: () => void;
@@ -43,7 +48,7 @@ export function useRunState(): UseRunStateReturn {
   const [runState, setRunState] = useState<RunState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const startRun = useCallback(async (doc: ClarityDocument, mode: RunMode) => {
+  const startRun = useCallback(async (doc: ClarityDocument, mode: RunMode, startIndex = 0) => {
     // Cancel any in-flight run before starting a new one
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -86,14 +91,14 @@ export function useRunState(): UseRunStateReturn {
           };
         }),
 
-      onNodeDone: (nodeId, finalText, similarity) =>
+      onNodeDone: (nodeId, finalText, similarity, skipped) =>
         setRunState(prev => {
           if (!prev) return null;
           return {
             ...prev,
             liveResults: {
               ...prev.liveResults,
-              [nodeId]: { text: finalText, status: 'done', similarity },
+              [nodeId]: { text: finalText, status: 'done', similarity, skipped },
             },
           };
         }),
@@ -120,7 +125,9 @@ export function useRunState(): UseRunStateReturn {
         setRunState(prev => prev ? { ...prev, active: false } : null),
     };
 
-    await runSimplification(doc, callbacks, mode);
+    const { runSimplification } = await import('../../lib/run/simplify');
+    if (controller.signal.aborted) return;
+    await runSimplification(doc, callbacks, mode, startIndex);
   }, []);
 
   const cancelRun = useCallback(() => {

@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ToastContainer } from './components/Toast';
 import { NewDocDialog } from './components/NewDocDialog';
 import { Dashboard } from './pages/Dashboard';
 import { Reading } from './pages/Reading';
-import { Progress } from './pages/Progress';
 import { Settings } from './pages/Settings';
 import { useDocuments } from './hooks/useDocuments';
 import { useRunState } from './hooks/useRunState';
@@ -18,6 +17,9 @@ import type { ToastItem } from './components/Toast';
 const VALID_PAGES: NavPage[] = ['dashboard', 'reading', 'progress', 'settings'];
 const AVAILABILITY_POLL_MS = 30_000;
 const ollamaProvider = new OllamaProvider();
+
+// Chart.js is only needed on Progress, so that page is its own chunk
+const Progress = lazy(() => import('./pages/Progress').then(m => ({ default: m.Progress })));
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -166,19 +168,13 @@ export default function App() {
     setReadingDoc(prev => prev?.id === doc.id ? doc : prev);
   }, [setActiveDoc]);
 
-  const handleStartRun = useCallback(async (doc: ClarityDocument, mode: RunMode) => {
+  const handleStartRun = useCallback(async (doc: ClarityDocument, mode: RunMode, startIndex = 0) => {
     setReadingDoc(doc);            // lock the reading view to this doc
     navigate('reading');           // switch to Reading tab
-    await startRun(doc, mode);
+    await startRun(doc, mode, startIndex);
   }, [startRun, navigate]);
 
-  if (loading) {
-    return (
-      <div className="app-loading" role="status" aria-label="Loading">
-        <span className="spinner" aria-hidden="true" />
-      </div>
-    );
-  }
+  if (loading) return <PageSpinner />;
 
   return (
     <div className={`app-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -218,7 +214,11 @@ export default function App() {
             onUpdatePrefs={updatePrefs}
           />
         )}
-        {nav === 'progress' && <Progress activeDoc={activeDoc} />}
+        {nav === 'progress' && (
+          <Suspense fallback={<PageSpinner />}>
+            <Progress activeDoc={activeDoc} />
+          </Suspense>
+        )}
         {nav === 'settings' && <Settings displayPrefs={displayPrefs} onUpdatePrefs={updatePrefs} />}
       </main>
 
@@ -231,6 +231,17 @@ export default function App() {
       )}
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+    </div>
+  );
+}
+
+// ─── PageSpinner ────────────────────────────────────────────────────────────
+
+/** Full-area spinner for the initial load and lazily loaded pages. */
+function PageSpinner() {
+  return (
+    <div className="app-loading" role="status" aria-label="Loading">
+      <span className="spinner" aria-hidden="true" />
     </div>
   );
 }

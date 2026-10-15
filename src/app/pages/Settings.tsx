@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { getUserProfile, saveUserProfile, DEFAULT_PROFILE } from '../../lib/storage/settings';
+import {
+  getUserProfile, saveUserProfile, DEFAULT_PROFILE, getLlmModel, saveLlmModel,
+} from '../../lib/storage/settings';
 import { clearAllDocuments } from '../../lib/storage/documents';
+import { clearCache } from '../../lib/storage/cache';
+import { DEFAULT_LLM_MODEL, OllamaProvider } from '../../lib/llm/ollama-provider';
 import { resolveTargetGrade } from '../../lib/profile/resolver';
 import { PRESETS, editProfile } from '../../lib/profile/presets';
 import type { UserProfile, DisplayPrefs, ReadingPreset } from '../../types';
@@ -12,12 +16,17 @@ interface SettingsProps {
 
 type SaveStatus = 'idle' | 'saved' | 'error';
 
+/** Installed models from Ollama: still loading, the list, or unreachable. */
+type ModelList = 'loading' | 'error' | string[];
+
 export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
   const [profile, setProfile]               = useState<UserProfile>(DEFAULT_PROFILE);
   const [customWords, setCustomWords]       = useState('');
   const [wordStatus, setWordStatus]         = useState<SaveStatus>('idle');
   const [docStatus, setDocStatus]           = useState<SaveStatus>('idle');
   const [progressStatus, setProgressStatus] = useState<SaveStatus>('idle');
+  const [llmModel, setLlmModel]             = useState(DEFAULT_LLM_MODEL);
+  const [installed, setInstalled]           = useState<ModelList>('loading');
 
   // ── Load on mount ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -25,7 +34,24 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
     chrome.storage.sync.get<{ customWords?: string }>('customWords').then(data => {
       if (typeof data.customWords === 'string') setCustomWords(data.customWords);
     });
+    getLlmModel().then(setLlmModel);
+    new OllamaProvider().listModels().then(setInstalled).catch(err => {
+      console.log('[Clarity] Could not list Ollama models:', err);
+      setInstalled('error');
+    });
   }, []);
+
+  // ── Model ───────────────────────────────────────────────────────────────────
+  const handleModelChange = (model: string) => {
+    setLlmModel(model);
+    saveLlmModel(model);   // fire-and-forget, like the profile fields
+  };
+
+  // The saved model stays selectable even when Ollama doesn't list it
+  const modelOptions = Array.isArray(installed) && installed.includes(llmModel)
+    ? installed
+    : [llmModel, ...(Array.isArray(installed) ? installed : [])];
+  const modelMissing = Array.isArray(installed) && !installed.includes(llmModel);
 
   // ── Profile update ──────────────────────────────────────────────────────────
   // Any field edit means the profile no longer matches a preset → 'custom'.
@@ -57,7 +83,8 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
   // ── Clear documents (docs:index + doc:* — leaves progress:weekly untouched) ─
   const handleClearDocuments = async () => {
     try {
-      await clearAllDocuments();
+      // The cache holds simplified document text, so it goes too
+      await Promise.all([clearAllDocuments(), clearCache()]);
       flash(setDocStatus, 'saved');
     } catch {
       flash(setDocStatus, 'error');
@@ -188,7 +215,40 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
         </div>
       </section>
 
-      {/* ── 2. Display Preferences ─────────────────────────────────────────── */}
+      {/* ── 2. AI Model ────────────────────────────────────────────────────── */}
+      <section className="settings-section">
+        <h2 className="settings-section-title">AI Model</h2>
+        <div className="form-group">
+          <label htmlFor="llm-model">
+            Ollama model
+            <span className="form-hint"> — used for new simplifications</span>
+          </label>
+          <select
+            id="llm-model"
+            value={llmModel}
+            onChange={e => handleModelChange(e.target.value)}
+            disabled={installed === 'loading'}
+          >
+            {modelOptions.map(name => (
+              <option key={name} value={name}>
+                {name}{modelMissing && name === llmModel ? ' (not installed)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        {installed === 'error' && (
+          <p className="settings-hint">
+            Can't reach Ollama, so installed models can't be listed. Start Ollama and reopen Settings.
+          </p>
+        )}
+        {modelMissing && (
+          <p className="settings-hint">
+            This model isn't installed. Run <code>ollama pull {llmModel}</code> or pick another.
+          </p>
+        )}
+      </section>
+
+      {/* ── 3. Display Preferences ─────────────────────────────────────────── */}
       <section className="settings-section">
         <h2 className="settings-section-title">Display</h2>
 
@@ -235,7 +295,7 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
         </div>
       </section>
 
-      {/* ── 3. Vocabulary ──────────────────────────────────────────────────── */}
+      {/* ── 4. Vocabulary ──────────────────────────────────────────────────── */}
       <section className="settings-section">
         <h2 className="settings-section-title">Custom Common Words</h2>
         <p className="settings-hint">
@@ -256,7 +316,7 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
         </div>
       </section>
 
-      {/* ── 4. Data ────────────────────────────────────────────────────────── */}
+      {/* ── 5. Data ────────────────────────────────────────────────────────── */}
       <section className="settings-section">
         <h2 className="settings-section-title">Data</h2>
 
@@ -264,7 +324,7 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
           <div className="data-row-text">
             <div className="data-row-label">Clear document history</div>
             <div className="settings-hint">
-              Removes all captured documents and simplified results.
+              Removes all captured documents, simplified results and cached simplifications.
               Progress tracking data is <strong>not</strong> affected.
             </div>
           </div>
@@ -288,7 +348,7 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
         </div>
       </section>
 
-      {/* ── 5. About ───────────────────────────────────────────────────────── */}
+      {/* ── 6. About ───────────────────────────────────────────────────────── */}
       <section className="settings-section settings-section-about">
         <h2 className="settings-section-title">About</h2>
         <p className="settings-hint">

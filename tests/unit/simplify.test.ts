@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import type { ClarityDocument, ContentNode, StoredResult } from '../../src/types';
-import { installChromeMock } from '../mocks/chrome';
+import { installChromeMock, type ChromeMock } from '../mocks/chrome';
 import { makeDocInput, makeReport } from '../mocks/fixtures';
 
 // The real segmenter needs DOMParser; a fixed node list keeps this test in the
@@ -29,9 +29,14 @@ const DARWIN: ContentNode = {
 let nodes: ContentNode[] = NODES;
 vi.mock('../../src/lib/segmentation/segmenter', () => ({
   segmentHtml: (_html: string, title: string, contentHash: string) => ({ title, contentHash, nodes }),
+  simplifiableNodes: (list: ContentNode[]) => list,
 }));
 
-const { runSimplification, selectNodesToRun, EMBED_MISSING_NOTICE } = await import('../../src/lib/run/simplify');
+/** Easy enough (estimated grade below 0) to be skipped at any target. */
+const EASY: ContentNode = { id: 'n0', type: 'paragraph', text: 'The cat sat on the mat.', entities: [] };
+
+const { runSimplification, selectNodesToRun, rotateFrom, EMBED_MISSING_NOTICE } = await import('../../src/lib/run/simplify');
+const { DEFAULT_PROFILE } = await import('../../src/lib/storage/settings');
 const { getDocument, upsertDocument, saveDocument } = await import('../../src/lib/storage/documents');
 const { OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
 const { MEANING_RETRY_INSTRUCTION } = await import('../../src/lib/quality/semantic');
@@ -47,6 +52,11 @@ let replies: Record<string, string[]>;
 const FAIL = '__FAIL__';
 /** Similarity to the original that the mocked embed gives each simplified text (default 1). */
 let scores: Record<string, number>;
+/** When set, every chat request answers with this HTTP status. */
+let chatStatus: number | null;
+/** `model` field of each chat request, in order. */
+let models: string[];
+let mock: ChromeMock;
 
 function ndjson(content: string): Response {
   const body =
@@ -56,9 +66,13 @@ function ndjson(content: string): Response {
 }
 
 const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-  const { messages } = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+  const { messages, model } = JSON.parse(String(init?.body)) as {
+    messages: { content: string }[]; model: string;
+  };
   const user = messages[1].content;
   prompts.push(user);
+  models.push(model);
+  if (chatStatus !== null) return new Response('nope', { status: chatStatus });
   const node = nodes.find(n => user.endsWith(n.text));
   if (!node || failing.has(node.text)) return new Response('boom', { status: 500 });
   const reply = replies[node.id]?.shift() ?? `Simple ${node.id}.`;
@@ -85,9 +99,17 @@ function callbacks() {
   };
 }
 
-async function storedDoc(): Promise<ClarityDocument> {
-  return upsertDocument(makeDocInput('hash-run', { report: makeReport() }));
+async function storedDoc(hash = 'hash-run'): Promise<ClarityDocument> {
+  return upsertDocument(makeDocInput(hash, { report: makeReport() }));
 }
+
+/** Saves a profile with the given target grade (fixtures are skipped at the default 12). */
+function setTargetGrade(grade: number): Promise<void> {
+  return chrome.storage.sync.set({ userProfile: { ...DEFAULT_PROFILE, targetGradeLevel: grade } });
+}
+
+const cacheKeys = () =>
+  [...mock.areas.local.data.keys()].filter(k => k.startsWith('cache:') && k !== 'cache:index');
 
 function result(nodeId: string, status: StoredResult['status'], simplifiedText = ''): StoredResult {
   const node = NODES.find(n => n.id === nodeId)!;
@@ -97,8 +119,9 @@ function result(nodeId: string, status: StoredResult['status'], simplifiedText =
 const statuses = (doc: ClarityDocument | null) =>
   Object.fromEntries((doc?.results ?? []).map(r => [r.nodeId, r.status]));
 
-beforeEach(() => {
-  installChromeMock();
+beforeEach(async () => {
+  mock = installChromeMock();
+  await setTargetGrade(1);
   vi.stubGlobal('fetch', fetchMock);
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -109,6 +132,8 @@ beforeEach(() => {
   prompts = [];
   replies = {};
   scores = {};
+  chatStatus = null;
+  models = [];
   nodes = NODES;
 });
 
@@ -120,6 +145,18 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 // selectNodesToRun — 'remaining' vs 'all'
 // ---------------------------------------------------------------------------
+describe('rotateFrom', () => {
+  it('starts at the index and wraps around', () => {
+    expect(rotateFrom(['a', 'b', 'c', 'd'], 2)).toEqual(['c', 'd', 'a', 'b']);
+  });
+
+  it('clamps out-of-range and non-finite starts', () => {
+    expect(rotateFrom(['a', 'b'], -3)).toEqual(['a', 'b']);
+    expect(rotateFrom(['a', 'b'], 9)).toEqual(['a', 'b']);
+    expect(rotateFrom(['a', 'b'], NaN)).toEqual(['a', 'b']);
+  });
+});
+
 describe('selectNodesToRun', () => {
   const results = [result('n0', 'done', 'x'), result('n1', 'error')];
 
@@ -326,5 +363,155 @@ describe('runSimplification meaning check', () => {
     expect(saved?.simplifiedText).toBe(first);
     expect(cb.onNodeError).not.toHaveBeenCalled();
     expect(cb.onBannerError).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runSimplification — speed: skip easy nodes, cache, start at visible node
+// ---------------------------------------------------------------------------
+describe('runSimplification speed paths', () => {
+  it('keeps an already simple node as is, without the model or the meaning check', async () => {
+    nodes = [EASY, NODES[1]];
+    await setTargetGrade(4);
+    const doc = await storedDoc();
+    const cb = callbacks();
+
+    await runSimplification(doc, cb, 'all');
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].endsWith(NODES[1].text)).toBe(true);
+    expect(embedSpy).not.toHaveBeenCalled();
+    expect(cb.onNodeDone).toHaveBeenCalledWith('n0', EASY.text, undefined, true);
+    expect(cb.onProgress).toHaveBeenLastCalledWith(2, 2);
+    const saved = await getDocument(doc.id);
+    expect(saved?.results.find(r => r.nodeId === 'n0')).toMatchObject({
+      status: 'done', simplifiedText: EASY.text, skipped: true,
+    });
+    expect(saved?.results.find(r => r.nodeId === 'n1')?.skipped).toBeUndefined();
+    expect(saved?.simplifiedReport).not.toBeNull();
+  });
+
+  it('does not skip a node above the target grade', async () => {
+    nodes = [CURIE];
+    replies = { n0: ['Marie Curie won the Nobel Prize in 1903.'] };
+    await setTargetGrade(4);
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((await getDocument(doc.id))?.results[0].skipped).toBeUndefined();
+  });
+
+  it('reuses cached results for the same text, spec and model', async () => {
+    await runSimplification(await storedDoc('hash-a'), callbacks(), 'remaining');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(cacheKeys()).toHaveLength(3);
+
+    fetchMock.mockClear();
+    const second = await storedDoc('hash-b');
+    const cb = callbacks();
+    await runSimplification(second, cb, 'remaining');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(cb.onNodeStart).not.toHaveBeenCalled();
+    const saved = await getDocument(second.id);
+    expect(saved?.results.map(r => [r.status, r.simplifiedText])).toEqual([
+      ['done', 'Simple n0.'], ['done', 'Simple n1.'], ['done', 'Simple n2.'],
+    ]);
+  });
+
+  it("'all' ignores the cache and asks the model again", async () => {
+    await runSimplification(await storedDoc('hash-a'), callbacks(), 'all');
+    fetchMock.mockClear();
+
+    await runSimplification(await storedDoc('hash-b'), callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('misses the cache when the model changes', async () => {
+    await runSimplification(await storedDoc('hash-a'), callbacks(), 'remaining');
+    await chrome.storage.sync.set({ llmModel: 'llama3.2:1b' });
+    fetchMock.mockClear();
+
+    await runSimplification(await storedDoc('hash-b'), callbacks(), 'remaining');
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('caches the similarity with the text', async () => {
+    const reply = 'Marie Curie won the Nobel Prize in 1903.';
+    nodes = [CURIE];
+    replies = { n0: [reply] };
+    scores = { [reply]: 0.91 };
+    await runSimplification(await storedDoc('hash-a'), callbacks(), 'remaining');
+
+    const second = await storedDoc('hash-b');
+    const cb = callbacks();
+    await runSimplification(second, cb, 'remaining');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cb.onNodeDone).toHaveBeenCalledWith('n0', reply, expect.closeTo(0.91));
+    expect((await getDocument(second.id))?.results[0].similarity).toBeCloseTo(0.91);
+  });
+
+  it('does not cache a version that fails the meaning check', async () => {
+    nodes = [CURIE];
+    replies = { n0: ['Marie Curie liked science.', 'Marie Curie liked rays.'] };
+    scores = { 'Marie Curie liked science.': 0.5, 'Marie Curie liked rays.': 0.6 };
+
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(cacheKeys()).toHaveLength(0);
+  });
+
+  it('does not cache failed nodes', async () => {
+    failing = new Set([NODES[1].text]);
+
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+
+    expect(cacheKeys()).toHaveLength(2);
+  });
+
+  it('starts at startIndex, wraps around, and keeps document-order context', async () => {
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all', 1);
+
+    expect(prompts.map(p => NODES.findIndex(n => p.endsWith(n.text)))).toEqual([1, 2, 0]);
+    // n1 runs first, before n0 is done: no context. n2 follows n1 in the document.
+    expect(prompts[0]).not.toContain('[Context from previous section');
+    expect(prompts[1]).toContain('[Context from previous section: "Simple n1."]');
+    // n0 is the first node in the document, so it never gets context
+    expect(prompts[2]).not.toContain('[Context from previous section');
+    expect(statuses(await getDocument(doc.id))).toEqual({ n0: 'done', n1: 'done', n2: 'done' });
+  });
+
+  it('uses the model from settings and names it when it is missing', async () => {
+    await chrome.storage.sync.set({ llmModel: 'llama3.2:1b' });
+    chatStatus = 404;
+    const cb = callbacks();
+
+    await runSimplification(await storedDoc(), cb, 'all');
+
+    expect(models.length).toBeGreaterThan(0);
+    expect(models.every(m => m === 'llama3.2:1b')).toBe(true);
+    expect(cb.onBannerError).toHaveBeenCalledWith('Model not found on Ollama. Run: ollama pull llama3.2:1b');
+  });
+
+  it('logs per-node timings and a run summary', async () => {
+    nodes = [EASY, NODES[1]];
+    await setTargetGrade(4);
+
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+
+    const lines = vi.mocked(console.log).mock.calls.map(c => String(c[0]));
+    expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n0 \(skipped\) \d+\.\d\d s$/));
+    expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n1 \(model\) /));
+    expect(lines).toContainEqual(expect.stringMatching(
+      /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 1 skipped, 0 errors; .*model qwen2\.5:3b$/,
+    ));
   });
 });

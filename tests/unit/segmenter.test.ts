@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest';
-import { segmentHtml } from '../../src/lib/segmentation/segmenter';
+import { segmentHtml, simplifiableNodes } from '../../src/lib/segmentation/segmenter';
 
 const html = `
   <h2>Mission goals</h2>
@@ -62,7 +62,17 @@ describe('segmentHtml', () => {
     expect(nodes[5]).toMatchObject({ type: 'table', skipSimplification: true, entities: [] });
   });
 
-  it('attaches detected entities to text nodes', () => {
-    expect(nodes[1].entities?.map(e => e.text)).toContain('NASA');
+  it('leaves entity detection to the run loop', () => {
+    expect(nodes.filter(n => n.type !== 'table').every(n => n.entities === undefined)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// simplifiableNodes — the node list shared by Reading and the run loop
+// ---------------------------------------------------------------------------
+describe('simplifiableNodes', () => {
+  it('drops tables and keeps document order', () => {
+    const { nodes } = segmentHtml(html, 'Probe', 'hash-1');
+    expect(simplifiableNodes(nodes).map(n => n.id)).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n6']);
   });
 });

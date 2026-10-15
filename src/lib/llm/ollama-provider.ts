@@ -1,8 +1,18 @@
+/**
+ * Ollama client for the local chat model and the embedding model.
+ *
+ * The chat model is chosen by the user (sync `llmModel`, see
+ * lib/storage/settings.ts) and passed to the constructor; DEFAULT_LLM_MODEL
+ * applies when nothing is saved. Only localhost:11434 is contacted, which the
+ * CSP connect-src and host_permissions already allow.
+ */
+
 import type { LLMAvailability } from '../../types';
 import { parseOllamaStream } from './ollama-stream';
 
 const OLLAMA_BASE_URL = 'http://localhost:11434';
-export const OLLAMA_MODEL = 'qwen2.5:3b';
+/** Chat model used until the user picks another one in Settings. */
+export const DEFAULT_LLM_MODEL = 'qwen2.5:3b';
 /**
  * Sentence-BERT embedding model (all-MiniLM-L6-v2, ~23M params) used by the
  * meaning check in lib/quality/semantic.ts. Optional: a 404 skips the check.
@@ -19,10 +29,29 @@ export class OllamaHttpError extends Error {
   }
 }
 
+// ─── Model list ───────────────────────────────────────────────────────────────
+
+/**
+ * Chat-capable model names from an /api/tags response, sorted. Embedding
+ * models (EMBED_MODEL and anything named *embed*) can't answer /api/chat, so
+ * they are left out. Malformed input yields an empty list.
+ */
+export function chatModelsFromTags(json: unknown): string[] {
+  const models = (json as { models?: unknown } | null)?.models;
+  if (!Array.isArray(models)) return [];
+  const names = models
+    .map(m => (m as { name?: unknown } | null)?.name)
+    .filter((n): n is string => typeof n === 'string' && n.length > 0)
+    .filter(n => !n.toLowerCase().includes('embed') && n.split(':')[0] !== EMBED_MODEL);
+  return [...new Set(names)].sort();
+}
+
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export class OllamaProvider {
   private systemPrompt: string = '';
+
+  constructor(readonly model: string = DEFAULT_LLM_MODEL) {}
 
   async checkAvailability(): Promise<LLMAvailability> {
     try {
@@ -34,6 +63,13 @@ export class OllamaProvider {
       console.error('[Clarity] Ollama not reachable:', e);
       return 'unavailable';
     }
+  }
+
+  /** Installed chat models (GET /api/tags). Throws when Ollama is unreachable. */
+  async listModels(): Promise<string[]> {
+    const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`);
+    if (!res.ok) throw new OllamaHttpError(res.status);
+    return chatModelsFromTags(await res.json());
   }
 
   async createBaseSession(
@@ -53,7 +89,7 @@ export class OllamaProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: OLLAMA_MODEL,
+        model: this.model,
         messages: [
           { role: 'system', content: this.systemPrompt },
           { role: 'user', content: userText },

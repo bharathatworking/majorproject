@@ -41,6 +41,8 @@ ollama pull qwen2.5:3b
 ollama pull all-minilm   # meaning checker (optional, ~46 MB)
 ```
 
+`qwen2.5:3b` is the default chat model. You can switch to any other pulled model in **Settings → AI Model**.
+
 `all-minilm` is a small Sentence-BERT embedding model. Clarity uses it to check that each simplified paragraph keeps the original meaning, and retries a paragraph once if it doesn't. Without it, simplification still works, but no meaning scores are shown.
 
 ### 2 — Set OLLAMA_ORIGINS (required)
@@ -91,8 +93,8 @@ This produces a `dist/` folder. `dist/` is not committed to git, so rebuild it a
 
 - **From a web page:** navigate to any article → click the Clarity icon → a Clarity tab opens (or is focused if already open)
 - **From the app:** click **"New document"** in the sidebar → paste text or upload a PDF
-- **Simplify:** go to the **Reading** tab → click **"Simplify now"** → text streams in paragraph by paragraph
-- **Settings:** go to **Settings** to adjust your reading profile, display options, and custom vocabulary
+- **Simplify:** go to the **Reading** tab → click **"Simplify now"** → text streams in paragraph by paragraph, starting with the paragraph on screen. Paragraphs already at your level are kept as is and marked "already simple", and paragraphs simplified before with the same settings and model come back instantly from a local cache
+- **Settings:** go to **Settings** to adjust your reading profile, AI model, display options, and custom vocabulary
 
 ---
 
@@ -137,7 +139,7 @@ src/
 |---|---|
 | **"Can't reach Ollama at localhost:11434"** | Start Ollama (`ollama serve`) |
 | **"Ollama refused the request (403)"** | Set `OLLAMA_ORIGINS` (see Step 2 above) and **fully restart** Ollama |
-| **"Model not found"** | Run `ollama pull qwen2.5:3b` |
+| **"Model not found"** | Run the `ollama pull` command the message names, or pick an installed model in Settings → AI Model |
 | **"Install the meaning checker"** banner | Run `ollama pull all-minilm`. The run still finishes without it, just without meaning scores |
 | **No text extracted from PDF** | The PDF is likely a scanned image — only text-based PDFs are supported |
 | **Extension ID changed** | Never remove the `key` field from `src/manifest.ts` |

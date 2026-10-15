@@ -1,5 +1,4 @@
 import type { ContentNode, SegmentedDocument } from '../../types';
-import { detectEntities } from './ner';
 
 /**
  * Parses sanitized article HTML into a flat sequence of ContentNodes.
@@ -16,6 +15,12 @@ import { detectEntities } from './ner';
  *    guards the simplification loop silently dropped every list node, so no list
  *    item was ever simplified. Now each `<li>` is emitted directly as a
  *    `list-item` node at the top level.
+ *
+ * 3. **No NER here** — nodes come back without `entities`. The Reading page
+ *    segments on every render and never needs them, and detecting them here
+ *    pulled compromise (~400 kB) into the main chunk. The run loop
+ *    (lib/run/simplify.ts) detects entities only for nodes it sends to the
+ *    model.
  */
 export function segmentHtml(html: string, title: string, contentHash: string): SegmentedDocument {
   const parser = new DOMParser();
@@ -37,7 +42,6 @@ export function segmentHtml(html: string, title: string, contentHash: string): S
           type: 'heading',
           level: parseInt(tag[1], 10),
           text,
-          entities: detectEntities(text),
         });
       }
       return;
@@ -46,7 +50,7 @@ export function segmentHtml(html: string, title: string, contentHash: string): S
     if (tag === 'p') {
       const text = el.textContent?.trim() ?? '';
       if (text) {
-        nodes.push({ id: nextId(), type: 'paragraph', text, entities: detectEntities(text) });
+        nodes.push({ id: nextId(), type: 'paragraph', text });
       }
       return;
     }
@@ -54,7 +58,7 @@ export function segmentHtml(html: string, title: string, contentHash: string): S
     if (tag === 'blockquote') {
       const text = el.textContent?.trim() ?? '';
       if (text) {
-        nodes.push({ id: nextId(), type: 'blockquote', text, entities: detectEntities(text) });
+        nodes.push({ id: nextId(), type: 'blockquote', text });
       }
       return;
     }
@@ -71,7 +75,6 @@ export function segmentHtml(html: string, title: string, contentHash: string): S
               id: nextId(),
               type: 'list-item',
               text,
-              entities: detectEntities(text),
             });
           }
         }
@@ -100,4 +103,12 @@ export function segmentHtml(html: string, title: string, contentHash: string): S
   Array.from(body.children).forEach(child => walk(child));
 
   return { title, nodes, contentHash };
+}
+
+/**
+ * Nodes a run simplifies, in document order. Reading and the run loop both use
+ * this filter, so a node index means the same node in both.
+ */
+export function simplifiableNodes(nodes: ContentNode[]): ContentNode[] {
+  return nodes.filter(n => n.type !== 'table' && !n.skipSimplification && n.text.trim().length > 0);
 }

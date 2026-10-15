@@ -10,6 +10,7 @@
  * read-modify-write races when multiple events fire in quick succession.
  */
 
+import { createWriteQueue } from '../utils/write-queue';
 import type { ClarityDocument, DocumentIndexEntry } from '../../types';
 
 const MAX_DOCS = 10;
@@ -39,13 +40,7 @@ type DocEntry = Record<string, ClarityDocument | undefined>;
 // Ensures that concurrent upserts/saves/deletes don't interleave their reads
 // and writes. Each enqueued fn executes only after the previous one resolves
 // (or rejects — the queue itself never stops moving).
-let writeQueue: Promise<unknown> = Promise.resolve();
-
-function enqueue<T>(fn: () => Promise<T>): Promise<T> {
-  const result = writeQueue.then(fn);
-  writeQueue = result.catch(() => {});
-  return result;
-}
+const enqueue = createWriteQueue();
 
 // ─── Read helpers (no queue needed — reads are idempotent) ───────────────────
 

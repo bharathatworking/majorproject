@@ -1,8 +1,9 @@
 import React, { useMemo, useState, useCallback } from 'react';
-import { segmentHtml } from '../../lib/segmentation/segmenter';
+import { segmentHtml, simplifiableNodes } from '../../lib/segmentation/segmenter';
 import { parseSimplifiedText } from '../../lib/render/format-output';
 import { getHostname } from '../../lib/utils/url';
-import { SIMILARITY_THRESHOLD } from '../../lib/quality/semantic';
+// similarity.ts, not semantic.ts: the latter pulls compromise into this chunk
+import { SIMILARITY_THRESHOLD } from '../../lib/quality/similarity';
 import type { Block, ClarityDocument, ContentNode, StoredResult, DisplayPrefs, RunMode } from '../../types';
 import type { RunState, LiveNodeState } from '../hooks/useRunState';
 
@@ -12,7 +13,8 @@ interface ReadingProps {
   activeDoc: ClarityDocument | null;
   runState: RunState | null;
   displayPrefs: DisplayPrefs;
-  onStartRun: (doc: ClarityDocument, mode: RunMode) => void;
+  /** `startIndex`: index in the simplifiable node list of the first node to run. */
+  onStartRun: (doc: ClarityDocument, mode: RunMode, startIndex: number) => void;
   onCancelRun: () => void;
   onDismissError: () => void;
   onDismissNotice: () => void;
@@ -27,6 +29,7 @@ interface NodeResult {
   text: string;
   status: 'pending' | 'streaming' | 'done' | 'error';
   similarity?: number;
+  skipped?: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -58,6 +61,21 @@ function headingTag(level?: number): HeadingTag {
   return HEADING_TAGS[l - 2] ?? 'h2';
 }
 
+/**
+ * Index of the first node whose element is at least partly in the viewport,
+ * so a run starts with what the reader is looking at. Falls back to 0.
+ */
+function firstVisibleIndex(nodes: ContentNode[]): number {
+  const viewportHeight = window.innerHeight;
+  for (let i = 0; i < nodes.length; i++) {
+    const el = document.querySelector(`[data-node-id="${nodes[i].id}"]`);
+    if (!el) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.bottom > 0 && rect.top < viewportHeight) return i;
+  }
+  return 0;
+}
+
 // ─── Reading page ─────────────────────────────────────────────────────────────
 
 export function Reading({
@@ -72,9 +90,7 @@ export function Reading({
   const nodes = useMemo<ContentNode[]>(() => {
     if (!activeDoc) return [];
     const seg = segmentHtml(activeDoc.html, activeDoc.title, activeDoc.contentHash);
-    return seg.nodes.filter(
-      n => n.type !== 'table' && !n.skipSimplification && n.text.trim().length > 0,
-    );
+    return simplifiableNodes(seg.nodes);
   }, [activeDoc?.id, activeDoc?.html]);
 
   const groups = useMemo(() => groupNodes(nodes), [nodes]);
@@ -99,10 +115,10 @@ export function Reading({
   const getResult = useCallback((nodeId: string): NodeResult => {
     if (isLiveRun && runState!.liveResults[nodeId]) {
       const live: LiveNodeState = runState!.liveResults[nodeId];
-      return { text: live.text, status: live.status, similarity: live.similarity };
+      return { text: live.text, status: live.status, similarity: live.similarity, skipped: live.skipped };
     }
     const s = storedById.get(nodeId);
-    if (s) return { text: s.simplifiedText, status: s.status, similarity: s.similarity };
+    if (s) return { text: s.simplifiedText, status: s.status, similarity: s.similarity, skipped: s.skipped };
     return { text: '', status: 'pending' };
   }, [isLiveRun, runState, storedById]);
 
@@ -128,6 +144,10 @@ export function Reading({
   const remainingCount = nodes.filter(n => storedById.get(n.id)?.status !== 'done').length;
 
   const hostname = activeDoc?.sourceUrl ? getHostname(activeDoc.sourceUrl) : null;
+
+  const startRun = (mode: RunMode) => {
+    if (activeDoc) onStartRun(activeDoc, mode, firstVisibleIndex(nodes));
+  };
 
   // ── Display class names ─────────────────────────────────────────────────────
   const contentClasses = [
@@ -205,7 +225,7 @@ export function Reading({
               )}
               <button
                 className="btn-primary"
-                onClick={() => onStartRun(activeDoc, 'remaining')}
+                onClick={() => startRun('remaining')}
                 disabled={!activeDoc.report || (hasAnyResults && remainingCount === 0)}
                 title={
                   !activeDoc.report ? 'Waiting for readability analysis…'
@@ -219,7 +239,7 @@ export function Reading({
               {hasAnyResults && (
                 <button
                   className="btn-secondary"
-                  onClick={() => onStartRun(activeDoc, 'all')}
+                  onClick={() => startRun('all')}
                   disabled={!activeDoc.report}
                   title="Simplify every paragraph again, replacing current results"
                 >
@@ -282,7 +302,7 @@ export function Reading({
             // Headings show simplified text inline or original while pending
             const display = result.status !== 'pending' ? (result.text || node.text) : node.text;
             return (
-              <Tag key={node.id} className={`reading-heading ${result.status === 'streaming' ? 'streaming' : ''}`}>
+              <Tag key={node.id} data-node-id={node.id} className={`reading-heading ${result.status === 'streaming' ? 'streaming' : ''}`}>
                 {display}
                 {result.status === 'streaming' && <span className="caret" aria-hidden="true" />}
               </Tag>
@@ -329,6 +349,9 @@ function NodeBlock({
   node, result, isActive, isRevealed, focusModeOn, onReveal, onHover, onFocus,
 }: NodeBlockProps) {
   const isDone      = result.status === 'done';
+  const isSkipped   = isDone && !!result.skipped;
+  // Already-simple nodes show the original, so there is nothing to reveal
+  const canReveal   = isDone && !isSkipped;
   const isStreaming = result.status === 'streaming';
   const isError     = result.status === 'error';
   const isPending   = result.status === 'pending';
@@ -339,6 +362,7 @@ function NodeBlock({
     'node-block',
     isStreaming ? 'node-streaming' : '',
     isDone      ? 'node-done'      : '',
+    isSkipped   ? 'node-skipped'   : '',
     isError     ? 'node-error'     : '',
     dimmed      ? 'node-dimmed'    : '',
   ].filter(Boolean).join(' ');
@@ -354,6 +378,7 @@ function NodeBlock({
   return (
     <div
       className={wrapperClass}
+      data-node-id={node.id}
       onMouseEnter={() => onHover(node.id)}
       onMouseLeave={() => onHover(null)}
       onFocus={() => onFocus(node.id)}
@@ -361,13 +386,13 @@ function NodeBlock({
     >
       {/* Simplified text (or original while pending / on error) */}
       <Tag
-        className={`node-text ${isDone || isStreaming ? 'clickable' : ''}`}
-        role={isDone ? 'button' : undefined}
-        tabIndex={isDone ? 0 : undefined}
-        aria-expanded={isDone ? isRevealed : undefined}
-        aria-label={isDone ? 'Click to show original text' : undefined}
-        onClick={isDone ? onReveal : undefined}
-        onKeyDown={isDone ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReveal(); } } : undefined}
+        className={`node-text ${canReveal || isStreaming ? 'clickable' : ''}`}
+        role={canReveal ? 'button' : undefined}
+        tabIndex={canReveal ? 0 : undefined}
+        aria-expanded={canReveal ? isRevealed : undefined}
+        aria-label={canReveal ? 'Click to show original text' : undefined}
+        onClick={canReveal ? onReveal : undefined}
+        onKeyDown={canReveal ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReveal(); } } : undefined}
       >
         {isPending && <p className="node-para node-original-text">{node.text}</p>}
         {(isStreaming || isDone) && (
@@ -398,8 +423,15 @@ function NodeBlock({
         </span>
       )}
 
+      {/* Kept as is: already at or below the target grade */}
+      {isSkipped && (
+        <span className="simple-badge" title="Already at or below your target grade, so it was kept as is">
+          already simple
+        </span>
+      )}
+
       {/* Click-to-reveal original */}
-      {isDone && isRevealed && (
+      {canReveal && isRevealed && (
         <div className="original-reveal" aria-label="Original text">
           <div className="original-label">Original</div>
           <p className="original-text">{node.text}</p>
