@@ -25,6 +25,8 @@
  *  - Numbers and dates without a comparable value (lib/quality/values.ts:
  *    no number, month, weekday or time zone) are dropped: "an" read as a
  *    number, "week", "any hours", "(over".
+ *  - A unit conversion in brackets right after a quantity is not a fact of
+ *    its own: "2,300 kilometres (1,400 mi)" keeps 2,300 only.
  *  - A list marker is not a number: digits followed by "." or ")" and a
  *    capital, at the start of the text, a line or a sentence, or after ":"
  *    ("Objectives: 1. Formative").
@@ -52,7 +54,9 @@ const LEADING_FILLER = /^(?:(?:in|on|at|the|during)\s+)+/i;
 const BOUNDARY = /[.!?]["'”’)\]]*\s+|\s+[([]/;
 /** Digits then "." or ")" then a capital: a list marker when it starts a line, a sentence or follows ":". */
 const LIST_MARKER_AFTER = /^[.)]\s+["'“‘(]?[A-Z]/;
-const LIST_MARKER_BEFORE = /(?:^|[\n:.!?]["'”’)]*)\s*$/;
+/** A quantity and its unit, then "(" right before a number: "2,300 kilometres (". */
+const UNIT_CONVERSION_BEFORE = /\d[\d,.]*\s*(?:[\p{L}°%²³]+\.?\s*){1,2}\(\s*(?:about\s+|approximately\s+|~)?$/u;
+const LIST_MARKER_BEFORE =/(?:^|[\n:.!?]["'”’)]*)\s*$/;
 
 type NameType = 'person' | 'org' | 'place';
 const NAME_TYPES: ReadonlySet<Entity['type']> = new Set<NameType>(['person', 'org', 'place']);
@@ -87,6 +91,7 @@ function cleanMatch(
     return { text, start };
   }
   if ((type === 'number' || type === 'date') && !valueSignature(text).hasValue) return null;
+  if (type === 'number' && UNIT_CONVERSION_BEFORE.test(source.slice(0, start))) return null;
   if (type === 'number' && /^\d{1,3}$/.test(text)
     && LIST_MARKER_AFTER.test(source.slice(start + text.length))
     && LIST_MARKER_BEFORE.test(source.slice(0, start))) {

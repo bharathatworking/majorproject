@@ -111,6 +111,35 @@ describe('findMissingEntities', () => {
     expect(findMissingEntities([entity('next 21 years', 'date')], 'for 12 years')).toEqual(['next 21 years']);
   });
 
+  // Calibration (dev items): kept names and values worded differently
+  it('keeps a name by its capitalised words, a person by surname, an organization by acronym', () => {
+    expect(findMissingEntities([entity('coast of Queensland, Australia', 'place')], "It's near Queensland, Australia.")).toEqual([]);
+    expect(findMissingEntities([entity('Apurímac rivers', 'place')], 'The Apurímac River starts in Peru.')).toEqual([]);
+    expect(findMissingEntities([entity('Marie Curie')], 'Maria Skłodowska Curie was a physicist.')).toEqual([]);
+    expect(findMissingEntities([entity('World Health Organization', 'org')], 'WHO says there are 25 vaccines.')).toEqual([]);
+  });
+
+  it('still fails a dropped or replaced name, and "who" is not WHO', () => {
+    expect(findMissingEntities([entity('Cordillera Rumi Cruz', 'place')], 'a mountain range in Peru')).toEqual(['Cordillera Rumi Cruz']);
+    expect(findMissingEntities([entity('Professor Henri Becquerel')], 'for radioactivity work')).toEqual(['Professor Henri Becquerel']);
+    expect(findMissingEntities([entity('Albert Einstein')], "Isaac Newton's theory")).toEqual(['Albert Einstein']);
+    expect(findMissingEntities([entity('World Health Organization', 'org')], 'People who get vaccines stay well.'))
+      .toEqual(['World Health Organization']);
+  });
+
+  it('does not require the weekday of a full date', () => {
+    const original = 'The Great Fire of London occurred from Sunday 2 September to Wednesday 5 September 1666.';
+    expect(findMissingEntities(detectEntities(original), 'Great Fire of London happened from Sep 2 to Sep 5, 1666.')).toEqual([]);
+    expect(findMissingEntities([entity('on Monday', 'date')], 'Come on Tuesday.')).toEqual(['on Monday']);
+  });
+
+  it('does not require a unit conversion in brackets', () => {
+    const original = 'The reef stretches for over 2,300 kilometres (1,400 mi) along the coast of the state.';
+    const entities = detectEntities(original);
+    expect(entities.map(e => e.text)).not.toContain('1,400');
+    expect(findMissingEntities(entities, 'The reef is about 2,300 km long along the coast of the state.')).toEqual([]);
+  });
+
   it('never counts "an" as a number', () => {
     expect(findMissingEntities([entity('an', 'number')], 'Schedule a one-hour meeting.')).toEqual([]);
     expect(detectEntities('Schedule an hour-long meeting with Jose.').map(e => e.text)).not.toContain('an');

@@ -13,7 +13,12 @@
  *  - Entity matching is forgiving about form, not content: case, possessive
  *    's, punctuation and thousands separators are ignored.
  *  - Names (person, org, place) compare on their core tokens: a leading in /
- *    on / at / the is dropped ("The Hague" matches "Hague").
+ *    on / at / the is dropped ("The Hague" matches "Hague"). Failing that, a
+ *    name is kept when every capitalised word of it is in the output
+ *    (titles like Professor don't count), a person's surname is ("Marie
+ *    Curie" by "Maria Skłodowska Curie"), or its acronym is, in capitals
+ *    ("World Health Organization" by "WHO"). A name the output drops or
+ *    replaces ("Cordillera Rumi Cruz" → "a mountain range") still fails.
  *  - Numbers, dates and time zones compare by value (lib/quality/values.ts
  *    valueSignature): every number, number+unit, month, weekday and time
  *    zone of the entity must be in the output, and modifiers don't count.
@@ -50,17 +55,57 @@ export async function checkMeaning(
 
 // ─── Entities ─────────────────────────────────────────────────────────────────
 
-/** Lowercase word tokens joined by single spaces, padded for whole-word search. */
+/**
+ * Lowercase word tokens joined by single spaces, padded for whole-word search.
+ * Letters with diacritics are letters ("Apurímac", "Skłodowska").
+ */
 function normalize(text: string): string {
   const words = text
     .toLowerCase()
     .replace(/[‘’]/g, "'")
     .replace(/'s\b/g, '')
     .replace(/(\d),(?=\d)/g, '$1')
-    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
   return ` ${words} `;
 }
+
+/** Titles that are not part of a name ("Professor Henri Becquerel" → Henri, Becquerel). */
+const NAME_TITLES = new Set([
+  'professor', 'prof', 'dr', 'mr', 'mrs', 'ms', 'sir', 'lord', 'lady', 'saint', 'st', 'king', 'queen', 'president',
+]);
+
+/** The capitalised words of a name, without titles and possessive 's. */
+function nameWords(text: string): string[] {
+  return text
+    .replace(/[‘’]/g, "'")
+    .replace(/'s\b/g, '')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(w => /^\p{Lu}/u.test(w) && !NAME_TITLES.has(w.toLowerCase()));
+}
+
+/**
+ * A name (person, org, place) is kept when every capitalised word of it is a
+ * word of the output ("coast of Queensland, Australia" → Queensland,
+ * Australia), a person's surname is ("Marie Curie" by "Maria Skłodowska
+ * Curie"), or its acronym is, in capitals ("World Health Organization" by
+ * "WHO").
+ */
+function nameKept(entity: Entity, haystack: string, simplified: string): boolean {
+  const words = nameWords(entity.text);
+  if (words.length === 0) return false;
+  const has = (w: string) => haystack.includes(` ${w.toLowerCase()} `);
+  if (words.every(has)) return true;
+  if (entity.type === 'person' && words.length >= 2 && has(words[words.length - 1])) return true;
+  if (words.length >= 2) {
+    const acronym = words.map(w => w[0]).join('');
+    if (new RegExp(`(^|[^\\p{L}])${acronym}([^\\p{L}]|$)`, 'u').test(simplified)) return true;
+  }
+  return false;
+}
+
+/** Entity types that are names. */
+const NAME_TYPES: ReadonlySet<Entity['type']> = new Set<Entity['type']>(['person', 'org', 'place']);
 
 const LEADING_FILLER = new Set(['in', 'on', 'at', 'the']);
 
@@ -96,6 +141,7 @@ export function findMissingEntities(entities: readonly Entity[], simplified: str
       simplifiedValues ??= valueSignature(simplified);
       if (!values.hasValue || signatureKept(values, simplifiedValues)) continue;
     }
+    if (NAME_TYPES.has(entity.type) && nameKept(entity, haystack, simplified)) continue;
 
     if (!missing.includes(entity.text)) missing.push(entity.text);
   }

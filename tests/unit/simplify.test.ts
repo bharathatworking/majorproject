@@ -592,7 +592,7 @@ describe('runSimplification thesis meaning standard', () => {
   });
 
   it('logs each candidate with its text, failure kinds and NLI time split, and each node with its original', async () => {
-    const bad = 'Curie won a prize.';
+    const bad = 'She won a prize.';
     nodes = [CURIE];
     replies = { n0: [bad, GOOD_CURIE] };
     scores = { [bad]: 0.8 };

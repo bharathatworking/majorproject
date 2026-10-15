@@ -170,8 +170,16 @@ export function valueSignature(text: string): ValueSignature {
   return { tokens, hasValue };
 }
 
-/** True when every value token of `needle` is in `haystack`. */
+/**
+ * True when every value token of `needle` is in `haystack`. In a date with a
+ * number, the weekday is redundant ("Sunday 2 September 1666" is kept by
+ * "Sep 2, 1666"); alone it counts ("on Monday").
+ */
 export function signatureKept(needle: ValueSignature, haystack: ValueSignature): boolean {
-  for (const t of needle.tokens) if (!haystack.tokens.has(t)) return false;
+  const hasNumber = [...needle.tokens].some(t => /^\d/.test(t));
+  for (const t of needle.tokens) {
+    if (hasNumber && t.startsWith('day:')) continue;
+    if (!haystack.tokens.has(t)) return false;
+  }
   return true;
 }
