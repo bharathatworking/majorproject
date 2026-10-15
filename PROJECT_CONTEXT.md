@@ -14,7 +14,11 @@ Generated from commit `2edaf92` (2026-10-15). If the code and this file disagree
 - There is no backend, no database and no cloud API. The only network targets are Ollama and the captured page itself.
 - What the user gets: a readability dashboard (eight grade metrics), a streamed paragraph-by-paragraph rewrite with click-to-reveal of the original, reading presets, a dyslexia font, focus mode, a progress chart and a downloadable JSON run report.
 - The research angle (stages 6C and 7): checking that the rewrite keeps the meaning (embedding similarity plus entity preservation), scoring candidate outputs, and A/B-testing prompt variants through the "Extra quality (slower)" toggle.
-- UNSURE: this is an academic major project (inferred from the folder name `majorproject`).
+- **Academic context:** this is the author's final-year university major project.
+- **Thesis goal:** Clarity must beat Chrome's "Ask Gemini" (Gemini in Chrome) at simplification while preserving meaning, proven with a fair benchmark. The two targets:
+  - At least 87% of paragraphs pass the meaning check.
+  - At least 5% better overall than Ask Gemini.
+- **Gemini is never Clarity's engine.** Gemini (Ask Gemini, the Gemini API, Gemini Nano) appears only as a benchmark baseline in a separate offline eval folder, never inside the extension.
 
 ## 2. Tech stack
 
@@ -220,10 +224,22 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, score, run-log, timing, simplify.
 - **Known issues (not yet fixed):**
   - Progress records the *target grade setting* per session, not measured reading ability.
-  - Leftovers from the old Chrome built-in AI provider: the unused `_onProgress` parameter of `createBaseSession`, and the `'list'` and `'table'` entries in `STORED_TYPE`. Keep `'downloadable'` and `'downloading'` in `LLMAvailability`; a planned Chrome built-in AI provider will use them.
+  - Leftovers from the old Chrome built-in AI provider: the unused `_onProgress` parameter of `createBaseSession`, the `'list'` and `'table'` entries in `STORED_TYPE`, and the `'downloadable'` and `'downloading'` values in `LLMAvailability`. A built-in AI (Gemini Nano) provider is **cancelled** and will not be added.
   - Cancel doesn't abort the HTTP request: `simplifyChunk` doesn't pass the run's `AbortSignal` to `fetch`, so Ollama finishes generating the current node.
 - The README now states Chrome 138+, matching the manifest.
-- UNSURE: whether any feature beyond stage 7 is planned, apart from the Chrome built-in AI provider mentioned above.
+- **Planned work after stage 7, in this order:**
+  1. **Prompt 9: meaning engine at thesis standard.** SBERT cosine ≥ 0.87 (the current check uses `all-minilm` at 0.80), plus the entity check, plus NLI entailment via Transformers.js in a Web Worker, with the models bundled locally.
+  2. **Prompt 10: fine-tuned model.** A LoRA fine-tune named `clarity-simplify`, built in a `training/` folder on Colab from Qwen2.5-3B-Instruct and exported as GGUF for Ollama.
+  3. **Prompt 11:** integrate the fine-tuned model into the hybrid engine.
+  4. **Prompt 12:**
+     - Web URL input
+     - keyword highlighting
+     - adaptive "too hard / too easy" feedback
+     - a measured-grade chart
+     - accessibility
+  5. **Prompt 13: on-page overlay.** Simplified text is shown on the web page itself.
+  6. **Prompt 14:** final hardening, then v1.0.0.
+  7. **After that: an `eval/` benchmark.** It compares Clarity against Ask Gemini, the Gemini API, Gemini Nano and the base model, using SARI, BERTScore, NLI, FKGL and speed.
 
 ## 9. Conventions
 
