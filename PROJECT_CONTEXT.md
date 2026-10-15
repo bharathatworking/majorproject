@@ -310,6 +310,10 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
     - Decide whether dropped names, figures or dates make a paragraph unfaithful (today's entity rule says yes).
     - Possibly add faithful real outputs (only 5–6 per half), then rerun with `-- --reviewed-only`.
   - `SIM_MIN` (today `SIMILARITY_THRESHOLD = 0.87`), `ENTAILMENT_MIN` and `NLI_PARAGRAPH_RULE` stay unchanged until then.
+- **Failure breakdown, "example user test plan" (2026-10-15):**
+  - **Before** (Chrome report, old split into 10 nodes, old checker): passed 1/10. Failures: similarity 4, entities 5, unsupported 5, contradiction 0, of 9 failed. Most of the entity failures were junk entities.
+  - **After** (`scripts/replay-meaning.mjs`, new split into 38 nodes, new entity rules, same thresholds, fresh qwen2.5:3b outputs, CPU NLI): passed 15/26 (12 excluded as short or already simple). Failures: similarity 8, entities 1, unsupported 4, contradiction 1, of 11 failed.
+  - Similarity at the uncalibrated 0.87 is now the main cause.
 - **fp16 vs q8** (`npm run calibrate-nli -- --compare-fp16`, CPU): sentence decisions agree on 59/60 items (only `kit-f2` flips, contradiction 0.086 → 0.210) and paragraph decisions on 15/15. WebGPU ms per paragraph comes from `clarityNliExperiment()` in Chrome.
 - **Entity rules found on the dev half** (names by capitalised words, surname or acronym; diacritics; weekday redundancy; unit conversions) are fixes to wrongly reported drops, not thresholds. The test half was not used to design them.
 - **Calibration rules:**
