@@ -2,9 +2,9 @@
 
 > **Rule:** never reuse these paragraphs, or other paragraphs from the same article revisions, in the Ask Gemini benchmark test set (or any other test set). They tune `ENTAILMENT_MIN`, so testing on them would leak the calibration into the results.
 
-All 15 paragraphs were retrieved on 2026-10-15. Each is used verbatim as the "original" (the NLI premise source). The simplified sentences in `pairs.jsonl` come from `qwen2.5:3b` (see README.md) or from hand edits of those sentences.
+All 20 paragraphs were retrieved on 2026-10-15 (the last 5 for the paragraph-level set, `paragraph-items.jsonl`). Each is used verbatim as the "original" (the NLI premise source). The simplified sentences in `pairs.jsonl` come from `qwen2.5:3b` (see README.md) or from hand edits of those sentences.
 
-## Wikipedia (12 paragraphs, CC BY-SA 4.0)
+## Wikipedia (15 paragraphs, CC BY-SA 4.0)
 
 Text from Wikipedia, licensed under the [Creative Commons Attribution-ShareAlike 4.0 License](https://creativecommons.org/licenses/by-sa/4.0/). The authors are the contributors listed in each article's history at the revision given. Each paragraph is one paragraph of the article's lead section, unmodified. The derived simplified and edited sentences in `pairs.jsonl` are shared under the same licence.
 
@@ -22,8 +22,11 @@ Text from Wikipedia, licensed under the [Creative Commons Attribution-ShareAlike
 | `wiki-great-barrier-reef` | [Great Barrier Reef](https://en.wikipedia.org/w/index.php?title=Great_Barrier_Reef&oldid=1375964325) | 1375964325 | Geography / ecology |
 | `wiki-type-2-diabetes` | [Type 2 diabetes](https://en.wikipedia.org/w/index.php?title=Type_2_diabetes&oldid=1375527475) | 1375527475 | Health |
 | `wiki-compound-interest` | [Compound interest](https://en.wikipedia.org/w/index.php?title=Compound_interest&oldid=1377563152) | 1377563152 | Finance |
+| `wiki-great-fire-of-london` | [Great Fire of London](https://en.wikipedia.org/w/index.php?title=Great_Fire_of_London&oldid=1376270657) | 1376270657 | History (lead paragraph 1) |
+| `wiki-vaccine` | [Vaccine](https://en.wikipedia.org/w/index.php?title=Vaccine&oldid=1376748103) | 1376748103 | Health (lead paragraph 3) |
+| `wiki-mount-vesuvius` | [Mount Vesuvius](https://en.wikipedia.org/w/index.php?title=Mount_Vesuvius&oldid=1369586079) | 1369586079 | Geology / history (lead paragraph 2; the extract's "6×105" is the article's 6×10⁵ without the superscript) |
 
-## U.S. government (3 texts, public domain)
+## U.S. government (5 texts, public domain)
 
 Works of the U.S. federal government are in the public domain (17 U.S.C. § 105). These were chosen because they are instructions and lists, the kind of text users paste. Each is copied verbatim from the page, with one list item per line (`- ` marker). The kit list is the first 8 items of the page's list plus "Wrench or pliers" and "Cell phone with chargers and a backup battery", which appear later in the same list; the other items were left out to keep the paragraph short.
 
@@ -32,3 +35,5 @@ Works of the U.S. federal government are in the public domain (17 U.S.C. § 105)
 | `gov-ready-kit` | [Build A Kit](https://www.ready.gov/kit), "Basic Disaster Supplies Kit" | Ready.gov (DHS / FEMA) |
 | `gov-nws-lightning` | [Lightning Safety Tips](https://www.weather.gov/safety/lightning-tips), "What You Need to Know" and "Indoor Lightning Safety" | National Weather Service (NOAA) |
 | `gov-ready-fire-escape` | [Home Fires](https://www.ready.gov/home-fires), "Create and Practice a Fire Escape Plan" (intro, the first 4 tips and the 6th) | Ready.gov (DHS / FEMA) |
+| `gov-ready-floods` | [Floods](https://www.ready.gov/floods), the "If you are under a flood warning" list (its heading as the first line; the two sub-items of "Depending on the type of flooding" as two items, as the page's list renders them) | Ready.gov (DHS / FEMA) |
+| `gov-nws-heat-index` | [Heat Index](https://www.weather.gov/safety/heat-index), the two Heat Index paragraphs | National Weather Service (NOAA) |

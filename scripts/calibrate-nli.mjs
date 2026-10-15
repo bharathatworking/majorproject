@@ -33,15 +33,12 @@
  *    those in Chrome).
  */
 
-import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
+import { createAppLoader, embed, loadModel, readJsonl as readJsonlAt, ROOT } from './lib/nli-node.mjs';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA_DIR = join(ROOT, 'eval', 'nli-calibration');
-const OLLAMA = 'http://localhost:11434';
 const EMBED_MODEL = 'all-minilm';
 const MAX_TOKENS = 512;
 const THRESHOLDS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7];
@@ -55,89 +52,14 @@ const compareFp16 = args.has('--compare-fp16');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function readJsonl(name) {
-  const text = await readFile(join(DATA_DIR, name), 'utf8');
-  return text.split(/\r?\n/).filter(l => l.trim() !== '').map((l, i) => {
-    try {
-      return JSON.parse(l);
-    } catch (err) {
-      throw new Error(`${name} line ${i + 1}: ${err.message}`);
-    }
-  });
-}
+const readJsonl = name => readJsonlAt(join(DATA_DIR, name));
 
 const pct = x => (x === null ? '  n/a' : `${(x * 100).toFixed(1).padStart(5)}%`);
 const mean = xs => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 
-function softmax(row) {
-  const max = Math.max(...row);
-  const exps = row.map(x => Math.exp(x - max));
-  const sum = exps.reduce((a, b) => a + b, 0);
-  return exps.map(e => e / sum);
-}
-
-/** all-minilm vectors from Ollama, or null when it doesn't answer. */
-async function embed(texts) {
-  try {
-    const res = await fetch(`${OLLAMA}/api/embed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: EMBED_MODEL, input: texts, keep_alive: '10m' }),
-    });
-    if (!res.ok) return null;
-    return (await res.json()).embeddings;
-  } catch {
-    return null;
-  }
-}
-
-// ─── Model ────────────────────────────────────────────────────────────────────
-
-async function loadModel(modelId, dtype = 'q8') {
-  const { AutoModelForSequenceClassification, AutoTokenizer, env } = await import('@huggingface/transformers');
-  env.allowRemoteModels = false;
-  env.allowLocalModels = true;
-  env.localModelPath = join(ROOT, 'public', 'models') + '/';
-  const tokenizer = await AutoTokenizer.from_pretrained(modelId);
-  const model = await AutoModelForSequenceClassification.from_pretrained(modelId, {
-    dtype,
-    device: 'cpu',
-    session_options: { intraOpNumThreads: 1, interOpNumThreads: 1 },
-  });
-  const id2label = model.config.id2label ?? {};
-  const find = label => Number(Object.entries(id2label).find(([, l]) => l.toLowerCase() === label)?.[0]);
-  const index = { entailment: find('entailment'), contradiction: find('contradiction') };
-  if (Number.isNaN(index.entailment) || Number.isNaN(index.contradiction)) throw new Error('model labels missing');
-
-  /** Probabilities and truncation flags for a batch of pairs (same code path as nli.worker.ts). */
-  async function score(pairs) {
-    const full = tokenizer(pairs.map(p => p.premise), {
-      text_pair: pairs.map(p => p.hypothesis), padding: false, truncation: false, return_tensor: false,
-    });
-    const inputs = tokenizer(pairs.map(p => p.premise), {
-      text_pair: pairs.map(p => p.hypothesis), padding: true, truncation: true, max_length: MAX_TOKENS,
-    });
-    const { logits } = await model(inputs);
-    const labels = logits.dims[1];
-    return pairs.map((_, i) => {
-      const p = softmax(Array.from({ length: labels }, (_, j) => Number(logits.data[i * labels + j])));
-      return {
-        entailment: p[index.entailment],
-        contradiction: p[index.contradiction],
-        truncated: full.input_ids[i].length > MAX_TOKENS,
-      };
-    });
-  }
-  return { score };
-}
-
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-const { createServer } = await import(pathToFileURL(join(ROOT, 'node_modules/vite/dist/node/index.js')).href);
-const vite = await createServer({
-  root: ROOT, configFile: false, logLevel: 'error', appType: 'custom',
-  server: { middlewareMode: true, hmr: false, ws: false },
-});
+const vite = await createAppLoader();
 
 try {
   const config = await vite.ssrLoadModule('/src/lib/quality/config.ts');

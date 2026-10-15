@@ -49,6 +49,10 @@ icons/                       icon16/32/48/128.png
 scripts/fetch-models.mjs     npm run fetch-models: NLI model (pinned, SHA-256 checked) + ORT wasm into public/
 scripts/calibrate-nli.mjs    npm run calibrate-nli: ENTAILMENT_MIN table on the calibration set (Node, same model and TS code)
 scripts/meaning-breakdown.mjs npm run meaning-breakdown -- <report.json>: why paragraphs failed, per run
+scripts/calibrate-meaning.mjs npm run calibrate-meaning: SIM_MIN / ENTAILMENT_MIN / paragraph rule on paragraph-items.jsonl (dev choice, test report)
+scripts/make-paragraph-items.mjs  fills missing qwen2.5:3b simplifications and hintedWords in paragraphs.jsonl (app prompt, Ollama)
+scripts/replay-meaning.mjs   node scripts/replay-meaning.mjs <pdf|txt>: a run without Chrome (app split, prompt, qwen2.5:3b, meaning check + retry) and its failure breakdown
+scripts/lib/nli-node.mjs     shared by the Node scripts: NLI model on onnxruntime-node, all-minilm via Ollama, Vite module loader, Wilson interval
 eval/nli-calibration/        paragraphs.jsonl (15 originals), pairs.jsonl (60 labelled sentences), SOURCES.md, README.md
 public/models/, public/ort/  git-ignored; copied by Vite into dist/models/ and dist/ort/
 src/
@@ -240,6 +244,7 @@ npm install
 npm run fetch-models   # once per clone: NLI model + ORT wasm into public/ (~114 MB, git-ignored)
 npm run calibrate-nli  # ENTAILMENT_MIN calibration table (needs fetch-models; Ollama all-minilm for ranking)
 npm run meaning-breakdown -- <report.json>  # failure kinds per run of a downloaded run report
+npm run calibrate-meaning  # paragraph-level threshold choice (dev) and test report; -- --reviewed-only, --entity-recall, --verbose
 npm run build          # production build -> dist/
 npm run dev            # crxjs watch / hot reload
 npm test               # vitest run (tests/unit/**/*.test.ts)
@@ -293,6 +298,20 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
   - **Truncated pairs (> 512 tokens):** 0/60 before, 0/180 after.
   - **Speed proxy** (Node, 1 thread, per simplified paragraph), before → after: onnxruntime-web wasm 1,017 → 1,527 ms; onnxruntime-node CPU 363 → 526 ms. The new strategy scores 3× the pairs (291 vs 97), each shorter, so on wasm it is about 1.5× slower; WebGPU is the speed lever.
   - **About the earlier 13,376 ms Chrome figure:** it most likely included the model load. The old code loaded the model lazily inside the first paragraph's NLI call, and the average was over 3 paragraphs. The new code loads in `prepareNli` before any check.
+- **Paragraph-level calibration (2026-10-15, `eval/nli-calibration/paragraph-items.jsonl`, `npm run calibrate-meaning`; provisional, NOT applied).**
+  - **The set:** 40 items over 20 originals (15 + 5 new: Great Fire of London, Vaccine, Mount Vesuvius, Ready.gov floods, NWS Heat Index). Each original has 1 real `qwen2.5:3b` output plus 1 copy with one injected error (4 each: number, negation, name, dropped fact, added claim). The halves are dev and test, by paragraph.
+  - **Labels:** proposed by Claude and not yet reviewed. 11 of the 20 real outputs are proposed faithful.
+  - **Results:**
+    - **Today's rule** (SIM 0.87, ENT 0.50, rule A, every entity): false-fail 66.7% dev / 80.0% test, catch 100% / 100%.
+    - **Keeping "every entity kept":** no setting meets false-fail ≤ 10% and catch ≥ 90% on dev. The best is SIM 0.60, ENT 0.70, rule A, with 50% dev false-fail; all 3 of its failures are real omissions of names or figures.
+    - **With a minimum entity recall** (`--entity-recall`, report only): SIM 0.66, ENT 0.80, rule B, recall ≥ 0.8 qualifies on dev (0/6, 92.9%). On test it gives 80% false-fail (4/5) and 93.3% catch. **It doesn't generalise.** The test failures are NLI false contradictions or unsupported verdicts on short referring sentences ("Anatocism is the same.", "That's called inflation.") and a dropped full date.
+  - **Decision needed from the author:**
+    - Review the labels.
+    - Decide whether dropped names, figures or dates make a paragraph unfaithful (today's entity rule says yes).
+    - Possibly add faithful real outputs (only 5–6 per half), then rerun with `-- --reviewed-only`.
+  - `SIM_MIN` (today `SIMILARITY_THRESHOLD = 0.87`), `ENTAILMENT_MIN` and `NLI_PARAGRAPH_RULE` stay unchanged until then.
+- **fp16 vs q8** (`npm run calibrate-nli -- --compare-fp16`, CPU): sentence decisions agree on 59/60 items (only `kit-f2` flips, contradiction 0.086 → 0.210) and paragraph decisions on 15/15. WebGPU ms per paragraph comes from `clarityNliExperiment()` in Chrome.
+- **Entity rules found on the dev half** (names by capitalised words, surname or acronym; diacritics; weekday redundancy; unit conversions) are fixes to wrongly reported drops, not thresholds. The test half was not used to design them.
 - **Calibration rules:**
   - `ENTAILMENT_MIN` is set only from `npm run calibrate-nli` and is then frozen for the benchmark.
   - The calibration paragraphs are never reused in the Ask Gemini benchmark test set or any other test set.
