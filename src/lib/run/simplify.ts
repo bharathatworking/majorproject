@@ -30,8 +30,11 @@
  * Semantic preservation (stage 6C, thesis standard, lib/quality/meaning.ts):
  * each finished node that passes shouldCheckNode is assessed with
  * assessMeaning: SBERT cosine ≥ 0.87, every entity kept, and no simplified
- * sentence contradicted or unsupported by the original (NLI, lib/quality/
- * nli.ts, in a Web Worker). A failing node is retried once with a retry
+ * sentence contradicted or unsupported by its premises from the original
+ * (NLI, lib/quality/nli.ts, in a Web Worker on WebGPU or wasm; premises are
+ * original sentences and 2-sentence windows ranked by all-minilm, see
+ * lib/quality/premises.ts). Embeddings are memoized per node, so the
+ * original's premise vectors are computed once across retries and variants. A failing node is retried once with a retry
  * instruction naming the specific reasons, and the better version is kept;
  * its assessment (similarity, entityRecall, minEntailment, maxContradiction,
  * nliChecked, passed, reasons) is stored on the result. The check never fails
@@ -61,6 +64,13 @@
  *     short texts (no 6C check) always get one call. Extra-quality results
  *     are cached under their own key.
  *
+ * Quality mode (lib/quality/mode.ts, sync `qualityMode`): Full is the
+ * above; Lite skips NLI (results nliChecked: false, lite: true, so they stay
+ * out of the thesis pass rate), keeps the one 6C retry and ignores "Extra
+ * quality". Auto decides from the stored NLI speed benchmark, loading the
+ * model and benchmarking only when that is missing or stale. The chosen mode
+ * and why are logged and recorded in the run log.
+ *
  * Cache: only passing versions are cached, with their assessment. A cached
  * verdict that was not fully checked (NLI or embedding model missing at the
  * time) counts as a miss once both checks are available, so coverage recovers.
@@ -81,7 +91,8 @@ import { resolveProfile } from '../profile/resolver';
 import { buildPrompt, hintedWords } from '../prompt-builder/builder';
 import { EXTRA_VARIANTS, stripExampleLabel } from '../prompt-builder/variants';
 import { segmentHtml, simplifiableNodes } from '../segmentation/segmenter';
-import { getExtraQuality, getLlmModel, getUserProfile } from '../storage/settings';
+import { getExtraQuality, getLlmModel, getQualityMode, getUserProfile } from '../storage/settings';
+import { extensionVersion, getNliBench, getNliDevice } from '../storage/nli-bench';
 import { getCommonWordSet } from '../metrics/word-set';
 import { computeReadabilityReport } from '../metrics/engine';
 import { findDifficultWords } from '../metrics/difficult-words';
@@ -96,15 +107,20 @@ import {
 } from '../quality/meaning';
 import { pickBestCandidate, scoreCandidate, type ScoredCandidate } from '../quality/score';
 import {
+  chooseQualityMode, evidenceOf, hasWebGpuAdapter, isBenchStale, type BenchContext, type QualityDecision,
+} from '../quality/mode';
+import { PREMISE_STRATEGY } from '../quality/premises';
+import {
   CONTRADICTION_MAX, ENTAILMENT_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
-  NLI_MODEL_ID, NLI_SLOW_MS, QUALITY_THRESHOLD, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN, WEIGHTS,
+  NLI_CONTRADICTION_AGG, NLI_MODEL_ID, NLI_SLOW_MS, QUALITY_THRESHOLD, SIMILARITY_THRESHOLD,
+  THESIS_COVERAGE_MIN, WEIGHTS,
 } from '../quality/config';
 import { isFullyChecked, meaningStatusOf, summarizeMeaning } from '../quality/similarity';
 import { formatSeconds, summarizeRun, type NodeTiming } from './timing';
 import type {
   CachedResult, CandidateLog, CandidateScores, ClarityDocument, ContentNode, EntailmentCheck,
-  MeaningAssessment, MeaningStatus, NodeMeaningLog, NodeRunLog, NodeSource, PromptVariantId,
-  RunLog, RunMode, StoredMeaning, StoredResult,
+  MeaningAssessment, MeaningStatus, NliBenchRecord, NodeMeaningLog, NodeRunLog, NodeSource,
+  PromptVariantId, QualityModeSetting, RunLog, RunMode, StoredMeaning, StoredResult,
 } from '../../types';
 
 /** The NLI module, loaded on first use (keeps it and its worker out of other chunks). */
@@ -171,10 +187,15 @@ function roundMeaning(m: StoredMeaning): StoredMeaning {
   };
 }
 
+/** Stored meaning of a version; Lite-mode verdicts are marked `lite`. */
+function storedMeaningOf(a: MeaningAssessment, lite: boolean): StoredMeaning {
+  return { ...toStoredMeaning(a), ...(lite && { lite: true }) };
+}
+
 /** Run-log meaning of a model-produced kept version. */
-function meaningLog(a: MeaningAssessment): NodeMeaningLog {
+function meaningLog(a: MeaningAssessment, lite: boolean): NodeMeaningLog {
   return {
-    ...roundMeaning(toStoredMeaning(a)),
+    ...roundMeaning(storedMeaningOf(a, lite)),
     exemptedSentences: a.exemptedSentences,
     exemptionRate: round4OrNull(a.exemptionRate),
     nliMs: a.nliMs === null ? null : Math.round(a.nliMs),
@@ -276,9 +297,9 @@ export async function runSimplification(
   }
   if (signal.aborted) return;
 
-  // 2. Profile + word set + model + quality mode (parallel fetch)
-  const [profile, wordSet, model, extraQuality] = await Promise.all([
-    getUserProfile(), getCommonWordSet(), getLlmModel(), getExtraQuality(),
+  // 2. Profile + word set + model + "Extra quality" + quality mode (parallel fetch)
+  const [profile, wordSet, model, extraQualitySetting, qualitySetting] = await Promise.all([
+    getUserProfile(), getCommonWordSet(), getLlmModel(), getExtraQuality(), getQualityMode(),
   ]);
   if (signal.aborted) return;
 
@@ -350,6 +371,14 @@ export async function runSimplification(
   let embedAvailable = true;
   let nliAvailable = true;
   let nliModule: NliModule | null = null;
+  /** Loads the NLI module and model once per run (see ensureNli). */
+  let nliReady: Promise<NliModule | null> | null = null;
+  /** This run's NLI benchmark (backend and speed); null until the model loaded. */
+  let nliBench: NliBenchRecord | null = null;
+  let benchContext: Promise<BenchContext> | null = null;
+  // Set once the quality mode is decided, before the first node
+  let lite = false;
+  let extraQuality = extraQualitySetting;
 
   // Timing and run log: recorded per node, summarized after the loop
   const timings: NodeTiming[] = [];
@@ -357,6 +386,8 @@ export async function runSimplification(
   let firstResultMs: number | null = null;
   // NLI time of every assessed version, and the kept versions' sentence counts
   const nliTimes: number[] = [];
+  let nliPairs = 0;
+  let truncatedPairs = 0;
   let keptNliSentences = 0;
   let keptExempted = 0;
   // Model calls made for the current node (reset per node; read on errors too)
@@ -419,17 +450,44 @@ export async function runSimplification(
     return stripThinkingArtifacts(fullText);
   }
 
+  /**
+   * all-minilm vectors of `texts`, embedding only those not in this node's
+   * `memo`, in one request. A 404 turns the embedding model off for the run
+   * (one notice) and is rethrown, like every other failure.
+   */
+  async function embedWith(memo: Map<string, number[]>, texts: string[]): Promise<number[][]> {
+    const missing = [...new Set(texts.filter(t => !memo.has(t)))];
+    if (missing.length > 0) {
+      try {
+        const vectors = await llm.embed(missing);
+        if (vectors.length !== missing.length) {
+          throw new Error(`Embedding returned ${vectors.length} vectors for ${missing.length} texts`);
+        }
+        missing.forEach((t, i) => memo.set(t, vectors[i]));
+      } catch (err) {
+        if (err instanceof OllamaHttpError && err.status === 404 && embedAvailable) {
+          embedAvailable = false;
+          console.log(`[Clarity] Embedding model ${EMBED_MODEL} not installed; similarity check skipped`);
+          if (!signal.aborted) callbacks.onNotice(EMBED_MISSING_NOTICE);
+        }
+        throw err;
+      }
+    }
+    return texts.map(t => memo.get(t) as number[]);
+  }
+
   /** SBERT cosine of one version; null when unavailable (never throws). */
-  async function similarityOf(nodeId: string, original: string, plain: string): Promise<number | null> {
+  async function similarityOf(
+    nodeId: string,
+    original: string,
+    plain: string,
+    memo: Map<string, number[]>,
+  ): Promise<number | null> {
     if (!embedAvailable) return null;
     try {
-      return (await checkMeaning(original, plain, texts => llm.embed(texts))).similarity;
+      return (await checkMeaning(original, plain, texts => embedWith(memo, texts))).similarity;
     } catch (err) {
-      if (err instanceof OllamaHttpError && err.status === 404) {
-        embedAvailable = false;
-        console.log(`[Clarity] Embedding model ${EMBED_MODEL} not installed; similarity check skipped`);
-        if (!signal.aborted) callbacks.onNotice(EMBED_MISSING_NOTICE);
-      } else {
+      if (!(err instanceof OllamaHttpError && err.status === 404)) {
         console.warn('[Clarity] Similarity check failed for node', nodeId, err);
       }
       return null;
@@ -444,42 +502,100 @@ export async function runSimplification(
     if (!signal.aborted) callbacks.onNotice(NLI_MISSING_NOTICE);
   }
 
-  /** Sentence-level NLI of one version; null when unavailable (never throws). */
+  /** Version, requested NLI device and the page's WebGPU adapter state (once per run). */
+  function getBenchContext(): Promise<BenchContext> {
+    benchContext ??= (async () => ({
+      version: extensionVersion(),
+      webgpuAdapter: await hasWebGpuAdapter(),
+      device: await getNliDevice().catch(() => 'auto' as const),
+    }))();
+    return benchContext;
+  }
+
+  /**
+   * Loads the NLI module and model once per run and records the benchmark
+   * (backend, speed). Null when NLI is unavailable (turned off, one notice).
+   */
+  function ensureNli(): Promise<NliModule | null> {
+    nliReady ??= (async () => {
+      let mod: NliModule;
+      try {
+        mod = nliModule ??= await import('../quality/nli');
+      } catch (err) {
+        disableNli(err);
+        return null;
+      }
+      try {
+        nliBench = await mod.prepareNli(mod.getNliClient(), await getBenchContext());
+      } catch (err) {
+        if (err instanceof mod.NliUnavailableError) {
+          disableNli(err);
+          return null;
+        }
+        // The model loaded but the benchmark failed: NLI still runs
+        console.warn('[Clarity] NLI benchmark failed', err);
+      }
+      return mod;
+    })();
+    return nliReady;
+  }
+
+  /**
+   * The mode this run uses. Auto decides from the stored benchmark when it
+   * matches this setup, else loads the model and benchmarks it first.
+   */
+  async function resolveQualityMode(setting: QualityModeSetting): Promise<QualityDecision> {
+    if (setting !== 'auto') return chooseQualityMode(setting, null);
+    const ctx = await getBenchContext();
+    const stored = await getNliBench().catch(() => null);
+    if (stored && !isBenchStale(stored, ctx)) return chooseQualityMode('auto', evidenceOf(stored));
+    await ensureNli();
+    return chooseQualityMode('auto', nliBench ? evidenceOf(nliBench) : null);
+  }
+
+  /** Sentence-level NLI of one version; null when skipped or unavailable (never throws). */
   async function entailmentOf(
     nodeId: string,
     original: string,
     simplified: string,
     hinted: readonly string[],
+    memo: Map<string, number[]>,
   ): Promise<EntailmentCheck | null> {
-    if (!nliAvailable || signal.aborted) return null;
+    if (lite || !nliAvailable || signal.aborted) return null;
+    const mod = await ensureNli();
+    if (!mod || !nliAvailable || signal.aborted) return null;
     try {
-      nliModule ??= await import('../quality/nli');
-    } catch (err) {
-      disableNli(err);
-      return null;
-    }
-    try {
-      const result = await nliModule.checkEntailment(
-        original, simplified, hinted, nliModule.getNliClient(), { label: nodeId },
-      );
+      const result = await mod.checkEntailment(original, simplified, hinted, mod.getNliClient(), {
+        label: nodeId,
+        ...(embedAvailable && { embed: (texts: string[]) => embedWith(memo, texts) }),
+      });
       nliTimes.push(result.ms);
+      nliPairs += result.pairs;
+      truncatedPairs += result.truncatedPairs;
       console.log(
-        `[Clarity] NLI ${nodeId}: ${result.sentences} sentences ` +
-        `(${result.cachedPairs} cached, ${result.exemptedSentences.length} exempt) ${Math.round(result.ms)} ms`,
+        `[Clarity] NLI ${nodeId}: ${result.sentences} sentences, ${result.pairs} pairs ` +
+        `(${result.ranking} premises, ${result.cachedPairs} cached, ${result.truncatedPairs} truncated, ` +
+        `${result.exemptedSentences.length} exempt) ${Math.round(result.ms)} ms ` +
+        `(rank ${Math.round(result.rankMs)}, score ${Math.round(result.scoreMs)})`,
       );
       return result;
     } catch (err) {
-      if (err instanceof nliModule.NliUnavailableError) disableNli(err);
+      if (err instanceof mod.NliUnavailableError) disableNli(err);
       else console.warn('[Clarity] NLI check failed for node', nodeId, err);
       return null;
     }
   }
 
   /** Thesis meaning assessment of one version of a checked node. */
-  function assess(node: ContentNode, text: string, hinted: readonly string[]): Promise<MeaningAssessment> {
+  function assess(
+    node: ContentNode,
+    text: string,
+    hinted: readonly string[],
+    memo: Map<string, number[]>,
+  ): Promise<MeaningAssessment> {
     return assessMeaning(node.text, text, node.entities ?? [], hinted, {
-      similarity: (original, plain) => similarityOf(node.id, original, plain),
-      entail: (original, simplified, words) => entailmentOf(node.id, original, simplified, words),
+      similarity: (original, plain) => similarityOf(node.id, original, plain, memo),
+      entail: (original, simplified, words) => entailmentOf(node.id, original, simplified, words, memo),
     });
   }
 
@@ -498,6 +614,8 @@ export async function runSimplification(
     const difficultWords = doc.report ? findDifficultWords(node.text, entities, wordSet) : [];
     // The words the prompt names; the NLI glossary exemption uses the same list
     const hinted = hintedWords(spec, difficultWords);
+    // Embeddings of this node's texts (original, its premises, every version)
+    const vectors = new Map<string, number[]>();
 
     /** User prompt for a variant; falls back to the bare text without a report. */
     const promptFor = (variant: PromptVariantId): string =>
@@ -523,7 +641,7 @@ export async function runSimplification(
       );
       if (raw === null) return null;
       const text = variant === 'example-guided' ? stripExampleLabel(raw) : raw;
-      const meaning = checked ? await assess(node, text, hinted) : null;
+      const meaning = checked ? await assess(node, text, hinted, vectors) : null;
       if (signal.aborted) return null;
       const scores = scoreCandidate({ original: node.text, simplified: text, spec, wordSet, meaning });
       return {
@@ -593,12 +711,21 @@ export async function runSimplification(
     if (mode === 'all') return null;  // "Re-simplify all" asks for new text
     try {
       const cached = await getCached(key);
-      if (cached?.meaning && !isFullyChecked(cached.meaning) && embedAvailable && nliAvailable) return null;
+      if (cached?.meaning && !isFullyChecked(cached.meaning) && embedAvailable && nliAvailable && !lite) return null;
       return cached;
     } catch (err) {
       console.warn('[Clarity] Cache read failed', err);
       return null;
     }
+  }
+
+  // Quality mode: decided once, before the first node
+  const decision = await resolveQualityMode(qualitySetting);
+  lite = decision.mode === 'lite';
+  console.log(`[Clarity] Quality mode ${decision.mode} (${decision.reason})`);
+  if (lite && extraQuality) {
+    extraQuality = false;
+    console.log('[Clarity] Extra quality is off in Lite mode (no best-of-N)');
   }
 
   for (const node of rotateFrom(simplifiable, startIndex)) {
@@ -644,12 +771,12 @@ export async function runSimplification(
         if (generated === null) break;
         const { chosen } = generated;
         fullText = chosen.text;
-        stored = chosen.meaning ? toStoredMeaning(chosen.meaning) : null;
+        stored = chosen.meaning ? storedMeaningOf(chosen.meaning, lite) : null;
         source = 'model';
         details = {
           variantUsed: chosen.variant,
           candidates: generated.candidates,
-          ...(chosen.meaning && { meaning: meaningLog(chosen.meaning) }),
+          ...(chosen.meaning && { meaning: meaningLog(chosen.meaning, lite) }),
         };
         if (chosen.meaning) {
           keptNliSentences += chosen.meaning.nliSentences;
@@ -689,21 +816,27 @@ export async function runSimplification(
   llm.destroy();
 
   const summary = summarizeRun(timings, performance.now() - runStart);
+  // Assigned inside ensureNli, which TypeScript can't see from here
+  const bench = nliBench as NliBenchRecord | null;
   const firstResult = firstResultMs === null ? 'n/a' : formatSeconds(firstResultMs);
   const meaning = {
     ...summarizeMeaning(nodeLogs.map(n => n.meaningStatus)),
     avgNliMs: nliTimes.length > 0 ? nliTimes.reduce((a, b) => a + b, 0) / nliTimes.length : null,
     exemptedSentences: keptExempted,
     exemptionRate: keptNliSentences > 0 ? keptExempted / keptNliSentences : null,
+    nliPairs,
+    truncatedPairs,
   };
   const pct = (x: number | null) => (x === null ? 'n/a' : `${Math.round(x * 100)}%`);
   console.log(
     `[Clarity] Run${signal.aborted ? ' (cancelled)' : ''}: ${summary.line}; ` +
     `first result after ${firstResult}; model ${model}` +
-    `${extraQuality ? '; extra quality' : ''}; ` +
+    `; quality ${decision.mode}${extraQuality ? ', extra quality' : ''}; ` +
     `meaning passed ${pct(meaning.passRate)} (${meaning.passed}/${meaning.passed + meaning.failed}), ` +
     `coverage ${pct(meaning.coverage)}; ` +
-    `NLI avg ${meaning.avgNliMs === null ? 'n/a' : `${Math.round(meaning.avgNliMs)} ms`} per paragraph`,
+    `NLI avg ${meaning.avgNliMs === null ? 'n/a' : `${Math.round(meaning.avgNliMs)} ms`} per paragraph` +
+    (bench ? ` (backend ${bench.backend}${bench.adapterVendor ? ` ${bench.adapterVendor}` : ''})` : '') +
+    `, truncated pairs ${truncatedPairs}/${nliPairs}`,
   );
   if (meaning.coverage !== null && !meaning.thesisGrade) {
     console.warn(
@@ -724,7 +857,17 @@ export async function runSimplification(
     cancelled: signal.aborted,
     mode,
     model,
+    // The effective value: Lite turns best-of-N off whatever the toggle says
     extraQuality,
+    qualitySetting,
+    qualityMode: decision.mode,
+    qualityModeReason: decision.reason,
+    nli: bench && {
+      backend: bench.backend,
+      adapterVendor: bench.adapterVendor,
+      benchMs: Math.round(bench.ms),
+      predictedParagraphMs: Math.round(bench.predictedParagraphMs),
+    },
     targetGrade: spec.targetGrade,
     depthTier: spec.depthTier,
     qualityThreshold: QUALITY_THRESHOLD,
@@ -735,6 +878,8 @@ export async function runSimplification(
       contradictionMax: CONTRADICTION_MAX,
       glossaryExemptionMaxRate: GLOSSARY_EXEMPTION_MAX_RATE,
       nliModel: NLI_MODEL_ID,
+      premiseStrategy: PREMISE_STRATEGY,
+      contradictionAggregation: NLI_CONTRADICTION_AGG,
     },
     summary: {
       nodes: summary.nodes,

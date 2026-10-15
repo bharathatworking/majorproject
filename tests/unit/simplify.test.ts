@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
-import type { ClarityDocument, ContentNode, EntailmentCheck, StoredResult } from '../../src/types';
+import type { ClarityDocument, ContentNode, EntailmentCheck, NliBenchRecord, StoredResult } from '../../src/types';
 import { installChromeMock, type ChromeMock } from '../mocks/chrome';
 import { makeDocInput, makeEntailment, makeReport } from '../mocks/fixtures';
 
@@ -40,11 +40,21 @@ vi.mock('../../src/lib/segmentation/segmenter', () => ({
  */
 let nliMode: 'ok' | 'unavailable' | 'error';
 let nliResults: Record<string, EntailmentCheck>;
+/** What the mocked prepareNli (model load + benchmark) returns; default a fast WebGPU setup. */
+let nliBenchResult: NliBenchRecord;
+const FAST_WEBGPU: NliBenchRecord = {
+  backend: 'webgpu', adapterVendor: 'nvidia', ms: 40, predictedParagraphMs: 90,
+  version: 'dev', webgpuAdapter: false, device: 'auto', at: 1,
+};
 vi.mock('../../src/lib/quality/nli', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/lib/quality/nli')>();
   return {
     ...actual,
     getNliClient: vi.fn(() => ({})),
+    prepareNli: vi.fn(async () => {
+      if (nliMode === 'unavailable') throw new actual.NliUnavailableError('model files missing');
+      return nliBenchResult;
+    }),
     checkEntailment: vi.fn(async (_original: string, simplified: string) => {
       if (nliMode === 'unavailable') throw new actual.NliUnavailableError('model files missing');
       if (nliMode === 'error') throw new Error('NLI scoring timed out');
@@ -63,9 +73,12 @@ const { DEFAULT_PROFILE } = await import('../../src/lib/storage/settings');
 const { getDocument, upsertDocument, saveDocument } = await import('../../src/lib/storage/documents');
 const { OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
 const { MEANING_RETRY_INSTRUCTION, driftReason, unsupportedReason } = await import('../../src/lib/quality/meaning');
-const { MAX_MODEL_CALLS_PER_NODE, QUALITY_THRESHOLD } = await import('../../src/lib/quality/config');
+const {
+  ENTAILMENT_MIN, MAX_MODEL_CALLS_PER_NODE, NLI_CONTRADICTION_AGG, QUALITY_THRESHOLD,
+} = await import('../../src/lib/quality/config');
 const nli = await import('../../src/lib/quality/nli');
 const checkEntailmentMock = vi.mocked(nli.checkEntailment);
+const prepareNliMock = vi.mocked(nli.prepareNli);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -163,7 +176,9 @@ beforeEach(async () => {
   nodes = NODES;
   nliMode = 'ok';
   nliResults = {};
+  nliBenchResult = FAST_WEBGPU;
   checkEntailmentMock.mockClear();
+  prepareNliMock.mockClear();
 });
 
 afterEach(() => {
@@ -502,8 +517,9 @@ describe('runSimplification thesis meaning standard', () => {
 
     await runSimplification(doc, cb, 'all');
 
-    // Tried once, then off for the rest of the run
-    expect(checkEntailmentMock).toHaveBeenCalledTimes(1);
+    // Load tried once (Auto measures first), then off for the rest of the run
+    expect(prepareNliMock).toHaveBeenCalledTimes(1);
+    expect(checkEntailmentMock).not.toHaveBeenCalled();
     expect(cb.onNotice).toHaveBeenCalledTimes(1);
     expect(cb.onNotice).toHaveBeenCalledWith(NLI_MISSING_NOTICE);
     expect(cb.onBannerError).not.toHaveBeenCalled();
@@ -757,8 +773,9 @@ describe('runSimplification speed paths', () => {
     expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n0 \(skipped, meaning excluded\) \d+\.\d\d s$/));
     expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n1 \(model, meaning excluded\) /));
     expect(lines).toContainEqual(expect.stringMatching(
-      /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 1 skipped, 0 errors; .*model qwen2\.5:3b; meaning passed n\/a \(0\/0\), coverage n\/a; NLI avg n\/a per paragraph$/,
+      /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 1 skipped, 0 errors; .*model qwen2\.5:3b; quality full; meaning passed n\/a \(0\/0\), coverage n\/a; NLI avg n\/a per paragraph \(backend webgpu nvidia\), truncated pairs 0\/0$/,
     ));
+    expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Quality mode full \(auto: WebGPU, benchmark 40 ms/));
   });
 });
 
@@ -928,6 +945,120 @@ describe('runSimplification extra quality', () => {
   });
 });
 
+describe('runSimplification quality mode', () => {
+  const GOOD_CURIE = 'Marie Curie won the Nobel Prize in 1903.';
+  const DRIFT = 'Marie Curie liked science in 1903.';
+  const SLOW_WASM: NliBenchRecord = {
+    backend: 'wasm', adapterVendor: null, ms: 2000, predictedParagraphMs: 4500,
+    version: 'dev', webgpuAdapter: false, device: 'auto', at: 1,
+  };
+  const lastLog = async (docId: string) => (await getDocument(docId))?.runLogs?.at(-1);
+  const setMode = (qualityMode: string) => chrome.storage.sync.set({ qualityMode });
+
+  beforeEach(() => {
+    nodes = [CURIE];
+    scores = { [GOOD_CURIE]: 0.92, [DRIFT]: 0.5 };
+  });
+
+  it('Lite skips NLI entirely and marks the result lite, not fully checked', async () => {
+    await setMode('lite');
+    replies = { n0: [GOOD_CURIE] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(prepareNliMock).not.toHaveBeenCalled();
+    expect(checkEntailmentMock).not.toHaveBeenCalled();
+    expect((await getDocument(doc.id))?.results[0]).toMatchObject({
+      status: 'done', passed: true, nliChecked: false, lite: true, similarity: expect.closeTo(0.92),
+    });
+    const log = await lastLog(doc.id);
+    expect(log).toMatchObject({ qualitySetting: 'lite', qualityMode: 'lite', qualityModeReason: 'set to Lite', nli: null });
+    expect(log?.summary.meaning).toMatchObject({ notFullyChecked: 1, passRate: null });
+  });
+
+  it('Lite allows one retry and turns best-of-N off even with Extra quality on', async () => {
+    await setMode('lite');
+    await chrome.storage.sync.set({ extraQuality: true });
+    replies = { n0: [DRIFT, GOOD_CURIE] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const log = await lastLog(doc.id);
+    expect(log?.extraQuality).toBe(false);
+    expect(log?.nodes[0]).toMatchObject({ modelCalls: 2, variantUsed: 'standard' });
+    expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe(GOOD_CURIE);
+  });
+
+  it('Auto picks Lite when the benchmark is slow and there is no WebGPU', async () => {
+    nliBenchResult = SLOW_WASM;
+    replies = { n0: [GOOD_CURIE] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(prepareNliMock).toHaveBeenCalledTimes(1);
+    expect(checkEntailmentMock).not.toHaveBeenCalled();
+    const log = await lastLog(doc.id);
+    expect(log).toMatchObject({ qualitySetting: 'auto', qualityMode: 'lite' });
+    expect(log?.qualityModeReason).toMatch(/no WebGPU.*4500 ms per paragraph > 3000/);
+    expect((await getDocument(doc.id))?.results[0]).toMatchObject({ lite: true, nliChecked: false });
+  });
+
+  it('Auto picks Full on WebGPU and records the backend in the run log', async () => {
+    replies = { n0: [GOOD_CURIE] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(checkEntailmentMock).toHaveBeenCalledTimes(1);
+    const log = await lastLog(doc.id);
+    expect(log).toMatchObject({
+      qualityMode: 'full',
+      nli: { backend: 'webgpu', adapterVendor: 'nvidia', benchMs: 40, predictedParagraphMs: 90 },
+    });
+    expect((await getDocument(doc.id))?.results[0].lite).toBeUndefined();
+  });
+
+  it('Auto decides from a matching stored benchmark without loading the model', async () => {
+    await chrome.storage.local.set({ 'nli:bench': SLOW_WASM });
+    replies = { n0: [GOOD_CURIE] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(prepareNliMock).not.toHaveBeenCalled();
+    expect((await lastLog(doc.id))?.qualityMode).toBe('lite');
+  });
+
+  it('Auto measures again when the stored benchmark is from another version', async () => {
+    await chrome.storage.local.set({ 'nli:bench': { ...SLOW_WASM, version: '0.9.0' } });
+    replies = { n0: [GOOD_CURIE] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(prepareNliMock).toHaveBeenCalledTimes(1);
+    expect((await lastLog(doc.id))?.qualityMode).toBe('full');
+  });
+
+  it('embeds the original once per node and passes the embedder to NLI for premise ranking', async () => {
+    await setMode('full');
+    replies = { n0: [DRIFT, GOOD_CURIE] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const embedded = embedSpy.mock.calls.flatMap(c => c[0]);
+    expect(embedded.filter(t => t === CURIE.text)).toHaveLength(1);
+    expect(checkEntailmentMock).toHaveBeenCalledTimes(2);
+    const options = checkEntailmentMock.mock.calls[0][4];
+    expect(options).toMatchObject({ label: 'n0', embed: expect.any(Function) });
+  });
+});
+
 describe('runSimplification run log', () => {
   it('records every node with its source, time and the run settings', async () => {
     nodes = [EASY, NODES[1]];
@@ -977,8 +1108,9 @@ describe('runSimplification run log', () => {
     const doc = await storedDoc();
     await runSimplification(doc, callbacks(), 'all');
     expect((await getDocument(doc.id))?.runLogs?.[0].meaningThresholds).toEqual({
-      similarity: 0.87, entailmentMin: 0.5, contradictionMax: 0.2, glossaryExemptionMaxRate: 0.3,
+      similarity: 0.87, entailmentMin: ENTAILMENT_MIN, contradictionMax: 0.2, glossaryExemptionMaxRate: 0.3,
       nliModel: 'Xenova/nli-deberta-v3-xsmall',
+      premiseStrategy: 'summac-sentences+pairs/top3', contradictionAggregation: NLI_CONTRADICTION_AGG,
     });
   });
 

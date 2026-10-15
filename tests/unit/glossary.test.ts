@@ -22,6 +22,28 @@ describe('isGlossarySentence', () => {
     expect(isGlossarySentence(sentence, HINTED)).toBe(true);
   });
 
+  it.each([
+    'Inflation is a rise in prices over time.',
+    'Inflation is an increase in prices.',
+    'Inflation is the rise of prices.',
+    'Inflation is a kind of price change.',
+    'Inflation is when prices go up.',
+    'Inflation is how money loses value.',
+    'Inflation means prices go up.',
+    'Inflation refers to rising prices.',
+  ])('counts "is" as a definition only before a defining word: %s', (sentence) => {
+    expect(isGlossarySentence(sentence, ['inflation'])).toBe(true);
+  });
+
+  it.each([
+    'Inflation is rising.',
+    'Inflation is high this year.',
+    'Inflation is also a problem.',
+    'Inflation was a problem.',
+  ])('does not treat a plain statement as a definition: %s', (sentence) => {
+    expect(isGlossarySentence(sentence, ['inflation'])).toBe(false);
+  });
+
   it('does not exempt a definition of a word that was not hinted', () => {
     expect(isGlossarySentence('Respiration means how cells use food.', HINTED)).toBe(false);
   });
@@ -66,11 +88,19 @@ describe('stripParentheticalDefinitions', () => {
 describe('selectExemptions', () => {
   const plain = (n: number) => Array.from({ length: n }, (_, i) => `Plants grow fact ${i}.`);
 
-  it('caps exemptions at the max rate, rounded down', () => {
+  it('caps exemptions at the max rate, rounded down, at least 1 from 2 sentences, none for 1', () => {
     expect(GLOSSARY_EXEMPTION_MAX_RATE).toBe(0.3);
-    expect(maxExemptions(3)).toBe(0);
+    expect(maxExemptions(0)).toBe(0);
+    expect(maxExemptions(1)).toBe(0);
+    expect(maxExemptions(2)).toBe(1);
+    expect(maxExemptions(3)).toBe(1);
     expect(maxExemptions(4)).toBe(1);
+    expect(maxExemptions(7)).toBe(2);
     expect(maxExemptions(10)).toBe(3);
+  });
+
+  it('exempts a definition in a 2-sentence node', () => {
+    expect(selectExemptions(['Photosynthesis means how plants make food.', ...plain(1)], HINTED)).toEqual([0]);
   });
 
   it('exempts a definition sentence when the node is long enough', () => {
@@ -87,14 +117,14 @@ describe('selectExemptions', () => {
     expect(selectExemptions(sentences, HINTED)).toEqual([0]);
   });
 
-  it('exempts nothing in a short node', () => {
-    expect(selectExemptions(['Photosynthesis means food from light.', ...plain(2)], HINTED)).toEqual([]);
+  it('exempts nothing in a 1-sentence node', () => {
+    expect(selectExemptions(['Photosynthesis means food from light.'], HINTED)).toEqual([]);
   });
 
   it('allows at most one exempt sentence per hinted word', () => {
     const sentences = [
       'Photosynthesis means how plants make food.',
-      'Photosynthesis is also how plants grow.',
+      'Photosynthesis is how plants grow.',
       ...plain(5),
     ];
     expect(selectExemptions(sentences, HINTED)).toEqual([0]);

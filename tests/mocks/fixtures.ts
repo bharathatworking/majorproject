@@ -39,6 +39,11 @@ export function makeEntailment(overrides: Partial<EntailmentCheck> = {}): Entail
     exemptionRate: 0,
     sentences: 2,
     cachedPairs: 0,
+    pairs: 2,
+    truncatedPairs: 0,
+    ranking: 'all',
+    rankMs: 0,
+    scoreMs: 100,
     ms: 100,
     ...overrides,
   };

@@ -171,6 +171,14 @@ describe('meaningBadge', () => {
     expect(meaningBadge({ ...FULL_PASS, nliChecked: false })?.label).toBe('meaning ✓ 0.91 · no NLI');
   });
 
+  it('marks a Lite-mode result as Lite, with the reason in the title', () => {
+    const pass = meaningBadge({ ...FULL_PASS, nliChecked: false, lite: true });
+    expect(pass?.label).toBe('meaning ✓ 0.91 · Lite');
+    expect(pass?.title).toMatch(/Lite mode: sentence check \(NLI\) skipped/);
+    const fail = meaningBadge({ ...FULL_PASS, nliChecked: false, lite: true, passed: false, reasons: ['Drifted.'] });
+    expect(fail?.label).toBe('meaning ⚠ Drifted. · Lite');
+  });
+
   it('shows the first reason when it failed, and every reason in the title', () => {
     const badge = meaningBadge({
       ...FULL_PASS, passed: false, reasons: ['You dropped the number 1945.', 'The meaning drifted.'],

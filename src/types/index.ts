@@ -113,6 +113,8 @@ export interface StoredMeaning {
   passed?: boolean;
   /** Why it failed, most important first; empty when it passed. */
   reasons?: string[];
+  /** Checked in Lite quality mode (SBERT + entities only, NLI skipped on purpose). */
+  lite?: boolean;
 }
 
 /**
@@ -160,7 +162,56 @@ export interface EntailmentCheck {
   sentences: number;
   /** Pairs answered from the in-memory cache. */
   cachedPairs: number;
+  /** Premise/hypothesis pairs scored (after top-k pruning and dedup). */
+  pairs: number;
+  /** Pairs longer than the model's 512 tokens, scored truncated. */
+  truncatedPairs: number;
+  /** How premises were picked per sentence (lib/quality/premises.ts). */
+  ranking: PremiseRanking;
+  /** Time spent ranking premises (embedding call) and scoring pairs. */
+  rankMs: number;
+  scoreMs: number;
   ms: number;
+}
+
+/**
+ * 'embedding': top premises by all-minilm cosine; 'lexical': by word overlap
+ * (embedding model missing); 'all': no more premises than the top-k.
+ */
+export type PremiseRanking = 'embedding' | 'lexical' | 'all';
+
+// ─── Quality mode and NLI backend ────────────────────────────────────────────
+
+/** "Quality mode" setting (chrome.storage.sync `qualityMode`). */
+export type QualityModeSetting = 'auto' | 'full' | 'lite';
+
+/** The mode a run actually uses (lib/quality/mode.ts). */
+export type QualityMode = 'full' | 'lite';
+
+/** Where the NLI model runs. */
+export type NliBackendName = 'webgpu' | 'wasm';
+
+/** Requested NLI device: WebGPU first ('auto') or wasm only (debug override). */
+export type NliDevice = 'auto' | 'wasm';
+
+/**
+ * NLI speed benchmark (chrome.storage.local `nli:bench`), re-run when the
+ * extension version, the WebGPU adapter or the requested device changes.
+ */
+export interface NliBenchRecord {
+  backend: NliBackendName;
+  /** GPU adapter vendor (e.g. "nvidia"); null on wasm. */
+  adapterVendor: string | null;
+  /** ms for one batch of the 8 benchmark pairs (after a warm-up). */
+  ms: number;
+  /** Predicted NLI ms per paragraph (lib/quality/mode.ts predictParagraphMs). */
+  predictedParagraphMs: number;
+  /** Extension version the benchmark ran on. */
+  version: string;
+  /** The page saw a WebGPU adapter when the benchmark ran. */
+  webgpuAdapter: boolean;
+  device: NliDevice;
+  at: number;
 }
 
 /**
@@ -301,6 +352,9 @@ export interface RunMeaningSummary extends MeaningSummary {
   exemptedSentences: number;
   /** exemptedSentences / NLI-scored sentences of the kept versions; null when none. */
   exemptionRate: number | null;
+  /** NLI pairs scored and how many of them were truncated (absent in older logs). */
+  nliPairs?: number;
+  truncatedPairs?: number;
 }
 
 /** Everything one simplification run did, for the downloadable run report. */
@@ -312,6 +366,12 @@ export interface RunLog {
   mode: RunMode;
   model: string;
   extraQuality: boolean;
+  /** Quality mode setting and the mode used (absent in logs from before quality modes). */
+  qualitySetting?: QualityModeSetting;
+  qualityMode?: QualityMode;
+  qualityModeReason?: string;
+  /** NLI backend of this run; null when NLI never loaded. */
+  nli?: { backend: NliBackendName; adapterVendor: string | null; benchMs: number; predictedParagraphMs: number } | null;
   targetGrade: number;
   depthTier: SimplificationSpec['depthTier'];
   qualityThreshold: number;
@@ -323,6 +383,9 @@ export interface RunLog {
     contradictionMax: number;
     glossaryExemptionMaxRate: number;
     nliModel: string;
+    /** Premise strategy, e.g. 'summac-sentences+pairs/top3' (absent in older logs). */
+    premiseStrategy?: string;
+    contradictionAggregation?: 'max' | 'best-entailing';
   };
   summary: {
     nodes: number;

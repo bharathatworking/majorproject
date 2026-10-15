@@ -102,7 +102,8 @@ export interface MeaningBadge {
 }
 
 /**
- * "meaning ✓ 0.91", "meaning ✓ 0.91 · no NLI" or "meaning ⚠ <first reason>";
+ * "meaning ✓ 0.91", "meaning ✓ 0.91 · no NLI" (NLI fell back), "meaning ✓
+ * 0.91 · Lite" (Lite quality mode) or "meaning ⚠ <first reason>";
  * results checked before the thesis standard show their similarity only.
  * Null when the result was not checked.
  */
@@ -112,7 +113,9 @@ export function meaningBadge(m: StoredMeaning): MeaningBadge | null {
   if (m.entityRecall !== undefined) details.push(`entities kept ${Math.round(m.entityRecall * 100)}%`);
   if (m.minEntailment !== undefined) details.push(`lowest entailment ${m.minEntailment.toFixed(2)} (needs ${ENTAILMENT_MIN.toFixed(2)})`);
   if (m.maxContradiction !== undefined) details.push(`highest contradiction ${m.maxContradiction.toFixed(2)} (max ${CONTRADICTION_MAX.toFixed(2)})`);
-  if (m.passed !== undefined && m.nliChecked === false) details.push('sentence check (NLI) unavailable');
+  if (m.passed !== undefined && m.nliChecked === false) {
+    details.push(m.lite ? 'Lite mode: sentence check (NLI) skipped' : 'sentence check (NLI) unavailable');
+  }
 
   if (m.passed === undefined) {
     if (m.similarity === undefined) return null;
@@ -127,13 +130,13 @@ export function meaningBadge(m: StoredMeaning): MeaningBadge | null {
     const parts = ['meaning ✓'];
     if (m.similarity !== undefined) parts.push(m.similarity.toFixed(2));
     let label = parts.join(' ');
-    if (m.nliChecked === false) label += ' · no NLI';
+    if (m.nliChecked === false) label += m.lite ? ' · Lite' : ' · no NLI';
     return { label, title: `Meaning preserved: ${details.join(' · ')}`, warn: false };
   }
 
   const reasons = m.reasons ?? [];
   return {
-    label: `meaning ⚠ ${reasons[0] ?? 'not preserved'}`,
+    label: `meaning ⚠ ${reasons[0] ?? 'not preserved'}${m.lite ? ' · Lite' : ''}`,
     title: [...reasons, details.join(' · ')].filter(Boolean).join('\n'),
     warn: true,
   };

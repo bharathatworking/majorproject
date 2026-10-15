@@ -33,7 +33,7 @@ export const MIN_WORDS_FOR_CHECK = 8;
 /**
  * Glossary exemptions (lib/quality/glossary.ts): at most this share of a
  * node's simplified sentences may skip the entailment requirement, rounded
- * down, so nodes of 1–3 sentences get none.
+ * down but at least 1 for a node of 2+ sentences; a 1-sentence node gets none.
  */
 export const GLOSSARY_EXEMPTION_MAX_RATE = 0.3;
 
@@ -51,8 +51,25 @@ export const THESIS_COVERAGE_MIN = 0.9;
 /** Hugging Face id of the bundled cross-encoder; files live in public/models/<id>/. */
 export const NLI_MODEL_ID = 'Xenova/nli-deberta-v3-xsmall';
 
-/** Premise/hypothesis pairs per worker inference call. */
-export const NLI_BATCH_SIZE = 8;
+/**
+ * Most premise/hypothesis pairs per worker inference call. A node's pairs
+ * (NLI_TOP_PREMISES per simplified sentence) normally fit in one call; this
+ * is only a cap on padded batch memory.
+ */
+export const NLI_BATCH_SIZE = 64;
+
+/**
+ * Premises scored per simplified sentence: the most similar original
+ * sentences or 2-sentence windows (lib/quality/premises.ts).
+ */
+export const NLI_TOP_PREMISES = 3;
+
+/**
+ * How a sentence's contradiction is taken over its premises: 'max' (the
+ * highest over all scored premises) or 'best-entailing' (the contradiction
+ * of the premise that entails it best). Entailment is always the max.
+ */
+export const NLI_CONTRADICTION_AGG: 'max' | 'best-entailing' = 'max';
 
 /** Pair scores kept in memory (least recently used evicted). */
 export const NLI_CACHE_MAX = 500;
@@ -65,6 +82,17 @@ export const NLI_SCORE_TIMEOUT_MS = 30_000;
 
 /** Average NLI time per paragraph above which the run log warns (thesis budget). */
 export const NLI_SLOW_MS = 500;
+
+// ─── Quality mode (lib/quality/mode.ts) ──────────────────────────────────────
+
+/** Simplified sentences in a typical paragraph, for the benchmark prediction. */
+export const NLI_TYPICAL_SENTENCES = 6;
+
+/**
+ * Auto picks Lite when there is no WebGPU and the benchmark predicts more
+ * than this many ms of NLI per paragraph.
+ */
+export const AUTO_LITE_PARAGRAPH_MS = 3000;
 
 // ─── Candidate scoring (stage 7, lib/quality/score.ts) ───────────────────────
 

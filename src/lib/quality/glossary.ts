@@ -10,15 +10,20 @@
  * Design decisions (agreed rules):
  *  1. Only a sentence that defines one of THIS node's hinted words is exempt:
  *     it starts with the word (optionally after "a", "an" or "the", optionally
- *     quoted, optionally plural) followed by "means", "is", "is a type of" or
- *     "refers to". At most one exempt sentence per hinted word.
+ *     quoted, optionally plural) followed by "means" or "refers to", or by
+ *     "is" plus a defining word: "a", "an", "the", "a kind of", "when" or
+ *     "how" ("Inflation is a rise in prices."). A plain statement such as
+ *     "Inflation is rising." is not a definition. At most one exempt sentence
+ *     per hinted word.
  *  2. A parenthetical definition of a hinted word inside a normal sentence,
  *     "photosynthesis (how plants make food)", is removed before NLI; the rest
  *     of that sentence is still checked.
  *  3. Exempt sentences skip only the entailment requirement; nli.ts still
  *     fails them on contradiction (> CONTRADICTION_MAX).
  *  4. Exemptions are capped at GLOSSARY_EXEMPTION_MAX_RATE of the node's
- *     sentences, rounded down; sentences past the cap are checked normally.
+ *     sentences, rounded down but at least 1 for a node of 2+ sentences; a
+ *     1-sentence node gets none (a lone definition can't stand in for the
+ *     paragraph). Sentences past the cap are checked normally.
  *  - Pure (config is import-free), so the offline benchmark can score other
  *    systems' output (e.g. Gemini) with exactly the same rule.
  */
@@ -32,11 +37,15 @@ function escapeRegExp(word: string): string {
   return word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** "<article?> <quote?>word(s|es)?<quote?>,? (means|is|is a type of|refers to)\b" at the start. */
+/**
+ * "<article?> <quote?>word(s|es)?<quote?>,? (means | refers to |
+ * is (a|an|the|when|how))\b" at the start; "is a kind of" and "is a type of"
+ * are covered by "is a".
+ */
 function definitionPattern(word: string): RegExp {
   return new RegExp(
     `^\\s*(?:(?:a|an|the)\\s+)?["'“‘]?${escapeRegExp(word)}(?:s|es)?["'”’]?,?\\s+` +
-      `(?:means|is\\s+a\\s+type\\s+of|is|refers\\s+to)\\b`,
+      `(?:means|refers\\s+to|is\\s+(?:an?|the|when|how))\\b`,
     'i',
   );
 }
@@ -76,7 +85,8 @@ export function stripParentheticalDefinitions(sentence: string, hintedWords: rea
 
 /** Largest number of exempt sentences for a node of `sentenceCount` sentences (rule 4). */
 export function maxExemptions(sentenceCount: number): number {
-  return Math.floor(sentenceCount * GLOSSARY_EXEMPTION_MAX_RATE);
+  if (sentenceCount < 2) return 0;
+  return Math.max(1, Math.floor(sentenceCount * GLOSSARY_EXEMPTION_MAX_RATE));
 }
 
 /**

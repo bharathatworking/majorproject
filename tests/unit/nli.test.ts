@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  checkEntailment, createWorkerBackend, NliClient, NliUnavailableError, splitSentences,
-  type NliBackend, type NliPair, type NliProbs, type NliRequest, type NliResponse, type WorkerLike,
+  checkEntailment, createWorkerBackend, NLI_BENCH_PAIRS, NliClient, NliUnavailableError, prepareNli,
+  splitSentences, type BenchStore, type NliBackend, type NliPair, type NliProbs, type NliRequest,
+  type NliResponse, type WorkerLike,
 } from '../../src/lib/quality/nli';
-import { CONTRADICTION_MAX, ENTAILMENT_MIN } from '../../src/lib/quality/config';
+import { CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_TOP_PREMISES } from '../../src/lib/quality/config';
+import type { NliBenchRecord } from '../../src/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -113,13 +115,78 @@ describe('NliClient', () => {
 // checkEntailment — per-sentence verdicts
 // ---------------------------------------------------------------------------
 describe('checkEntailment', () => {
-  it('uses the original paragraph as premise and each sentence as hypothesis', async () => {
+  const S0 = 'The Treaty of Versailles was signed in 1919.';
+  const S1 = 'It ended the war.';
+
+  it('scores each sentence against the original sentences and their 2-sentence window, in one call', async () => {
     const { backend, batches } = fakeBackend();
-    await checkEntailment(ORIGINAL, 'It was signed in 1919. It ended the war.', [], new NliClient(backend));
+    const r = await checkEntailment(ORIGINAL, 'It was signed in 1919. It ended the war.', [], new NliClient(backend));
+    expect(batches).toHaveLength(1);
     expect(batches[0]).toEqual([
-      { premise: ORIGINAL, hypothesis: 'It was signed in 1919.' },
-      { premise: ORIGINAL, hypothesis: 'It ended the war.' },
+      { premise: S0, hypothesis: 'It was signed in 1919.' },
+      { premise: S1, hypothesis: 'It was signed in 1919.' },
+      { premise: `${S0} ${S1}`, hypothesis: 'It was signed in 1919.' },
+      { premise: S0, hypothesis: 'It ended the war.' },
+      { premise: S1, hypothesis: 'It ended the war.' },
+      { premise: `${S0} ${S1}`, hypothesis: 'It ended the war.' },
     ]);
+    expect(r).toMatchObject({ pairs: 6, ranking: 'all', truncatedPairs: 0 });
+  });
+
+  it('takes the best entailment and the highest contradiction over the premises', async () => {
+    const hyp = 'It was signed in 1919.';
+    const byPremise: Record<string, NliProbs> = {
+      [S0]: SUPPORTED,
+      [S1]: { entailment: 0.05, contradiction: 0.3, neutral: 0.65 },
+      [`${S0} ${S1}`]: NEUTRAL,
+    };
+    const backend: NliBackend = { score: async pairs => pairs.map(p => byPremise[p.premise]) };
+    const r = await checkEntailment(ORIGINAL, hyp, [], new NliClient(backend));
+    expect(r.minEntailment).toBeCloseTo(0.95);
+    expect(r.maxContradiction).toBeCloseTo(0.3);
+    expect(r.contradictedSentences).toEqual([hyp]);
+    expect(r.unsupportedSentences).toEqual([]);
+  });
+
+  const LONG = 'Alpha founded the city. Beta built a bridge. Gamma wrote a poem.';
+
+  it('prunes to the top premises by embedding similarity', async () => {
+    const { backend, batches } = fakeBackend();
+    // Premises: Alpha, Beta, Gamma, Alpha+Beta, Beta+Gamma; the hypothesis is most like Gamma
+    const vectors: Record<string, number[]> = {
+      'Alpha founded the city.': [1, 0, 0],
+      'Beta built a bridge.': [0, 1, 0],
+      'Gamma wrote a poem.': [0, 0, 1],
+      'Alpha founded the city. Beta built a bridge.': [0.7, 0.7, 0],
+      'Beta built a bridge. Gamma wrote a poem.': [0, 0.6, 0.8],
+      'Gamma wrote a poem about it.': [0, 0.1, 1],
+    };
+    const embed = vi.fn(async (texts: string[]) => texts.map(t => vectors[t]));
+    const r = await checkEntailment(LONG, 'Gamma wrote a poem about it.', [], new NliClient(backend), { embed });
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(r.ranking).toBe('embedding');
+    expect(batches[0].map(p => p.premise)).toEqual([
+      'Gamma wrote a poem.', 'Beta built a bridge. Gamma wrote a poem.', 'Beta built a bridge.',
+    ]);
+    expect(r.pairs).toBe(NLI_TOP_PREMISES);
+  });
+
+  it('falls back to word overlap when embedding fails or is not given', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { backend, batches } = fakeBackend();
+    const failing = vi.fn(async (): Promise<number[][]> => { throw new Error('404'); });
+    const r = await checkEntailment(LONG, 'Gamma wrote a poem.', [], new NliClient(backend), { embed: failing });
+    expect(r.ranking).toBe('lexical');
+    expect(batches[0][0].premise).toBe('Gamma wrote a poem.');
+
+    const none = await checkEntailment(LONG, 'Beta built a bridge.', [], new NliClient(fakeBackend().backend));
+    expect(none.ranking).toBe('lexical');
+  });
+
+  it('counts pairs the worker flagged as truncated', async () => {
+    const backend: NliBackend = { score: async pairs => pairs.map(() => ({ ...SUPPORTED, truncated: true })) };
+    const r = await checkEntailment(ORIGINAL, 'It ended the war.', [], new NliClient(backend));
+    expect(r.truncatedPairs).toBe(3);
   });
 
   it('reports the lowest entailment, the highest contradiction and the failing sentences', async () => {
@@ -212,7 +279,10 @@ class FakeWorker implements WorkerLike {
     if (message.type === 'init') {
       reply(this.behaviour === 'init-error'
         ? { type: 'init-error', message: 'NLI model failed to load: 404 config.json' }
-        : { type: 'ready', loadMs: 5 });
+        : {
+            type: 'ready', loadMs: 5, backend: 'webgpu',
+            adapter: { vendor: 'nvidia', architecture: 'ampere', description: '' },
+          });
     } else if (this.behaviour === 'score-error') {
       reply({ type: 'score-error', id: message.id, message: 'boom' });
     } else {
@@ -235,7 +305,19 @@ describe('createWorkerBackend', () => {
     const probs = await backend.score([{ premise: 'p', hypothesis: 'h2.' }]);
     expect(probs).toEqual([SUPPORTED]);
     expect(create).toHaveBeenCalledTimes(1);
-    expect(worker.received[0]).toMatchObject({ type: 'init', ...URLS, modelId: 'Xenova/nli-deberta-v3-xsmall' });
+    expect(worker.received[0]).toMatchObject({
+      type: 'init', ...URLS, modelId: 'Xenova/nli-deberta-v3-xsmall', device: 'auto',
+    });
+  });
+
+  it('reports and logs the backend and adapter vendor, and passes the requested device', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const worker = new FakeWorker();
+    const backend = createWorkerBackend(() => worker, { ...URLS, getDevice: async () => 'wasm' });
+    const info = await backend.load();
+    expect(info).toMatchObject({ backend: 'webgpu', adapter: { vendor: 'nvidia' } });
+    expect(worker.received[0]).toMatchObject({ type: 'init', device: 'wasm' });
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[Clarity\] NLI model .* loaded on webgpu \(nvidia ampere\)/));
   });
 
   it('throws NliUnavailableError when the model fails to load, and retries on the next call', async () => {
@@ -280,5 +362,82 @@ describe('createWorkerBackend', () => {
     const pending = backend.score([{ premise: 'p', hypothesis: 'h.' }]);
     worker.onerror?.({ message: 'wasm compile blocked' } as ErrorEvent);
     await expect(pending).rejects.toThrow(/crashed: wasm compile blocked/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Benchmark — NliClient.bench and prepareNli
+// ---------------------------------------------------------------------------
+describe('NLI benchmark', () => {
+  const CTX = { version: '1.0.0', webgpuAdapter: true, device: 'auto' as const };
+  const STORED: NliBenchRecord = {
+    backend: 'webgpu', adapterVendor: 'nvidia', ms: 40, predictedParagraphMs: 90,
+    version: '1.0.0', webgpuAdapter: true, device: 'auto', at: 1,
+  };
+
+  function memoryStore(initial: NliBenchRecord | null = null) {
+    let value = initial;
+    return {
+      get: vi.fn(async () => value),
+      save: vi.fn(async (r: NliBenchRecord) => { value = r; }),
+    } satisfies BenchStore;
+  }
+
+  function loadingBackend(backend: 'webgpu' | 'wasm') {
+    return {
+      score: vi.fn(async (pairs: NliPair[]) => pairs.map(() => SUPPORTED)),
+      load: vi.fn(async () => ({
+        backend,
+        adapter: backend === 'webgpu' ? { vendor: 'nvidia', architecture: '', description: '' } : null,
+        loadMs: 1,
+      })),
+    };
+  }
+
+  it('times one batch after an untimed warm-up, bypassing the cache', async () => {
+    const backend = loadingBackend('wasm');
+    const client = new NliClient(backend);
+    await client.scorePairs([...NLI_BENCH_PAIRS]);
+    expect(await client.bench([...NLI_BENCH_PAIRS])).toBeGreaterThanOrEqual(0);
+    expect(backend.score).toHaveBeenCalledTimes(3);
+    expect(NLI_BENCH_PAIRS).toHaveLength(8);
+  });
+
+  it('loads, benchmarks and stores a fresh record', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = memoryStore();
+    const record = await prepareNli(new NliClient(loadingBackend('webgpu')), CTX, store);
+    expect(record).toMatchObject({
+      backend: 'webgpu', adapterVendor: 'nvidia', version: '1.0.0', webgpuAdapter: true, device: 'auto',
+    });
+    expect(record.predictedParagraphMs).toBeGreaterThanOrEqual(0);
+    expect(store.save).toHaveBeenCalledWith(record);
+  });
+
+  it('reuses a stored record of the same setup without benchmarking again', async () => {
+    const backend = loadingBackend('webgpu');
+    const store = memoryStore(STORED);
+    expect(await prepareNli(new NliClient(backend), CTX, store)).toEqual(STORED);
+    expect(backend.score).not.toHaveBeenCalled();
+    expect(store.save).not.toHaveBeenCalled();
+  });
+
+  it('benchmarks again when the actual backend or the version changed', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // WebGPU failed this time, so the worker fell back to wasm
+    const onWasm = await prepareNli(new NliClient(loadingBackend('wasm')), CTX, memoryStore(STORED));
+    expect(onWasm.backend).toBe('wasm');
+    const updated = await prepareNli(
+      new NliClient(loadingBackend('webgpu')), { ...CTX, version: '1.1.0' }, memoryStore(STORED),
+    );
+    expect(updated.version).toBe('1.1.0');
+  });
+
+  it('throws NliUnavailableError when the model cannot load', async () => {
+    const backend: NliBackend = {
+      score: async () => [],
+      load: async () => { throw new NliUnavailableError('missing'); },
+    };
+    await expect(prepareNli(new NliClient(backend), CTX, memoryStore())).rejects.toBeInstanceOf(NliUnavailableError);
   });
 });

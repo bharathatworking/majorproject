@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   getUserProfile, saveUserProfile, DEFAULT_PROFILE, getLlmModel, saveLlmModel,
-  getExtraQuality, saveExtraQuality,
+  getExtraQuality, saveExtraQuality, getQualityMode, saveQualityMode,
 } from '../../lib/storage/settings';
 import { clearAllDocuments } from '../../lib/storage/documents';
 import { clearCache } from '../../lib/storage/cache';
-import { DEFAULT_LLM_MODEL, OllamaProvider } from '../../lib/llm/ollama-provider';
+import { getNliBench } from '../../lib/storage/nli-bench';
+import { DEFAULT_LLM_MODEL, LIGHT_LLM_MODEL, OllamaProvider } from '../../lib/llm/ollama-provider';
+import { chooseQualityMode, evidenceOf } from '../../lib/quality/mode';
 import { resolveTargetGrade } from '../../lib/profile/resolver';
 import { PRESETS, editProfile } from '../../lib/profile/presets';
-import type { UserProfile, DisplayPrefs, ReadingPreset } from '../../types';
+import type { UserProfile, DisplayPrefs, ReadingPreset, NliBenchRecord, QualityModeSetting } from '../../types';
 
 interface SettingsProps {
   displayPrefs: DisplayPrefs;
@@ -20,6 +22,23 @@ type SaveStatus = 'idle' | 'saved' | 'error';
 /** Installed models from Ollama: still loading, the list, or unreachable. */
 type ModelList = 'loading' | 'error' | string[];
 
+/** One plain sentence per quality mode: what it checks and what it costs. */
+const QUALITY_MODE_HINT: Record<QualityModeSetting, string> = {
+  auto: 'Auto uses Full when this computer can check sentences quickly, and Lite when it can\'t.',
+  full: 'Full checks every sentence against the original: the most trustworthy, but slow on a computer without a graphics card.',
+  lite: 'Lite checks overall meaning, names and numbers only: faster, but its results don\'t count toward the meaning pass rate.',
+};
+
+/** "Full (WebGPU, nvidia)" or "Lite (no WebGPU, about 4200 ms per paragraph)". */
+function autoChoiceLabel(bench: NliBenchRecord): string {
+  const { mode } = chooseQualityMode('auto', evidenceOf(bench));
+  const where = bench.backend === 'webgpu'
+    ? `WebGPU${bench.adapterVendor ? `, ${bench.adapterVendor}` : ''}`
+    : 'no WebGPU';
+  const name = mode === 'full' ? 'Full' : 'Lite';
+  return `${name} (${where}, about ${Math.round(bench.predictedParagraphMs)} ms per paragraph)`;
+}
+
 export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
   const [profile, setProfile]               = useState<UserProfile>(DEFAULT_PROFILE);
   const [customWords, setCustomWords]       = useState('');
@@ -29,6 +48,8 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
   const [llmModel, setLlmModel]             = useState(DEFAULT_LLM_MODEL);
   const [installed, setInstalled]           = useState<ModelList>('loading');
   const [extraQuality, setExtraQuality]     = useState(false);
+  const [qualityMode, setQualityMode]       = useState<QualityModeSetting>('auto');
+  const [nliBench, setNliBench]             = useState<NliBenchRecord | null>(null);
 
   // ── Load on mount ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -38,6 +59,8 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
     });
     getLlmModel().then(setLlmModel);
     getExtraQuality().then(setExtraQuality);
+    getQualityMode().then(setQualityMode);
+    getNliBench().then(setNliBench).catch(() => setNliBench(null));
     new OllamaProvider().listModels().then(setInstalled).catch(err => {
       console.log('[Clarity] Could not list Ollama models:', err);
       setInstalled('error');
@@ -54,6 +77,11 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
     const next = !extraQuality;
     setExtraQuality(next);
     saveExtraQuality(next);   // fire-and-forget, as above
+  };
+
+  const handleQualityModeChange = (mode: QualityModeSetting) => {
+    setQualityMode(mode);
+    saveQualityMode(mode);   // fire-and-forget, as above
   };
 
   // The saved model stays selectable even when Ollama doesn't list it
@@ -253,6 +281,34 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
         {modelMissing && (
           <p className="settings-hint">
             This model isn't installed. Run <code>ollama pull {llmModel}</code> or pick another.
+            {llmModel !== LIGHT_LLM_MODEL && (
+              <> On a slower computer, <code>{LIGHT_LLM_MODEL}</code> is a lighter
+              option: <code>ollama pull {LIGHT_LLM_MODEL}</code>.</>
+            )}
+          </p>
+        )}
+
+        <div className="form-group">
+          <label htmlFor="quality-mode">
+            Quality mode
+            <span className="form-hint"> — how carefully the meaning check works</span>
+          </label>
+          <select
+            id="quality-mode"
+            value={qualityMode}
+            onChange={e => handleQualityModeChange(e.target.value as QualityModeSetting)}
+          >
+            <option value="auto">Auto (recommended)</option>
+            <option value="full">Full</option>
+            <option value="lite">Lite</option>
+          </select>
+        </div>
+        <p className="settings-hint">{QUALITY_MODE_HINT[qualityMode]}</p>
+        {qualityMode === 'auto' && (
+          <p className="settings-hint">
+            {nliBench
+              ? `Auto currently uses: ${autoChoiceLabel(nliBench)}.`
+              : 'Auto measures this computer on the first simplification.'}
           </p>
         )}
 

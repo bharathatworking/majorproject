@@ -1,11 +1,11 @@
 /**
  * User settings in chrome.storage.sync: the reading profile (`userProfile`),
- * the chat model (`llmModel`) and the "Extra quality" toggle (`extraQuality`).
- * All fall back to defaults when unset.
+ * the chat model (`llmModel`), the "Extra quality" toggle (`extraQuality`)
+ * and the quality mode (`qualityMode`). All fall back to defaults when unset.
  */
 
 import { DEFAULT_LLM_MODEL } from '../llm/ollama-provider';
-import type { UserProfile } from '../../types';
+import type { QualityModeSetting, UserProfile } from '../../types';
 
 // ─── Profile ──────────────────────────────────────────────────────────────────
 
@@ -51,4 +51,18 @@ export async function getExtraQuality(): Promise<boolean> {
 
 export async function saveExtraQuality(on: boolean): Promise<void> {
   await chrome.storage.sync.set({ extraQuality: on });
+}
+
+// ─── Quality mode ─────────────────────────────────────────────────────────────
+
+const QUALITY_MODES: readonly QualityModeSetting[] = ['auto', 'full', 'lite'];
+
+/** Quality mode setting (see lib/quality/mode.ts); 'auto' unless a valid value is saved. */
+export async function getQualityMode(): Promise<QualityModeSetting> {
+  const { qualityMode } = await chrome.storage.sync.get<{ qualityMode?: unknown }>('qualityMode');
+  return QUALITY_MODES.find(m => m === qualityMode) ?? 'auto';
+}
+
+export async function saveQualityMode(mode: QualityModeSetting): Promise<void> {
+  await chrome.storage.sync.set({ qualityMode: mode });
 }

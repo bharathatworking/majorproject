@@ -7,20 +7,34 @@
  *    cross-encoder trained on SNLI + MultiNLI, Apache-2.0. It runs in a Web
  *    Worker (nli.worker.ts) through Transformers.js, so inference never
  *    blocks the UI. The files ship in dist/ (npm run fetch-models); nothing
- *    is downloaded at runtime.
- *  - premise = the original paragraph, hypothesis = one simplified sentence.
- *    A sentence fails when entailment < ENTAILMENT_MIN (unsupported) or
- *    contradiction > CONTRADICTION_MAX (contradicted).
+ *    is downloaded at runtime. The same q8 weights run on every backend, so
+ *    the calibrated ENTAILMENT_MIN holds on WebGPU, wasm and in Node.
+ *  - Backend: WebGPU first (the high-performance adapter, i.e. the discrete
+ *    GPU), wasm when WebGPU is missing or fails to load or warm up. The
+ *    worker reports which one it uses and the adapter vendor.
+ *  - Premises (lib/quality/premises.ts, SummaC zero-shot, Laban et al.,
+ *    2022, TACL): each simplified sentence is scored against the original's
+ *    sentences and 2-sentence windows, pruned to the NLI_TOP_PREMISES most
+ *    similar (all-minilm cosine via the injected `embed`, word overlap when
+ *    it is missing). Entailment is the max over those premises,
+ *    contradiction per NLI_CONTRADICTION_AGG. A sentence fails when
+ *    entailment < ENTAILMENT_MIN (unsupported) or contradiction >
+ *    CONTRADICTION_MAX (contradicted).
  *  - Glossary sentences that define one of the node's hinted words skip the
  *    entailment requirement but not the contradiction one, and parenthetical
  *    definitions are removed first (lib/quality/glossary.ts).
  *  - Sentences are split from toPlainText(output), so every bullet item is
  *    its own hypothesis, with the same boundary rule as the rolling context.
- *  - NliClient batches pairs (NLI_BATCH_SIZE per worker call) and keeps an
- *    in-memory LRU of pair scores keyed by sha256(premise, hypothesis), so a
- *    retry or a cache re-check never re-scores an unchanged sentence. One
- *    client (and worker) lives per app tab; module state is fine here (this is
- *    an extension page, not the service worker).
+ *  - NliClient sends all of a node's uncached pairs in one worker call (up to
+ *    NLI_BATCH_SIZE) and keeps an in-memory LRU of pair scores keyed by
+ *    sha256(premise, hypothesis), so a retry or a cache re-check never
+ *    re-scores an unchanged pair. The worker flags pairs over the model's
+ *    512 tokens (scored truncated), and the check counts them. One client
+ *    (and worker) lives per app tab; module state is fine here (this is an
+ *    extension page, not the service worker).
+ *  - Speed benchmark (prepareNli): after the model loads, 8 fixed pairs are
+ *    timed once and stored (`nli:bench`) for the Auto quality mode
+ *    (lib/quality/mode.ts); re-run when the version, adapter or device changes.
  *  - Failures: a model that won't load (missing files, wasm blocked, timeout)
  *    throws NliUnavailableError; the run then falls back to SBERT + entities
  *    and tells the user once. A later call tries to load it again.
@@ -30,12 +44,18 @@
 
 import { toPlainText } from '../render/format-output';
 import { sha256 } from '../utils/hash';
+import { getNliBench, getNliDevice, saveNliBench } from '../storage/nli-bench';
 import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_BATCH_SIZE, NLI_CACHE_MAX, NLI_LOAD_TIMEOUT_MS,
-  NLI_MODEL_ID, NLI_SCORE_TIMEOUT_MS,
+  CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_BATCH_SIZE, NLI_CACHE_MAX, NLI_CONTRADICTION_AGG,
+  NLI_LOAD_TIMEOUT_MS, NLI_MODEL_ID, NLI_SCORE_TIMEOUT_MS, NLI_TOP_PREMISES,
 } from './config';
 import { selectExemptions, stripParentheticalDefinitions } from './glossary';
-import type { EntailmentCheck } from '../../types';
+import { isBenchStale, predictParagraphMs, type BenchContext } from './mode';
+import { aggregate, buildPremises, lexicalRank, rankPremises } from './premises';
+import type { EmbedFn } from './semantic';
+import type {
+  EntailmentCheck, NliBackendName, NliBenchRecord, NliDevice, PremiseRanking,
+} from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,23 +69,49 @@ export interface NliProbs {
   entailment: number;
   contradiction: number;
   neutral: number;
+  /** The pair was longer than the model's 512 tokens and scored truncated. */
+  truncated?: boolean;
+}
+
+/** What the worker reports about the GPU adapter it uses. */
+export interface GpuAdapterSummary {
+  vendor: string;
+  architecture: string;
+  description: string;
 }
 
 /** Page → worker messages. */
 export type NliRequest =
-  | { type: 'init'; modelId: string; modelUrl: string; wasmUrl: string }
+  | { type: 'init'; modelId: string; modelUrl: string; wasmUrl: string; device: NliDevice }
   | { type: 'score'; id: number; pairs: NliPair[] };
 
 /** Worker → page messages. */
 export type NliResponse =
-  | { type: 'ready'; loadMs: number }
+  | {
+      type: 'ready';
+      loadMs: number;
+      backend: NliBackendName;
+      adapter: GpuAdapterSummary | null;
+      /** Why WebGPU was not used, when it was tried and failed. */
+      webgpuError?: string;
+    }
   | { type: 'init-error'; message: string }
   | { type: 'scores'; id: number; probs: NliProbs[] }
   | { type: 'score-error'; id: number; message: string };
 
+/** The loaded model's backend. */
+export interface NliBackendInfo {
+  backend: NliBackendName;
+  adapter: GpuAdapterSummary | null;
+  loadMs: number;
+  webgpuError?: string;
+}
+
 /** Scores one batch of pairs (the worker, or a fake in tests). */
 export interface NliBackend {
   score(pairs: NliPair[]): Promise<NliProbs[]>;
+  /** Loads the model if needed; backends without it count as wasm. */
+  load?(): Promise<NliBackendInfo>;
 }
 
 /** The minimal Worker surface the backend uses, so tests can pass a fake. */
@@ -104,21 +150,33 @@ export function splitSentences(text: string): string[] {
 export interface WorkerBackendOptions {
   modelUrl: string;
   wasmUrl: string;
+  /** Requested device, read when the worker starts (default 'auto'). */
+  getDevice?: () => Promise<NliDevice>;
   loadTimeoutMs?: number;
   scoreTimeoutMs?: number;
 }
 
+/** "webgpu (nvidia ampere)" or "wasm". */
+function describeBackend(info: Pick<NliBackendInfo, 'backend' | 'adapter'>): string {
+  if (info.backend !== 'webgpu' || !info.adapter) return info.backend;
+  const parts = [info.adapter.vendor, info.adapter.architecture].filter(Boolean).join(' ');
+  return parts ? `webgpu (${parts})` : 'webgpu';
+}
+
 /**
  * Backend that runs the model in a Web Worker. The worker is created and the
- * model loaded on the first score call; if that fails, the worker is dropped
- * and the next call starts over.
+ * model loaded on the first load or score call; if that fails, the worker is
+ * dropped and the next call starts over.
  */
-export function createWorkerBackend(createWorker: () => WorkerLike, options: WorkerBackendOptions): NliBackend {
+export function createWorkerBackend(
+  createWorker: () => WorkerLike,
+  options: WorkerBackendOptions,
+): Required<NliBackend> {
   const loadTimeoutMs = options.loadTimeoutMs ?? NLI_LOAD_TIMEOUT_MS;
   const scoreTimeoutMs = options.scoreTimeoutMs ?? NLI_SCORE_TIMEOUT_MS;
 
   let worker: WorkerLike | null = null;
-  let ready: Promise<void> | null = null;
+  let ready: Promise<NliBackendInfo> | null = null;
   let nextId = 1;
   const pending = new Map<number, { resolve: (p: NliProbs[]) => void; reject: (e: Error) => void }>();
 
@@ -130,8 +188,12 @@ export function createWorkerBackend(createWorker: () => WorkerLike, options: Wor
     pending.clear();
   }
 
-  function start(): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+  async function start(): Promise<NliBackendInfo> {
+    // Without getDevice, the worker starts synchronously within this call
+    const device: NliDevice = options.getDevice
+      ? await options.getDevice().catch(() => 'auto' as const)
+      : 'auto';
+    return new Promise<NliBackendInfo>((resolve, reject) => {
       let w: WorkerLike;
       try {
         w = createWorker();
@@ -149,11 +211,20 @@ export function createWorkerBackend(createWorker: () => WorkerLike, options: Wor
       w.onmessage = (event) => {
         const msg = event.data;
         switch (msg.type) {
-          case 'ready':
+          case 'ready': {
             clearTimeout(timer);
-            console.log(`[Clarity] NLI model ${NLI_MODEL_ID} loaded in ${Math.round(msg.loadMs)} ms`);
-            resolve();
+            const info: NliBackendInfo = {
+              backend: msg.backend, adapter: msg.adapter, loadMs: msg.loadMs,
+              ...(msg.webgpuError !== undefined && { webgpuError: msg.webgpuError }),
+            };
+            console.log(
+              `[Clarity] NLI model ${NLI_MODEL_ID} loaded on ${describeBackend(info)} in ${Math.round(msg.loadMs)} ms` +
+              (device === 'wasm' ? ' (wasm forced by debug:nliDevice)' : ''),
+            );
+            if (msg.webgpuError) console.log(`[Clarity] NLI WebGPU not used: ${msg.webgpuError}`);
+            resolve(info);
             break;
+          }
           case 'init-error': {
             clearTimeout(timer);
             const err = new NliUnavailableError(msg.message);
@@ -177,14 +248,21 @@ export function createWorkerBackend(createWorker: () => WorkerLike, options: Wor
         reset(err);
         reject(err);
       };
-      w.postMessage({ type: 'init', modelId: NLI_MODEL_ID, modelUrl: options.modelUrl, wasmUrl: options.wasmUrl });
+      w.postMessage({
+        type: 'init', modelId: NLI_MODEL_ID, modelUrl: options.modelUrl, wasmUrl: options.wasmUrl, device,
+      });
     });
   }
 
+  function load(): Promise<NliBackendInfo> {
+    ready ??= start();
+    return ready;
+  }
+
   return {
+    load,
     async score(pairs) {
-      ready ??= start();
-      await ready;
+      await load();
       const w = worker;
       if (!w) throw new NliUnavailableError('NLI worker is not running');
       const id = nextId++;
@@ -205,22 +283,59 @@ export function createWorkerBackend(createWorker: () => WorkerLike, options: Wor
 
 // ─── Client (batching + cache) ────────────────────────────────────────────────
 
+/** Scores of a list of pairs, in order. */
+export interface ScoredPairs {
+  probs: NliProbs[];
+  /** Pairs answered from the in-memory cache. */
+  cached: number;
+  /** Pairs that were over the model's token limit. */
+  truncated: number;
+}
+
 export class NliClient {
   private readonly cache = new Map<string, NliProbs>();
+  private loaded: NliBackendInfo | null = null;
+  private readonly backend: NliBackend;
+  private readonly batchSize: number;
+  private readonly cacheMax: number;
 
-  constructor(
-    private readonly backend: NliBackend,
-    private readonly batchSize = NLI_BATCH_SIZE,
-    private readonly cacheMax = NLI_CACHE_MAX,
-  ) {}
+  constructor(backend: NliBackend, batchSize = NLI_BATCH_SIZE, cacheMax = NLI_CACHE_MAX) {
+    this.backend = backend;
+    this.batchSize = batchSize;
+    this.cacheMax = cacheMax;
+  }
 
-  /** Probabilities for every pair, in order, plus how many came from the cache. */
-  async scorePairs(pairs: NliPair[]): Promise<{ probs: NliProbs[]; cached: number }> {
+  /** Loads the model (once) and returns its backend. */
+  async load(): Promise<NliBackendInfo> {
+    this.loaded = this.backend.load
+      ? await this.backend.load()
+      : { backend: 'wasm', adapter: null, loadMs: 0 };
+    return this.loaded;
+  }
+
+  /** The backend of the last successful load, or null. */
+  get info(): NliBackendInfo | null {
+    return this.loaded;
+  }
+
+  /**
+   * ms for one batch of `pairs`, after an untimed warm-up batch (WebGPU
+   * compiles its shaders on the first run). Bypasses the cache.
+   */
+  async bench(pairs: NliPair[]): Promise<number> {
+    await this.backend.score(pairs);
+    const started = performance.now();
+    await this.backend.score(pairs);
+    return performance.now() - started;
+  }
+
+  /** Probabilities for every pair, in order, plus cache and truncation counts. */
+  async scorePairs(pairs: NliPair[]): Promise<ScoredPairs> {
     const keys = await Promise.all(pairs.map(p => sha256(`${p.premise}\u0000${p.hypothesis}`)));
     const probs: (NliProbs | undefined)[] = keys.map(k => this.touch(k));
     const cached = probs.filter(Boolean).length;
 
-    // Distinct uncached pairs, scored in batches
+    // Distinct uncached pairs, scored in as few calls as the batch size allows
     const missing = [...new Set(keys.filter((_, i) => probs[i] === undefined))];
     const pairByKey = new Map(keys.map((k, i) => [k, pairs[i]]));
     for (let i = 0; i < missing.length; i += this.batchSize) {
@@ -232,7 +347,8 @@ export class NliClient {
       batchKeys.forEach((k, j) => this.remember(k, scores[j]));
     }
 
-    return { probs: keys.map(k => this.cache.get(k) as NliProbs), cached };
+    const all = keys.map(k => this.cache.get(k) as NliProbs);
+    return { probs: all, cached, truncated: all.filter(p => p.truncated).length };
   }
 
   /** Cached value for `key`, marked as most recently used. */
@@ -262,9 +378,68 @@ let defaultClient: NliClient | null = null;
 export function getNliClient(): NliClient {
   defaultClient ??= new NliClient(createWorkerBackend(
     () => new Worker(new URL('./nli.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
-    { modelUrl: chrome.runtime.getURL('models/'), wasmUrl: chrome.runtime.getURL('ort/') },
+    { modelUrl: chrome.runtime.getURL('models/'), wasmUrl: chrome.runtime.getURL('ort/'), getDevice: getNliDevice },
   ));
   return defaultClient;
+}
+
+// ─── Benchmark ────────────────────────────────────────────────────────────────
+
+/**
+ * Fixed pairs timed by the speed benchmark: sentence-length premises and
+ * simplified hypotheses, like the pairs the check sends.
+ */
+export const NLI_BENCH_PAIRS: readonly NliPair[] = [
+  ['The Treaty of Versailles was signed in June 1919 and formally ended the First World War.', 'The treaty that ended the First World War was signed in 1919.'],
+  ['Photosynthesis converts light energy into chemical energy stored in glucose molecules.', 'Plants use light to make sugar they can store.'],
+  ['The central bank raised interest rates by half a percentage point to slow inflation.', 'The bank made borrowing more expensive to fight rising prices.'],
+  ['Patients should take the medication twice daily with food unless a doctor advises otherwise.', 'Take the medicine two times a day with a meal.'],
+  ['The river flows north for 6,650 kilometres before emptying into the Mediterranean Sea.', 'The river is 6,650 kilometres long and ends in the sea.'],
+  ['Volcanic eruptions can release ash clouds that disrupt air travel across entire continents.', 'Ash from volcanoes can stop planes from flying.'],
+  ['The software update fixes a security flaw that allowed attackers to read stored passwords.', 'The update closes a hole that let hackers see passwords.'],
+  ['Applicants must submit the completed form and two forms of identification before the deadline.', 'You need to send the form and two IDs before the deadline.'],
+].map(([premise, hypothesis]) => ({ premise, hypothesis }));
+
+/** Where prepareNli reads and writes the stored benchmark. */
+export interface BenchStore {
+  get(): Promise<NliBenchRecord | null>;
+  save(record: NliBenchRecord): Promise<void>;
+}
+
+const chromeBenchStore: BenchStore = { get: getNliBench, save: saveNliBench };
+
+/**
+ * Loads the model and returns this setup's benchmark: the stored one when it
+ * matches (same version, adapter state, device and actual backend), else a
+ * fresh one, which is stored. Throws NliUnavailableError when the model
+ * can't load; a failed save is only logged.
+ */
+export async function prepareNli(
+  client: NliClient,
+  ctx: BenchContext,
+  store: BenchStore = chromeBenchStore,
+): Promise<NliBenchRecord> {
+  const info = await client.load();
+  const stored = await store.get().catch(() => null);
+  if (stored && !isBenchStale(stored, ctx) && stored.backend === info.backend) return stored;
+
+  const ms = await client.bench([...NLI_BENCH_PAIRS]);
+  const record: NliBenchRecord = {
+    backend: info.backend,
+    adapterVendor: info.adapter?.vendor || null,
+    ms,
+    predictedParagraphMs: predictParagraphMs(ms),
+    version: ctx.version,
+    webgpuAdapter: ctx.webgpuAdapter,
+    device: ctx.device,
+    at: Date.now(),
+  };
+  console.log(
+    `[Clarity] NLI benchmark on ${describeBackend(info)}: ${Math.round(ms)} ms for ${NLI_BENCH_PAIRS.length} pairs ` +
+    `→ about ${Math.round(record.predictedParagraphMs)} ms per paragraph`,
+  );
+  await store.save(record).catch(err => console.warn('[Clarity] NLI benchmark save failed', err));
+  return record;
 }
 
 // ─── Check ────────────────────────────────────────────────────────────────────
@@ -272,12 +447,42 @@ export function getNliClient(): NliClient {
 export interface EntailmentOptions {
   /** Prefix for the [Clarity] log lines (e.g. the node id). */
   label?: string;
+  /** Embeds texts for premise ranking (all-minilm); word overlap without it. */
+  embed?: EmbedFn;
 }
 
 /**
- * Scores every simplified sentence against the original paragraph. Throws
- * NliUnavailableError when the model can't load, or Error for a failed
- * request; the caller decides the fallback.
+ * The premises each hypothesis is scored against (indexes into `premises`):
+ * all of them when there are no more than NLI_TOP_PREMISES, else the most
+ * similar by embedding, or by word overlap when embedding is unavailable.
+ */
+async function pickPremises(
+  premises: string[],
+  hypotheses: string[],
+  embed: EmbedFn | undefined,
+  label: string,
+): Promise<{ top: number[][]; ranking: PremiseRanking }> {
+  if (premises.length <= NLI_TOP_PREMISES) {
+    return { top: hypotheses.map(() => premises.map((_, i) => i)), ranking: 'all' };
+  }
+  if (embed) {
+    try {
+      const vecs = await embed([...premises, ...hypotheses]);
+      if (vecs.length === premises.length + hypotheses.length) {
+        return { top: rankPremises(vecs.slice(0, premises.length), vecs.slice(premises.length)), ranking: 'embedding' };
+      }
+      console.warn(`[Clarity] NLI ${label} premise embedding returned ${vecs.length} vectors; using word overlap`);
+    } catch (err) {
+      console.warn(`[Clarity] NLI ${label} premise embedding failed; using word overlap`, err);
+    }
+  }
+  return { top: lexicalRank(premises, hypotheses), ranking: 'lexical' };
+}
+
+/**
+ * Scores every simplified sentence against its premises from the original.
+ * Throws NliUnavailableError when the model can't load, or Error for a
+ * failed request; the caller decides the fallback.
  */
 export async function checkEntailment(
   original: string,
@@ -287,6 +492,7 @@ export async function checkEntailment(
   options: EntailmentOptions = {},
 ): Promise<EntailmentCheck> {
   const started = performance.now();
+  const label = options.label ?? '';
   const sentences = splitSentences(simplified)
     .map(s => stripParentheticalDefinitions(s, hintedWords))
     .filter(s => s !== '');
@@ -294,14 +500,20 @@ export async function checkEntailment(
   if (sentences.length === 0) {
     return {
       minEntailment: 0, maxContradiction: 0, unsupportedSentences: [], contradictedSentences: [],
-      exemptedSentences: [], exemptionRate: 0, sentences: 0, cachedPairs: 0,
-      ms: performance.now() - started,
+      exemptedSentences: [], exemptionRate: 0, sentences: 0, cachedPairs: 0, pairs: 0, truncatedPairs: 0,
+      ranking: 'all', rankMs: 0, scoreMs: 0, ms: performance.now() - started,
     };
   }
 
-  const { probs, cached } = await client.scorePairs(
-    sentences.map(hypothesis => ({ premise: original, hypothesis })),
-  );
+  const premises = buildPremises(splitSentences(original));
+  if (premises.length === 0) premises.push(original.trim());
+
+  const { top, ranking } = await pickPremises(premises, sentences, options.embed, label);
+  const ranked = performance.now();
+
+  const pairs = sentences.flatMap((hypothesis, i) => top[i].map(j => ({ premise: premises[j], hypothesis })));
+  const { probs, cached, truncated } = await client.scorePairs(pairs);
+  const scoreMs = performance.now() - ranked;
   const exempt = new Set(selectExemptions(sentences, hintedWords));
 
   let minEntailment = 1;
@@ -310,14 +522,17 @@ export async function checkEntailment(
   const contradictedSentences: string[] = [];
   const exemptedSentences: string[] = [];
 
+  let offset = 0;
   sentences.forEach((sentence, i) => {
-    const p = probs[i];
+    const own = probs.slice(offset, offset + top[i].length);
+    offset += top[i].length;
+    const p = aggregate(own, NLI_CONTRADICTION_AGG);
     maxContradiction = Math.max(maxContradiction, p.contradiction);
     if (p.contradiction > CONTRADICTION_MAX) contradictedSentences.push(sentence);
     if (exempt.has(i)) {
       exemptedSentences.push(sentence);
       console.log(
-        `[Clarity] NLI ${options.label ?? ''} glossary exemption ` +
+        `[Clarity] NLI ${label} glossary exemption ` +
         `(entailment ${p.entailment.toFixed(2)}, contradiction ${p.contradiction.toFixed(2)}): "${sentence}"`,
       );
       return;
@@ -335,6 +550,11 @@ export async function checkEntailment(
     exemptionRate: exemptedSentences.length / sentences.length,
     sentences: sentences.length,
     cachedPairs: cached,
+    pairs: pairs.length,
+    truncatedPairs: truncated,
+    ranking,
+    rankMs: ranked - started,
+    scoreMs,
     ms: performance.now() - started,
   };
 }

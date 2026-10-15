@@ -13,6 +13,8 @@ import { parseOllamaStream } from './ollama-stream';
 const OLLAMA_BASE_URL = 'http://localhost:11434';
 /** Chat model used until the user picks another one in Settings. */
 export const DEFAULT_LLM_MODEL = 'qwen2.5:3b';
+/** Lighter chat model Settings suggests for slower computers. */
+export const LIGHT_LLM_MODEL = 'qwen2.5:1.5b';
 /**
  * Sentence-BERT embedding model (all-MiniLM-L6-v2, ~23M params) used by the
  * meaning check in lib/quality/semantic.ts. Optional: a 404 skips the check.
