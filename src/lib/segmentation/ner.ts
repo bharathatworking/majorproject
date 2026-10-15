@@ -6,15 +6,30 @@
  * `nlp.plugin()` itself returns `any`. Offsets come from `.out('offset')`.
  * Overlapping matches are resolved by start position, then longest match,
  * then type priority.
+ *
+ * Clean-up after detection:
+ *  - Trailing punctuation is trimmed from each match (compromise returns
+ *    "in PST." for "…in PST."), and a date loses a leading in / on / at /
+ *    the ("in PST" → "PST"), with the offsets adjusted so they still slice
+ *    back to the text.
+ *  - A date whose core is only a time-zone abbreviation ("in PST", "UTC",
+ *    "PST time zone") is a `timezone`, not a date, so a dropped one is
+ *    reported as a time zone. "9am EST" stays a date.
  */
 
 import nlp from 'compromise';
 import datePlugin, { type DatesMethods } from 'compromise-dates';
 import numberPlugin, { type NumbersMethods } from 'compromise-numbers';
+import { isTimeZoneText } from './time-zones';
 import type { Entity } from '../../types';
 
 nlp.plugin(datePlugin);
 nlp.plugin(numberPlugin);
+
+// ─── Clean-up ─────────────────────────────────────────────────────────────────
+
+const TRAILING_PUNCTUATION = /[\s.,;:!?]+$/;
+const LEADING_FILLER = /^(?:(?:in|on|at|the)\s+)+/i;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,7 +48,18 @@ export function detectEntities(text: string): Entity[] {
 
     const collect = (matches: OffsetMatch[], type: Entity['type']) => {
       for (const m of matches) {
-        entities.push({ text: m.text, type, start: m.offset.start, end: m.offset.start + m.offset.length });
+        let found = m.text.replace(TRAILING_PUNCTUATION, '');
+        let start = m.offset.start;
+        if (type === 'date') {
+          const lead = LEADING_FILLER.exec(found)?.[0] ?? '';
+          if (lead.length < found.length) {
+            found = found.slice(lead.length);
+            start += lead.length;
+          }
+        }
+        if (!found) continue;
+        const kind = type === 'date' && isTimeZoneText(found) ? 'timezone' : type;
+        entities.push({ text: found, type: kind, start, end: start + found.length });
       }
     };
 
@@ -45,7 +71,7 @@ export function detectEntities(text: string): Entity[] {
 
     // Deduplicate entities (compromise might match a word as multiple things, e.g. a date and a number)
     // We prefer person > org > place > date > number
-    const typePriority: Record<string, number> = { 'person': 5, 'org': 4, 'place': 3, 'date': 2, 'number': 1 };
+    const typePriority: Record<string, number> = { 'person': 5, 'org': 4, 'place': 3, 'timezone': 2, 'date': 2, 'number': 1 };
 
     // Sort by start position, then by priority
     entities.sort((a, b) => {

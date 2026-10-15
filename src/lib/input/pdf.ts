@@ -13,13 +13,17 @@
  * the app's main chunk. The worker ?url import is only a path string, so it
  * stays static.
  *
+ * Each page is split at sentence boundaries into paragraphs of at most
+ * MAX_NODE_SENTENCES sentences and MAX_NODE_WORDS words (text-blocks.ts), so
+ * one page never becomes one huge node.
+ *
  * OCR is NOT supported. This module only works with text-based (not scanned) PDFs.
  */
 
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { upsertDocument } from '../storage/documents';
 import { sha256 } from '../utils/hash';
-import { escapeHtml } from '../utils/html';
+import { proseToHtml } from './text-blocks';
 import type { ClarityDocument } from '../../types';
 
 const MIN_TEXT_LENGTH = 100;
@@ -75,8 +79,8 @@ export async function createDocumentFromPDF(file: File): Promise<ClarityDocument
   // Title: filename without extension
   const title = file.name.replace(/\.pdf$/i, '').trim() || 'PDF document';
 
-  // HTML: one <p> per page
-  const html = pageTexts.map(p => `<p>${escapeHtml(p)}</p>`).join('\n');
+  // HTML: each page split into sentence-bounded paragraphs
+  const html = pageTexts.map(proseToHtml).join('\n');
 
   // SHA-256 hash for dedup
   const contentHash = await sha256(textContent);

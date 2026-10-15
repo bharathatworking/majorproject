@@ -32,6 +32,21 @@ describe('detectEntities', () => {
     expect(detectEntities('NASA launched the probe in 2024.').map(e => e.text)).toContain('NASA');
   });
 
+  it('classifies a time zone as a timezone without its preposition', () => {
+    const text = 'Call Anna (she is in PST time zone) on Monday.';
+    const zone = detectEntities(text).find(e => e.type === 'timezone');
+    expect(zone).toMatchObject({ text: 'PST' });
+    expect(text.slice(zone!.start, zone!.end)).toBe('PST');
+    expect(detectEntities('Logs use UTC.')).toContainEqual(expect.objectContaining({ text: 'UTC', type: 'timezone' }));
+  });
+
+  it('trims trailing punctuation and keeps a clock time with a zone as a date', () => {
+    const text = 'The meeting is at 9am EST.';
+    const entities = detectEntities(text);
+    expect(entities).toContainEqual(expect.objectContaining({ text: '9am EST', type: 'date' }));
+    for (const e of entities) expect(text.slice(e.start, e.end)).toBe(e.text);
+  });
+
   it('returns an empty list for empty text', () => {
     expect(detectEntities('')).toEqual([]);
   });

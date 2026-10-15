@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { parseSimplifiedText, toPlainText } from '../../src/lib/render/format-output';
+import {
+  nestByDepth, parseSimplifiedText, toPlainText, type TreeItem,
+} from '../../src/lib/render/format-output';
 
 // ---------------------------------------------------------------------------
 // parseSimplifiedText — turns raw model output into paragraph / list blocks
@@ -162,5 +164,84 @@ describe('toPlainText', () => {
 
   it('leaves plain paragraphs unchanged', () => {
     expect(toPlainText('One.\n\nTwo.')).toBe('One.\n\nTwo.');
+  });
+
+  it('flattens nested items', () => {
+    expect(toPlainText('- a\no b\n- c')).toBe('a.\nb.\nc.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sub-bullets — Word "o" / "▪" markers and indentation
+// ---------------------------------------------------------------------------
+describe('parseSimplifiedText sub-bullets', () => {
+  it('nests Word "o" and "▪" items', () => {
+    expect(parseSimplifiedText('- Book a room\no Check the calendar\n▪ Mary is in PST\n- Send the agenda')).toEqual([
+      {
+        kind: 'list',
+        ordered: false,
+        items: ['Book a room', 'Check the calendar', 'Mary is in PST', 'Send the agenda'],
+        depths: [0, 1, 2, 0],
+      },
+    ]);
+  });
+
+  it('nests indented bullets', () => {
+    expect(parseSimplifiedText('- a\n  - b\n\t- c\n    - d')).toEqual([
+      { kind: 'list', ordered: false, items: ['a', 'b', 'c', 'd'], depths: [0, 1, 1, 2] },
+    ]);
+  });
+
+  it('keeps an ordered list open across unordered sub-items', () => {
+    expect(parseSimplifiedText('1. one\no sub\n2. two')).toEqual([
+      { kind: 'list', ordered: true, items: ['one', 'sub', 'two'], depths: [0, 1, 0] },
+    ]);
+  });
+
+  it('clamps a first or jumping sub-item', () => {
+    expect(parseSimplifiedText('▪ first\n- top\n▪ deep')).toEqual([
+      { kind: 'list', ordered: false, items: ['first', 'top', 'deep'], depths: [0, 0, 1] },
+    ]);
+  });
+
+  it('leaves depths off a flat list', () => {
+    expect(parseSimplifiedText('- a\n- b')[0]).not.toHaveProperty('depths');
+  });
+
+  it('does not treat words starting with "o" as bullets', () => {
+    expect(parseSimplifiedText('only this\nor that')).toEqual([
+      { kind: 'paragraph', text: 'only this or that' },
+    ]);
+  });
+
+  it('drops a dangling "o" marker mid-stream', () => {
+    expect(parseSimplifiedText('- a\no')).toEqual([{ kind: 'list', ordered: false, items: ['a'] }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nestByDepth — flat items with depths → tree
+// ---------------------------------------------------------------------------
+describe('nestByDepth', () => {
+  const shape = (tree: TreeItem<string>[]): unknown[] =>
+    tree.map(t => (t.children.length ? [t.item, shape(t.children)] : t.item));
+
+  it('hangs items under the closest item one level up', () => {
+    const items = ['a', 'a1', 'a2', 'a2x', 'b'];
+    const depths = [0, 1, 1, 2, 0];
+    expect(shape(nestByDepth(items, (_, i) => depths[i]))).toEqual([
+      ['a', ['a1', ['a2', ['a2x']]]],
+      'b',
+    ]);
+  });
+
+  it('keeps flat indexes', () => {
+    const tree = nestByDepth(['a', 'b', 'c'], (_, i) => [0, 1, 0][i]);
+    expect(tree.map(t => t.index)).toEqual([0, 2]);
+    expect(tree[0].children[0].index).toBe(1);
+  });
+
+  it('clamps the first item and depth jumps', () => {
+    expect(shape(nestByDepth(['x', 'y', 'z'], (_, i) => [2, 3, 0][i]))).toEqual([['x', ['y']], 'z']);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { checkMeaning, findMissingEntities, shouldCheckNode } from '../../src/lib/quality/semantic';
+import { checkMeaning, coreTokens, findMissingEntities, shouldCheckNode } from '../../src/lib/quality/semantic';
+import { detectEntities } from '../../src/lib/segmentation/ner';
 import { MIN_WORDS_FOR_CHECK } from '../../src/lib/quality/config';
 import type { ContentNode, Entity } from '../../src/types';
 
@@ -51,6 +52,35 @@ describe('findMissingEntities', () => {
     expect(findMissingEntities([entity('1,500', 'number')], 'It cost 1500 dollars.')).toEqual([]);
     expect(findMissingEntities([entity('three', 'number')], 'There were 3 people.')).toEqual([]);
     expect(findMissingEntities([entity('three', 'number')], 'There were 4 people.')).toEqual(['three']);
+  });
+
+  it('passes "in PST time zone" kept as "during PST" (Chrome false failure)', () => {
+    const original =
+      'Please find a slot on Thursday for the review with Mary and Jose (she is in PST time zone) so the team can join.';
+    const simplified =
+      'Find a slot on Thursday for the review during PST when you, Mary, and Jose can meet.';
+    const entities = detectEntities(original);
+    expect(entities).toContainEqual(expect.objectContaining({ text: 'PST', type: 'timezone' }));
+    expect(findMissingEntities(entities, simplified)).toEqual([]);
+  });
+
+  it('coreTokens drops leading in / on / at / the but never everything', () => {
+    expect(coreTokens('In PST.')).toBe(' pst ');
+    expect(coreTokens('at the office')).toBe(' office ');
+    expect(coreTokens('the')).toBe(' the ');
+  });
+
+  it('matches a time zone written with its filler words', () => {
+    expect(findMissingEntities([entity('in PST time zone', 'timezone')], 'Meet during PST.')).toEqual([]);
+    expect(findMissingEntities([entity('PST', 'timezone')], 'Meet in the morning.')).toEqual(['PST']);
+    expect(findMissingEntities([entity('PST', 'timezone')], 'The past week.')).toEqual(['PST']);
+  });
+
+  it('ignores a leading in / on / at / the', () => {
+    expect(findMissingEntities([entity('on Monday at 3pm', 'date')], 'Come Monday at 3pm.')).toEqual([]);
+    expect(findMissingEntities([entity('in 1903', 'date')], 'She won that prize back in 1903.')).toEqual([]);
+    expect(findMissingEntities([entity('The Hague', 'place')], 'They met at Hague.')).toEqual([]);
+    expect(findMissingEntities([entity('on Monday', 'date')], 'Come on Tuesday.')).toEqual(['on Monday']);
   });
 
   it('keeps dates as written', () => {

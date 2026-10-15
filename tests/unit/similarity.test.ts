@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  averageSimilarity, cosineSimilarity, meaningBadge, meaningStats, meaningStatusOf, summarizeMeaning,
+  averageSimilarity, cosineSimilarity, meaningBadge, meaningOverview, meaningStats, meaningStatusOf,
+  passRateLabel, summarizeMeaning,
 } from '../../src/lib/quality/similarity';
 import { THESIS_COVERAGE_MIN } from '../../src/lib/quality/config';
 import type { StoredMeaning, StoredResult } from '../../src/types';
@@ -118,6 +119,43 @@ describe('averageSimilarity', () => {
   it('returns null when nothing was checked', () => {
     expect(averageSimilarity([])).toBeNull();
     expect(averageSimilarity([result()])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// meaningOverview / passRateLabel — the Progress card and table
+// ---------------------------------------------------------------------------
+describe('meaningOverview', () => {
+  it('returns the table stats and the average similarity from the same results', () => {
+    const results = [
+      result({ ...FULL_PASS, similarity: 0.9 }),
+      result({ ...FULL_PASS, similarity: 0.84, passed: false }),
+      result({ ...FULL_PASS, similarity: 0.88, passed: false }),
+    ];
+    const o = meaningOverview(results);
+    expect(o.stats).toEqual(meaningStats(results));
+    expect(o.avgSimilarity).toBe(averageSimilarity(results));
+  });
+
+  it('can show a high similarity next to a 0% pass rate (the Chrome case)', () => {
+    const results = Array.from({ length: 9 }, () => result({ ...FULL_PASS, similarity: 0.87, passed: false }));
+    const o = meaningOverview(results);
+    expect(o.avgSimilarity!.toFixed(2)).toBe('0.87');
+    expect(passRateLabel(o.stats)).toBe('0% (0/9)');
+  });
+});
+
+describe('passRateLabel', () => {
+  it('shows percent and passed / fully checked', () => {
+    expect(passRateLabel(meaningStats([
+      result(FULL_PASS), result(FULL_PASS), result({ ...FULL_PASS, passed: false }),
+      result({ ...FULL_PASS, nliChecked: false }),
+    ]))).toBe('67% (2/3)');
+  });
+
+  it('shows a dash when nothing was fully checked', () => {
+    expect(passRateLabel(meaningStats([]))).toBe('—');
+    expect(passRateLabel(meaningStats([result({ ...FULL_PASS, nliChecked: false })]))).toBe('—');
   });
 });
 

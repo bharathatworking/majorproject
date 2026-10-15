@@ -3,11 +3,11 @@ import { Chart, registerables } from 'chart.js';
 import { getWeeklyProgress } from '../../lib/storage/progress';
 import { getDocument, listDocuments } from '../../lib/storage/documents';
 // similarity.ts and config.ts are import-free of compromise and Transformers.js
-import { averageSimilarity, meaningStats } from '../../lib/quality/similarity';
+import { meaningOverview, passRateLabel, type MeaningOverview } from '../../lib/quality/similarity';
 import {
   CONTRADICTION_MAX, ENTAILMENT_MIN, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN,
 } from '../../lib/quality/config';
-import type { ClarityDocument, MeaningSummary } from '../../types';
+import type { ClarityDocument } from '../../types';
 
 Chart.register(...registerables);
 
@@ -108,7 +108,9 @@ export function Progress({ activeDoc }: ProgressProps) {
 
   const report          = activeDoc?.report ?? null;
   const simplifiedReport = activeDoc?.simplifiedReport ?? null;
-  const meaningKept = activeDoc ? averageSimilarity(activeDoc.results) : null;
+  // Same row as the Meaning Preserved table, so the card can't disagree with it
+  const meaningRows = useMeaningRows();
+  const activeMeaning = activeDoc ? meaningRows.find(r => r.id === activeDoc.id) ?? null : null;
 
   // ── Render ──────────────────────────────────────────────────────────────────
   if (loading) {
@@ -177,11 +179,25 @@ export function Progress({ activeDoc }: ProgressProps) {
             <ComparisonRow label="Grade Level"        before={report.estimatedGradeLevel} after={simplifiedReport.estimatedGradeLevel} />
             <ComparisonRow label="Jargon Density"     before={report.jargonDensity}        after={simplifiedReport.jargonDensity}        unit="%" />
             <ComparisonRow label="Avg Sentence Length" before={report.avgSentenceLength}   after={simplifiedReport.avgSentenceLength}    unit=" words" />
-            {meaningKept !== null && (
+            {activeMeaning && activeMeaning.avgSimilarity !== null && (
               <div className="comparison-row meaning-row">
-                <span className="comparison-label">Meaning Kept</span>
-                <span className="comparison-after" title="Average similarity of checked paragraphs to the original">
-                  {Math.round(meaningKept * 100)}%
+                <span className="comparison-label">Avg similarity</span>
+                <span
+                  className="comparison-after"
+                  title="Mean similarity of every checked paragraph to its original, passed or not"
+                >
+                  {activeMeaning.avgSimilarity.toFixed(2)}
+                </span>
+              </div>
+            )}
+            {activeMeaning && (
+              <div className="comparison-row meaning-row">
+                <span className="comparison-label">Meaning pass rate</span>
+                <span
+                  className="comparison-after"
+                  title="Fully checked paragraphs that kept their meaning (passed / checked)"
+                >
+                  {passRateLabel(activeMeaning.stats)}
                 </span>
               </div>
             )}
@@ -191,28 +207,26 @@ export function Progress({ activeDoc }: ProgressProps) {
         <p className="comparison-hint">Run a simplification to see your Before vs. After comparison here.</p>
       )}
 
-      <MeaningTable />
+      <MeaningTable rows={meaningRows} />
     </div>
   );
 }
 
 // ─── MeaningTable ─────────────────────────────────────────────────────────────
 
-interface DocMeaningRow {
+interface DocMeaningRow extends MeaningOverview {
   id: string;
   title: string;
-  stats: MeaningSummary;
-  avgSimilarity: number | null;
 }
 
 const percent = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`);
 
 /**
- * Thesis metric per stored document: the share of fully checked paragraphs
- * whose meaning was preserved, with coverage next to it so missing checks
- * can't hide behind a high pass rate (see lib/quality/similarity.ts).
+ * Meaning numbers of every stored document that has checked paragraphs,
+ * reloaded when documents change. The Last Session card and the table both
+ * read these rows.
  */
-function MeaningTable() {
+function useMeaningRows(): DocMeaningRow[] {
   const [rows, setRows] = useState<DocMeaningRow[]>([]);
 
   useEffect(() => {
@@ -222,12 +236,7 @@ function MeaningTable() {
       const docs = await Promise.all(index.map(entry => getDocument(entry.id)));
       const next = docs
         .filter((d): d is ClarityDocument => d !== null)
-        .map(d => ({
-          id: d.id,
-          title: d.title,
-          stats: meaningStats(d.results),
-          avgSimilarity: averageSimilarity(d.results),
-        }))
+        .map(d => ({ id: d.id, title: d.title, ...meaningOverview(d.results) }))
         .filter(r => r.stats.passed + r.stats.failed + r.stats.notFullyChecked > 0);
       if (!cancelled) setRows(next);
     }
@@ -243,6 +252,15 @@ function MeaningTable() {
     return () => { cancelled = true; chrome.storage.onChanged.removeListener(listener); };
   }, []);
 
+  return rows;
+}
+
+/**
+ * Thesis metric per stored document: the share of fully checked paragraphs
+ * whose meaning was preserved, with coverage next to it so missing checks
+ * can't hide behind a high pass rate (see lib/quality/similarity.ts).
+ */
+function MeaningTable({ rows }: { rows: DocMeaningRow[] }) {
   if (rows.length === 0) return null;
 
   return (
@@ -269,7 +287,7 @@ function MeaningTable() {
           {rows.map(({ id, title, stats, avgSimilarity }) => (
             <tr key={id}>
               <th scope="row" className="meaning-doc-title">{title}</th>
-              <td className="meaning-pass-rate">{percent(stats.passRate)}</td>
+              <td className="meaning-pass-rate">{passRateLabel(stats)}</td>
               <td
                 className={stats.thesisGrade ? '' : 'coverage-low'}
                 title={stats.thesisGrade ? undefined : 'Not thesis-grade: too few paragraphs were fully checked'}

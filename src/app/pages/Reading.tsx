@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { segmentHtml, simplifiableNodes } from '../../lib/segmentation/segmenter';
-import { parseSimplifiedText } from '../../lib/render/format-output';
+import { nestByDepth, parseSimplifiedText, type TreeItem } from '../../lib/render/format-output';
 import { getHostname } from '../../lib/utils/url';
 // run-log.ts has type-only imports; never import lib/quality/score.ts here
 import { buildRunReport, runReportFileName } from '../../lib/run/run-log';
@@ -27,7 +27,8 @@ interface ReadingProps {
 
 type NodeGroup =
   | { kind: 'single'; node: ContentNode }
-  | { kind: 'list'; items: ContentNode[] };
+  /** Consecutive list items, nested by their depth (pasted Word sub-bullets). */
+  | { kind: 'list'; items: TreeItem<ContentNode>[] };
 
 interface NodeResult {
   text: string;
@@ -51,20 +52,24 @@ function storedMeaning(r: StoredResult): StoredMeaning {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Group consecutive list-item nodes so they render inside a <ul>. */
+/** Group consecutive list-item nodes so they render inside nested lists. */
 function groupNodes(nodes: ContentNode[]): NodeGroup[] {
   const groups: NodeGroup[] = [];
   let listBuf: ContentNode[] = [];
+  const flushList = () => {
+    if (listBuf.length) groups.push({ kind: 'list', items: nestByDepth(listBuf, n => n.depth ?? 0) });
+    listBuf = [];
+  };
 
   for (const node of nodes) {
     if (node.type === 'list-item') {
       listBuf.push(node);
     } else {
-      if (listBuf.length) { groups.push({ kind: 'list', items: [...listBuf] }); listBuf = []; }
+      flushList();
       groups.push({ kind: 'single', node });
     }
   }
-  if (listBuf.length) groups.push({ kind: 'list', items: listBuf });
+  flushList();
   return groups;
 }
 
@@ -150,6 +155,30 @@ export function Reading({
     if (s) return { text: s.simplifiedText, status: s.status, meaning: storedMeaning(s), skipped: s.skipped };
     return { text: '', status: 'pending' };
   }, [isLiveRun, runState, storedById]);
+
+  // ── Nested list rendering (a sub-list goes inside its parent's <li>) ───────
+  const renderNodeList = (items: TreeItem<ContentNode>[], key?: string): React.JSX.Element => {
+    const ListTag: 'ol' | 'ul' = items[0]?.item.ordered ? 'ol' : 'ul';
+    return (
+      <ListTag key={key} className="reading-list">
+        {items.map(({ item: node, children }) => (
+          <li key={node.id}>
+            <NodeBlock
+              node={node}
+              result={getResult(node.id)}
+              isActive={activeParagraphId === node.id}
+              isRevealed={revealedIds.has(node.id)}
+              focusModeOn={displayPrefs.focusMode}
+              onReveal={() => toggleReveal(node.id)}
+              onHover={setHoveredId}
+              onFocus={setFocusedId}
+            />
+            {children.length > 0 && renderNodeList(children)}
+          </li>
+        ))}
+      </ListTag>
+    );
+  };
 
   // ── Reveal toggle ───────────────────────────────────────────────────────────
   const toggleReveal = useCallback((id: string) => {
@@ -308,29 +337,7 @@ export function Reading({
       {/* ── Reading column ── */}
       <div className={contentClasses}>
         {groups.map((group, gi) => {
-          if (group.kind === 'list') {
-            return (
-              <ul key={`list-${gi}`} className="reading-list">
-                {group.items.map(node => {
-                  const result = getResult(node.id);
-                  return (
-                    <li key={node.id}>
-                      <NodeBlock
-                        node={node}
-                        result={result}
-                        isActive={activeParagraphId === node.id}
-                        isRevealed={revealedIds.has(node.id)}
-                        focusModeOn={displayPrefs.focusMode}
-                        onReveal={() => toggleReveal(node.id)}
-                        onHover={setHoveredId}
-                        onFocus={setFocusedId}
-                      />
-                    </li>
-                  );
-                })}
-              </ul>
-            );
-          }
+          if (group.kind === 'list') return renderNodeList(group.items, `list-${gi}`);
 
           const { node } = group;
           const result = getResult(node.id);
@@ -501,18 +508,23 @@ function FormattedBlocks({ blocks, showCaret }: { blocks: Block[]; showCaret: bo
           );
         }
 
-        const ListTag = block.ordered ? 'ol' : 'ul';
+        // Sub-lists render as <ul>: only top-level items say whether a list is ordered
         const lastItem = block.items.length - 1;
-        return (
-          <ListTag key={bi} className="node-list">
-            {block.items.map((item, ii) => (
-              <li key={ii}>
-                {item}
-                {showCaret && isLastBlock && ii === lastItem && caret}
-              </li>
-            ))}
-          </ListTag>
-        );
+        const renderItems = (items: TreeItem<string>[], ordered: boolean, key?: number): React.JSX.Element => {
+          const ListTag: 'ol' | 'ul' = ordered ? 'ol' : 'ul';
+          return (
+            <ListTag key={key} className="node-list">
+              {items.map(({ item, index, children }) => (
+                <li key={index}>
+                  {item}
+                  {showCaret && isLastBlock && index === lastItem && caret}
+                  {children.length > 0 && renderItems(children, false)}
+                </li>
+              ))}
+            </ListTag>
+          );
+        };
+        return renderItems(nestByDepth(block.items, (_, i) => block.depths?.[i] ?? 0), block.ordered, bi);
       })}
     </>
   );

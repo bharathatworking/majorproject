@@ -19,23 +19,38 @@
  *    "- a\n\n- b"). Single newlines inside a paragraph are joined with a space.
  *  - Inline splitting only happens on "•": inline "-" and "–" are normal
  *    hyphens and dashes in prose.
+ *  - Sub-bullets: "o" / "◦" (Word's second level) are depth 1, "▪" / "■"
+ *    depth 2, and each 2 spaces (or a tab) of indentation before a marker adds
+ *    a level; the larger wins. Depth never jumps more than one level below the
+ *    previous item. The list block carries `depths` only when it is nested,
+ *    and only top-level items decide whether the list is ordered.
+ *  - nestByDepth turns flat items with depths into a tree; the Reading page
+ *    uses it for both model-output lists and pasted list-item nodes.
  */
 
 import type { Block } from '../../types';
 
 // ─── Patterns ─────────────────────────────────────────────────────────────────
 
-/** Unordered marker (group 1) or ordered number (group 2), then the item text (group 3). */
-const BULLET_LINE = /^\s*(?:•\s*|([-*–])\s+|(\d{1,2})[.)]\s+)(.*)$/;
+/** Indentation, then a marker (sub-bullet or ordered number captured), then the item text. */
+const BULLET_LINE =
+  /^(?<indent>[ \t]*)(?:(?<sub1>◦|o(?=\s))\s*|(?<sub2>[▪■])\s*|•\s*|[-*–]\s+|(?<num>\d{1,2})[.)]\s+)(?<text>.*)$/;
 
 /** A marker with nothing after it yet (common mid-stream): "-", "*", "1." … */
-const BARE_MARKER = /^\s*(?:[-*–•]|\d{1,2}[.)])\s*$/;
+const BARE_MARKER = /^\s*(?:[-*–•◦▪■o]|\d{1,2}[.)])\s*$/;
 
 const INLINE_BULLET = /\s*•\s*/;
 
 const ENDS_WITH_PUNCTUATION = /[.!?:;]$/;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Nesting level of a bullet line: its marker's level or its indentation, whichever is larger. */
+function bulletDepth(groups: Record<string, string | undefined>): number {
+  const markerDepth = groups.sub2 !== undefined ? 2 : groups.sub1 !== undefined ? 1 : 0;
+  const indent = (groups.indent ?? '').replace(/\t/g, '  ').length;
+  return Math.max(markerDepth, Math.floor(indent / 2));
+}
 
 /** Remove **bold** / __bold__ markers, including unclosed ones left mid-stream. */
 function stripEmphasis(text: string): string {
@@ -53,7 +68,7 @@ export function parseSimplifiedText(text: string): Block[] {
   const lines = stripEmphasis(text.replace(/\r\n?/g, '\n')).split('\n');
 
   let para: string[] = [];
-  let list: { ordered: boolean; items: string[] } | null = null;
+  let list: { ordered: boolean; items: string[]; depths: number[] } | null = null;
   let afterBlank = false;
 
   const flushPara = () => {
@@ -64,16 +79,25 @@ export function parseSimplifiedText(text: string): Block[] {
 
   const flushList = () => {
     if (list && list.items.length > 0) {
-      blocks.push({ kind: 'list', ordered: list.ordered, items: list.items });
+      const nested = list.depths.some(d => d > 0);
+      blocks.push({
+        kind: 'list', ordered: list.ordered, items: list.items, ...(nested && { depths: list.depths }),
+      });
     }
     list = null;
   };
 
-  const addItem = (ordered: boolean, item: string) => {
-    if (list && list.ordered !== ordered) flushList();
-    if (!list) list = { ordered, items: [] };
+  const addItem = (ordered: boolean, item: string, depth = 0) => {
     const trimmed = item.trim();
-    if (trimmed) list.items.push(trimmed);
+    // Sub-items never switch the list type; top-level ones do
+    const prevDepth = list?.depths.at(-1) ?? -1;
+    const clamped = Math.min(depth, prevDepth + 1);
+    if (list && clamped === 0 && list.ordered !== ordered) flushList();
+    if (!list) list = { ordered, items: [], depths: [] };
+    if (trimmed) {
+      list.items.push(trimmed);
+      list.depths.push(list.items.length === 1 ? 0 : clamped);
+    }
   };
 
   for (const line of lines) {
@@ -89,10 +113,11 @@ export function parseSimplifiedText(text: string): Block[] {
 
     // Bullet line (may itself carry more inline "•" items)
     const m = BULLET_LINE.exec(line);
-    if (m) {
+    if (m?.groups) {
       flushPara();
-      const ordered = m[2] !== undefined;
-      for (const item of m[3].split(INLINE_BULLET)) addItem(ordered, item);
+      const ordered = m.groups.num !== undefined;
+      const depth = bulletDepth(m.groups);
+      for (const item of (m.groups.text ?? '').split(INLINE_BULLET)) addItem(ordered, item, depth);
       afterBlank = false;
       continue;
     }
@@ -109,7 +134,7 @@ export function parseSimplifiedText(text: string): Block[] {
     }
 
     // Indented continuation of the previous list item
-    const openList = list as { ordered: boolean; items: string[] } | null;
+    const openList = list as { ordered: boolean; items: string[]; depths: number[] } | null;
     if (openList && !afterBlank && /^\s/.test(line) && openList.items.length > 0) {
       const last = openList.items.length - 1;
       openList.items[last] = `${openList.items[last]} ${line.trim()}`;
@@ -125,6 +150,34 @@ export function parseSimplifiedText(text: string): Block[] {
   flushPara();
   flushList();
   return blocks;
+}
+
+// ─── Nesting ──────────────────────────────────────────────────────────────────
+
+export interface TreeItem<T> {
+  item: T;
+  /** Position in the flat input. */
+  index: number;
+  children: TreeItem<T>[];
+}
+
+/**
+ * Flat items with depths → a tree. An item hangs under the closest earlier
+ * item one level up; a depth more than one below the previous item is
+ * clamped, and the first item is always top level.
+ */
+export function nestByDepth<T>(items: readonly T[], depthOf: (item: T, index: number) => number): TreeItem<T>[] {
+  const roots: TreeItem<T>[] = [];
+  const path: TreeItem<T>[] = [];   // path[d] = latest item at depth d
+  items.forEach((item, index) => {
+    const depth = Math.max(0, Math.min(Math.floor(depthOf(item, index)) || 0, path.length));
+    const node: TreeItem<T> = { item, index, children: [] };
+    if (depth === 0) roots.push(node);
+    else path[depth - 1].children.push(node);
+    path.length = depth;
+    path.push(node);
+  });
+  return roots;
 }
 
 // ─── Plain text (metrics + rolling context) ───────────────────────────────────

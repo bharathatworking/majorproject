@@ -13,6 +13,10 @@
  *  - Entity matching is forgiving about form, not content: case, possessive
  *    's, punctuation and thousands separators are ignored, and number entities
  *    also match by parsed value ("three" = "3", "1,500" = "1500").
+ *  - Entities compare on their core tokens: a leading in / on / at / the is
+ *    dropped ("in PST" matches "during PST", "on Monday" matches "Monday").
+ *    A time-zone entity matches when one of its abbreviations is still a
+ *    whole word of the output ("PST time zone" is kept by "during PST").
  *  - Headings and texts under MIN_WORDS_FOR_CHECK words are not checked:
  *    embeddings of a few words are noisy, and a retry there costs more than it
  *    saves.
@@ -20,6 +24,7 @@
 
 import nlp from 'compromise';
 import numberPlugin, { type NumbersMethods } from 'compromise-numbers';
+import { TIME_ZONES } from '../segmentation/time-zones';
 import { MIN_WORDS_FOR_CHECK } from './config';
 import { cosineSimilarity } from './similarity';
 import type { ContentNode, Entity, MeaningCheck } from '../../types';
@@ -57,6 +62,19 @@ function normalize(text: string): string {
   return ` ${words} `;
 }
 
+const LEADING_FILLER = new Set(['in', 'on', 'at', 'the']);
+
+/**
+ * normalize() without leading in / on / at / the words, padded the same way.
+ * Falls back to the full form when nothing else is left.
+ */
+export function coreTokens(text: string): string {
+  const words = normalize(text).trim().split(' ').filter(Boolean);
+  let i = 0;
+  while (i < words.length - 1 && LEADING_FILLER.has(words[i])) i++;
+  return ` ${words.slice(i).join(' ')} `;
+}
+
 /** Parsed numeric values in a text ("three apples and 1,500 pears" → [3, 1500]). */
 function numberValues(text: string): number[] {
   const values = nlp<NumbersMethods>(text).numbers().get();
@@ -73,8 +91,13 @@ export function findMissingEntities(entities: readonly Entity[], simplified: str
   const missing: string[] = [];
 
   for (const entity of entities) {
-    const needle = normalize(entity.text);
+    const needle = coreTokens(entity.text);
     if (needle.trim() === '' || haystack.includes(needle)) continue;
+
+    if (entity.type === 'timezone') {
+      const zones = needle.trim().split(' ').filter(w => TIME_ZONES.has(w));
+      if (zones.length > 0 && zones.every(z => haystack.includes(` ${z} `))) continue;
+    }
 
     if (entity.type === 'number') {
       const values = numberValues(entity.text);

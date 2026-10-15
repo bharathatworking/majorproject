@@ -49,6 +49,7 @@ export const MEANING_RETRY_INSTRUCTION =
 const ENTITY_NOUN: Record<Entity['type'], string | null> = {
   number: 'the number',
   date: 'the date',
+  timezone: 'the time zone',
   person: 'the name',
   place: 'the place',
   org: 'the organization',

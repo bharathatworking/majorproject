@@ -59,7 +59,7 @@ src/
     hooks/        useDocuments.ts, useRunState.ts, useDisplayPrefs.ts
   lib/
     extraction/   extractor.ts (noise strip -> Readability -> text-density fallback -> DOMPurify -> SHA-256)
-    input/        paste.ts, pdf.ts
+    input/        paste.ts, pdf.ts, text-blocks.ts
     llm/          ollama-provider.ts, ollama-stream.ts
     metrics/      engine.ts, syllables.ts, common-words.ts, word-set.ts, node-grade.ts,
                   difficult-words.ts, data/common-words.txt
@@ -70,14 +70,14 @@ src/
                   meaning.ts (thesis verdict), score.ts
     render/       format-output.ts
     run/          simplify.ts, run-log.ts, timing.ts
-    segmentation/ segmenter.ts, ner.ts
+    segmentation/ segmenter.ts, ner.ts, time-zones.ts
     storage/      documents.ts, cache.ts, progress.ts, settings.ts
     utils/        hash.ts, html.ts, url.ts, restricted-pages.ts, write-queue.ts
   types/          index.ts (all shared types), compromise-numbers.d.ts, crxjs.d.ts
 tests/
   mocks/          chrome.ts (installChromeMock), fixtures.ts (makeReport, makeDocInput,
                   makeAssessment, makeEntailment, makeRunMeaningSummary)
-  unit/           23 *.test.ts files (see section 8)
+  unit/           24 *.test.ts files (see section 8)
 ```
 
 `dist/`, `node_modules/` and `coverage/` are git-ignored.
@@ -100,7 +100,10 @@ tests/
 
 1. **Input**
    - *Toolbar click:* the worker sets session `capture:status = { state: 'extracting' }` and injects the extractor **before any other await** (the `activeTab` grant is tied to the click gesture), then calls `openOrFocusApp()`. Restricted URLs (`isRestrictedUrl`: chrome://, Web Store, other extensions) are not injected; a friendly error goes into `capture:status` and is logged with `console.log`, not `console.error`. Text shorter than 100 characters counts as "No readable article text". On success the worker calls `upsertDocument({ report: null, ... })`.
-   - *Paste or PDF:* `NewDocDialog` calls `createDocumentFromPaste` (`src/lib/input/paste.ts`: one `<p>` per blank-line block) or `createDocumentFromPDF` (`src/lib/input/pdf.ts`: one `<p>` per page, `pdfjs-dist` imported dynamically), then the same `upsertDocument`.
+   - *Paste or PDF:* `NewDocDialog` calls `createDocumentFromPaste` (`src/lib/input/paste.ts`) or `createDocumentFromPDF` (`src/lib/input/pdf.ts`, `pdfjs-dist` imported dynamically), then the same `upsertDocument`. Both build their HTML with the pure `src/lib/input/text-blocks.ts`:
+     - **Paste:** `textToBlocks` starts a block at every blank line and at every line that begins with a list marker (`1.` `2)` `a.` `b.` `i.` `ii.` `o` `•` `-` `▪` …), with Word's list levels as depth (`1.`/`•`/`-` = 0, `a.`/`o` = 1, `i.`/`▪` = 2; never more than one level below the previous item). `blocksToHtml` writes `<p>` and `<li data-depth="d">` inside `<ul>`/`<ol>`.
+     - **Both:** any block over `MAX_NODE_SENTENCES` (8) sentences or `MAX_NODE_WORDS` (150) words is split greedily at sentence boundaries (`chunkSentences`); a PDF page becomes several `<p>` (`proseToHtml`).
+     - The split happens when a document is created, never in the segmenter, so stored documents keep their HTML and node IDs (dedup never rewrites `html`); they are not migrated.
    - All three paths hash with `sha256` from `src/lib/utils/hash.ts`, so dedup works. Re-capturing identical content refreshes the existing document and keeps its results.
 2. **Storage → UI.** `upsertDocument` sets `docs:active`. `useDocuments` sees it through `onChanged` and loads the document. It also listens for `doc:<id>` changes so `saveDocument` writes reach React state.
 3. **Analysis (in the app, never in the worker).** `Dashboard` sees `report === null`, runs `computeReadabilityReport(textContent, await getCommonWordSet())` and saves the result. "Simplify now" stays disabled until a report exists.
@@ -113,7 +116,7 @@ tests/
       - The depth tier comes from current minus target: ≤0 `none`, ≤2 `light`, ≤5 `moderate`, else `aggressive`. The max sentence length per tier is 12, 16, 20 or 25 words.
       - Reader flags: `avoidIdioms` (purpose `esl`), `oneIdeaPerSentence` (purpose `dyslexia-friendly`), `explainTerms` (purpose `expert-to-lay` or familiarity `novice`) and `keepTerms` (familiarity `expert`, which wins over `explainTerms`).
       - The `esl` and `dyslexia-friendly` purposes cap sentences at 15 words, except in the `none` tier.
-   2. **Segment.** `segmentHtml(html, title, hash)` (`src/lib/segmentation/segmenter.ts`, uses `DOMParser`) returns flat `ContentNode`s with **deterministic IDs `n0, n1, …`**. `<li>` items are flattened to top-level `list-item` nodes. No NER happens here. `simplifiableNodes` (drops tables and empty nodes) is the shared filter, so a node index means the same node in both Reading and the run.
+   2. **Segment.** `segmentHtml(html, title, hash)` (`src/lib/segmentation/segmenter.ts`, uses `DOMParser`) returns flat `ContentNode`s with **deterministic IDs `n0, n1, …`**. `<li>` items are flattened to top-level `list-item` nodes; `data-depth` becomes `depth` (clamped to 0–3, left out at 0) and `<ol>` items get `ordered: true`. No NER happens here. `simplifiableNodes` (drops tables and empty nodes) is the shared filter, so a node index means the same node in both Reading and the run.
    3. **Order.** `rotateFrom(nodes, startIndex)` starts at the first node visible in Reading and wraps around. Each node takes the first path that applies:
       - **Already simple:** `isAlreadySimple` (`src/lib/metrics/node-grade.ts`) finds the node's grade at or below the target. The original is stored as `done` with `skipped: true`, with no model call.
       - **Cache hit:** `src/lib/storage/cache.ts` keys on `sha256(node text + sorted spec JSON + model)`, plus a quality tag for Extra-quality runs. Only outputs that passed the stage 6C checks are cached, with their verdict. Entries carry `format: CACHE_FORMAT` (2); older entries (judged by the old 0.80 standard) are misses. A cached verdict that was not fully checked (NLI or embedding model missing then) is a miss while both checks are available.
@@ -123,7 +126,7 @@ tests/
    5. **Call.** `OllamaProvider.simplifyChunk` POSTs `/api/chat` with `stream: true` and `keep_alive: '10m'`. `parseOllamaStream` (`src/lib/llm/ollama-stream.ts`) buffers lines split across chunks, skips malformed lines with a `[Clarity]` warning, throws on `{"error": ...}` lines and stops at `done: true`. Ollama is stateless, so the "session" is just a stored system prompt (`createBaseSession`).
    6. **Stage 6C: meaning preservation, thesis standard** (`assessMeaning` in `src/lib/quality/meaning.ts`; every constant in `config.ts`). It covers every node except headings and texts under 8 words (`shouldCheckNode`, `MIN_WORDS_FOR_CHECK`). A version **passes** only if all three hold:
       - **SBERT:** `checkMeaning` (`semantic.ts`) embeds original and output in one `/api/embed` call; cosine ≥ `SIMILARITY_THRESHOLD = 0.87`.
-      - **Entities:** `findMissingEntities` finds none missing (case, possessive 's and thousands separators ignored; numbers also match by value). `entityRecall` is over distinct entity texts.
+      - **Entities:** `findMissingEntities` finds none missing (case, possessive 's and thousands separators ignored; numbers also match by value). Entities compare on core tokens (`coreTokens`: a leading in / on / at / the is dropped). `detectEntities` trims trailing punctuation, drops a date's leading in / on / at / the, and types a date that is only a time-zone abbreviation (`TIME_ZONES` in `src/lib/segmentation/time-zones.ts`: PST, EST, IST, UTC, GMT, …) as `timezone`; a time zone is kept when its abbreviation is still a whole word ("in PST time zone" is kept by "during PST"), and a dropped one reads "You dropped the time zone PST." "9am EST" stays a date. `entityRecall` is over distinct entity texts.
       - **NLI** (`checkEntailment` in `nli.ts`): the output is split into sentences (`splitSentences`: `toPlainText`, then the `(?<=[.!?])\s+` rule and line breaks, so each bullet is a sentence). Premise = the original paragraph, hypothesis = each sentence. Every non-exempt sentence needs entailment ≥ `ENTAILMENT_MIN = 0.5`, and every sentence contradiction ≤ `CONTRADICTION_MAX = 0.2`.
       - **Glossary exemptions** (`glossary.ts`, pure, reusable by the offline benchmark): a sentence that defines one of this node's hinted words (`hintedWords` in `builder.ts`, the exact lexical-hint list; empty with `keepTerms` or tier `none`) — "X means / is / is a type of / refers to …" — skips the entailment requirement, never the contradiction one. One exemption per word, at most `floor(0.3 × sentences)` (`GLOSSARY_EXEMPTION_MAX_RATE`), so nodes of 1–3 sentences get none. Parenthetical definitions of hinted words (`word (definition)`) are removed before NLI. Each exemption is logged.
       - **Runtime:** `nli.worker.ts` runs `AutoTokenizer` + `AutoModelForSequenceClassification` (`dtype: 'q8'`, `device: 'wasm'`, one thread) with `env.allowRemoteModels = false`, model files from `chrome.runtime.getURL('models/')` and the wasm from `ort/` (`wasmPaths` set explicitly, `useWasmCache` off — the default loads the factory from a `blob:` URL, which the CSP blocks). Labels come from the model's `id2label`. `NliClient` batches pairs (`NLI_BATCH_SIZE = 8`) and keeps an in-memory LRU (`NLI_CACHE_MAX = 500`) keyed by `sha256(premise, hypothesis)`. The worker is created lazily, once per app tab.
@@ -137,10 +140,10 @@ tests/
    8. **Persist.** Each finished node (`done` or `error`) is saved immediately with `saveDocument`. The kept version's verdict goes on the result (`StoredMeaning`: `similarity`, `entityRecall`, `minEntailment`, `maxContradiction`, `nliChecked`, `passed`, `reasons`). Each node logs `[Clarity] Node nX (source, meaning status) N.NN s`, and the run logs a summary line (`summarizeRun` in `src/lib/run/timing.ts`) with the meaning pass rate, coverage and NLI average. Below 90% coverage (`THESIS_COVERAGE_MIN`) it warns that the pass rate is not thesis-grade.
       - **Thesis metric** (`summarizeMeaning` / `meaningStats` in `similarity.ts`): each node is `passed`/`failed` (fully checked), `not-fully-checked` (a check fell back), `excluded` (headings, short texts, already simple) or `error`. Pass rate = passed / fully checked; coverage = fully checked / (fully checked + not fully checked). The run log's `summary.meaning` has these counts, `avgNliMs`, and the glossary `exemptedSentences` count and `exemptionRate`.
    9. **Finish.** The run computes `simplifiedReport`, calls `recordSession(targetGrade)`, then `addRunLog` (also when cancelled). The report and rolling context use `toPlainText`; the stored text keeps the raw output with its bullet markers.
-5. **Display.** `Reading` re-segments the HTML and merges `runState.liveResults` with `doc.results`. `NodeBlock` renders `parseSimplifiedText` blocks as real `<p>`, `<ul>`/`<ol>` and `<li>` elements (never `dangerouslySetInnerHTML`).
+5. **Display.** `Reading` re-segments the HTML and merges `runState.liveResults` with `doc.results`. `NodeBlock` renders `parseSimplifiedText` blocks as real `<p>`, `<ul>`/`<ol>` and `<li>` elements (never `dangerouslySetInnerHTML`). Sub-bullets nest: list-item nodes by their `depth`, and model output by `o`/`◦` (depth 1), `▪`/`■` (depth 2) or 2 spaces / a tab of indentation per level (the list `Block` carries `depths` only when nested). Both go through `nestByDepth` (`format-output.ts`).
    - Clicking a paragraph reveals the original. Focus mode dims the others. Hovering shows the meaning badge (`meaningBadge`): "meaning ✓ 0.91", "meaning ✓ 0.91 · no NLI", or amber "meaning ⚠ <first reason>" with every reason and value in the tooltip; results from before the thesis standard show "meaning 0.82". Skipped nodes show an "already simple" tag. Non-fatal notices (`runState.notices`, deduplicated) render as info banners.
    - "Download run report (JSON)" saves `buildRunReport(doc)` (format `clarity-run-report/2`, the last 5 runs).
-   - `Progress` (a `React.lazy` page with Chart.js) shows the weekly trend, a before/after comparison with "Meaning Kept" (`averageSimilarity`), and a "Meaning Preserved" table with one row per stored document: pass rate (the thesis metric), coverage (amber below 90%), average similarity and passed / failed / not-fully-checked counts.
+   - `Progress` (a `React.lazy` page with Chart.js) shows the weekly trend, a before/after comparison with "Avg similarity 0.87" and "Meaning pass rate X% (passed/checked)" (`passRateLabel`), and a "Meaning Preserved" table with one row per stored document: pass rate (the thesis metric), coverage (amber below 90%), average similarity and passed / failed / not-fully-checked counts. The card and the table read the same rows (`useMeaningRows`, each built by `meaningOverview` in `similarity.ts`), so they can't disagree.
 
 ### App-level state rules
 - The run lives in `useRunState` at App level, with an `AbortController`, so streaming survives route changes.
@@ -150,7 +153,7 @@ tests/
 - The sidebar status chip polls `/api/tags` every 30 s (`AVAILABILITY_POLL_MS`) and on window focus.
 
 ### Bundle splitting
-The main app chunk is about 278 kB (94 kB gzip). **Never statically import** `pdfjs-dist`, `chart.js`, `@huggingface/transformers`, `pages/Progress`, `lib/run/simplify`, `lib/segmentation/ner`, `lib/quality/semantic`, `lib/quality/meaning`, `lib/quality/nli` or `lib/quality/score` from App, Reading, Dashboard, Settings, the segmenter or any hook. Type-only imports are fine. UI code reads thresholds from `lib/quality/config.ts` and stats from `lib/quality/similarity.ts`, which import nothing heavy. Never import `src/lib/metrics/` from the background or content scripts, because the word list (`?raw` import) would end up in the worker.
+The main app chunk is about 281 kB (96 kB gzip). **Never statically import** `pdfjs-dist`, `chart.js`, `@huggingface/transformers`, `pages/Progress`, `lib/run/simplify`, `lib/segmentation/ner`, `lib/quality/semantic`, `lib/quality/meaning`, `lib/quality/nli` or `lib/quality/score` from App, Reading, Dashboard, Settings, the segmenter or any hook. Type-only imports are fine. UI code reads thresholds from `lib/quality/config.ts` and stats from `lib/quality/similarity.ts`, which import nothing heavy. Never import `src/lib/metrics/` from the background or content scripts, because the word list (`?raw` import) would end up in the worker.
 - The run module loads `nli.ts` with a dynamic `import()`; Transformers.js and the ONNX Runtime JS live only in the worker chunk (`assets/nli.worker-*.js`, about 490 kB), built as an ES module worker (`worker.format: 'es'`).
 - `vite.config.ts` adds the `onnxruntime-web-use-extern-wasm` resolve condition, so ORT loads its wasm and factory `.mjs` only from `wasmPaths` (`dist/ort/`) instead of Vite emitting a second 27 MB copy.
 
@@ -172,12 +175,13 @@ The main app chunk is about 278 kB (94 kB gzip). **Never statically import** `pd
 | `src/lib/quality/meaning.ts` | `assessMeaning` (thesis verdict), reasons, `buildRetryInstruction`, `meaningScore`, `pickBetterVersion`, `candidatePasses`, `toStoredMeaning`, `MEANING_RETRY_INSTRUCTION` |
 | `src/lib/quality/nli.ts` / `nli.worker.ts` / `glossary.ts` | `checkEntailment`, `splitSentences`, `NliClient`, `createWorkerBackend`, `getNliClient`, `NliUnavailableError` / the Transformers.js worker / `isGlossarySentence`, `selectExemptions`, `stripParentheticalDefinitions` |
 | `src/lib/quality/score.ts` | `scoreCandidate`, `pickBestCandidate`, `readabilityScore`, `lengthScore` |
-| `src/lib/quality/semantic.ts` / `similarity.ts` | `checkMeaning`, `findMissingEntities`, `shouldCheckNode` / `cosineSimilarity`, `averageSimilarity`, `meaningStatusOf`, `summarizeMeaning`, `meaningStats`, `meaningBadge` |
+| `src/lib/quality/semantic.ts` / `similarity.ts` | `checkMeaning`, `findMissingEntities`, `coreTokens`, `shouldCheckNode` / `cosineSimilarity`, `averageSimilarity`, `meaningStatusOf`, `summarizeMeaning`, `meaningStats`, `meaningBadge`, `meaningOverview`, `passRateLabel` |
 | `scripts/fetch-models.mjs` | Downloads the NLI model files from a pinned commit (SHA-256 checked) and copies the ORT asyncify wasm + `.mjs` from `node_modules/onnxruntime-web/dist` |
 | `src/lib/metrics/engine.ts` | `computeReadabilityReport` (eight formulas plus derived stats) |
 | `src/lib/profile/presets.ts` | `PRESETS` (Beginner, Student, Dyslexic-friendly, Non-native English, Elderly reader, Technical learner), `getPreset`, `editProfile` (sets `preset: 'custom'`) |
 | `src/lib/storage/documents.ts` | Document CRUD behind the `enqueue` write queue |
-| `src/lib/render/format-output.ts` | `parseSimplifiedText` (→ `Block[]`), `toPlainText` |
+| `src/lib/render/format-output.ts` | `parseSimplifiedText` (→ `Block[]`), `toPlainText`, `nestByDepth` |
+| `src/lib/input/text-blocks.ts` | `parseListMarker`, `splitSentences`, `chunkSentences`, `textToBlocks`, `blocksToHtml`, `proseToHtml`, `MAX_NODE_SENTENCES`, `MAX_NODE_WORDS` |
 | `src/types/index.ts` | Every shared type (`ClarityDocument`, `StoredResult`, `SimplificationSpec`, `RunLog`, `NavPage`, `CaptureStatus`, `RunMode`, …) |
 
 ## 6. Data
@@ -199,7 +203,8 @@ The main app chunk is about 278 kB (94 kB gzip). **Never statically import** `pd
 | `session` | `capture:status`, `appTabId` | `CaptureStatus`; the app tab ID (the worker and App) |
 
 ### Core shapes (from `src/types/index.ts`)
-- `ContentNode { id; type: 'heading'|'paragraph'|'list'|'list-item'|'table'|'blockquote'; level?; text; entities? }`
+- `ContentNode { id; type: 'heading'|'paragraph'|'list'|'list-item'|'table'|'blockquote'; level?; text; depth?; ordered?; entities? }`
+- `Entity { text; type: 'person'|'org'|'date'|'timezone'|'number'|'place'|'other'; start; end }`
 - `StoredResult { nodeId; originalText; simplifiedText; status: 'pending'|'streaming'|'done'|'error'; type; level?; skipped? }` plus `StoredMeaning { similarity?; entityRecall?; minEntailment?; maxContradiction?; nliChecked?; passed?; reasons? }`. `passed` is set exactly when the node was checked under the thesis standard; results from before it have only `similarity`.
 - `MeaningAssessment` (meaning.ts output): `similarity|null`, `entityRecall`, `missingEntities`, `minEntailment|null`, `maxContradiction|null`, `nliChecked`, `fullyChecked`, `passed`, `reasons`, `exemptedSentences`, `exemptionRate|null`, `nliMs|null`, `nliSentences`.
 - `ReadabilityReport`: Flesch ease, FK grade, Fog, SMOG, Coleman-Liau, ARI, Dale-Chall, average sentence and word length, complex-word %, long-sentence %, type-token ratio, jargon density and `estimatedGradeLevel`.
@@ -242,7 +247,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - **Done:** phases 1 to 4 (capture and documents, Reading, Progress and Settings, paste and PDF), reading presets, purpose-aware prompt rules and the lexical hint, the stage 6C semantic check, the performance work (skip easy nodes, result cache, start at the visible node, model setting, lazy loading), stage 7 (candidate scoring, prompt variants, run report) and Prompt 9 (the thesis meaning standard: SBERT ≥ 0.87 + entities + local NLI, glossary exemptions, pass rate and coverage).
 - **Health on 2026-10-15:** `npm test` passes (23 files, 378 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
 - **Open question on the NLI check (measured 2026-10-15, Node 24 single-thread wasm, same model and runtime as Chrome):** a 5-sentence paragraph with a 144-token premise takes about 730 ms (over the 500 ms budget). With the whole paragraph as premise, faithful paraphrases often score neutral (entailment 0.00), so the pass rate may be far below what the outputs deserve. Not yet measured in Chrome; options are pending the author's decision.
-- **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, similarity, glossary, nli, meaning, score, run-log, timing, simplify.
+- **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, similarity, glossary, nli, meaning, score, run-log, timing, simplify, text-blocks.
 - **Known issues (not yet fixed):**
   - Progress records the *target grade setting* per session, not measured reading ability.
   - Leftovers from the old Chrome built-in AI provider: the unused `_onProgress` parameter of `createBaseSession`, the `'list'` and `'table'` entries in `STORED_TYPE`, and the `'downloadable'` and `'downloading'` values in `LLMAvailability`. A built-in AI (Gemini Nano) provider is **cancelled** and will not be added.

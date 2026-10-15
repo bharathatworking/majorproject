@@ -144,6 +144,16 @@ describe('reasons', () => {
     expect(droppedEntityReason('Paris', 'place')).toBe('You dropped the place Paris.');
     expect(droppedEntityReason('UNESCO', 'org')).toBe('You dropped the organization UNESCO.');
     expect(droppedEntityReason('Magna Carta', 'other')).toBe('You dropped "Magna Carta".');
+    expect(droppedEntityReason('PST', 'timezone')).toBe('You dropped the time zone PST.');
+  });
+
+  it('passes a kept time zone and names a dropped one as a time zone', async () => {
+    const original = 'Please set up the call with Anna, who works in PST, for next Monday.';
+    const zone = [entity('PST', 'timezone')];
+    const kept = await assessMeaning(original, 'Set up the call during PST with Anna next Monday.', zone, [], deps(0.9, makeEntailment()));
+    expect(kept.passed).toBe(true);
+    const dropped = await assessMeaning(original, 'Set up the call with Anna next Monday.', zone, [], deps(0.9, makeEntailment()));
+    expect(dropped.reasons[0]).toBe('You dropped the time zone PST.');
   });
 
   it('quotes the failing sentence', () => {

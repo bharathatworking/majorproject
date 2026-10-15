@@ -21,7 +21,22 @@ import type { ContentNode, SegmentedDocument } from '../../types';
  *    pulled compromise (~400 kB) into the main chunk. The run loop
  *    (lib/run/simplify.ts) detects entities only for nodes it sends to the
  *    model.
+ *
+ * 4. **List depth** — an `<li data-depth="d">` (written by lib/input/text-blocks.ts
+ *    for pasted Word sub-bullets) gets `depth` (clamped to MAX_LIST_DEPTH, left
+ *    out at 0), and items of an `<ol>` get `ordered: true`. Neither changes the
+ *    node IDs, so stored documents still match their results.
  */
+
+const MAX_LIST_DEPTH = 3;
+
+/** Nesting depth from `data-depth`, clamped to 0..MAX_LIST_DEPTH. */
+function listDepth(li: Element): number {
+  const depth = Number.parseInt(li.getAttribute('data-depth') ?? '', 10);
+  return Number.isFinite(depth) ? Math.min(Math.max(depth, 0), MAX_LIST_DEPTH) : 0;
+}
+
+/** Flat ContentNodes of the HTML, with IDs n0, n1, … in document order. */
 export function segmentHtml(html: string, title: string, contentHash: string): SegmentedDocument {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
@@ -71,10 +86,13 @@ export function segmentHtml(html: string, title: string, contentHash: string): S
         if (li.tagName.toLowerCase() === 'li') {
           const text = li.textContent?.trim() ?? '';
           if (text) {
+            const depth = listDepth(li);
             nodes.push({
               id: nextId(),
               type: 'list-item',
               text,
+              ...(depth > 0 && { depth }),
+              ...(tag === 'ol' && { ordered: true }),
             });
           }
         }

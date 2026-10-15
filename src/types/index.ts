@@ -3,6 +3,10 @@ export type ContentNode = {
   type: 'heading' | 'paragraph' | 'list' | 'list-item' | 'table' | 'blockquote';
   level?: number;
   text: string;
+  /** List-item nesting depth (1 = Word "o" sub-bullet); omitted at the top level. */
+  depth?: number;
+  /** List item of an <ol>. */
+  ordered?: boolean;
   children?: ContentNode[];
   entities?: Entity[];
   skipSimplification?: boolean;
@@ -10,7 +14,7 @@ export type ContentNode = {
 
 export type Entity = {
   text: string;
-  type: 'person' | 'org' | 'date' | 'number' | 'place' | 'other';
+  type: 'person' | 'org' | 'date' | 'timezone' | 'number' | 'place' | 'other';
   start: number;
   end: number;
 };
@@ -336,7 +340,13 @@ export interface RunLog {
 /** One rendered block of simplified model output (see lib/render/format-output.ts). */
 export type Block =
   | { kind: 'paragraph'; text: string }
-  | { kind: 'list'; ordered: boolean; items: string[] };
+  | {
+      kind: 'list';
+      ordered: boolean;
+      items: string[];
+      /** Nesting depth per item (sub-bullets); omitted when the list is flat. */
+      depths?: number[];
+    };
 
 export interface SegmentedDocument {
   title: string;

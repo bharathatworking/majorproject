@@ -2,14 +2,16 @@
  * Creates a Clarity document from pasted plain text.
  *
  * - Title:   first non-empty line, truncated to 80 chars
- * - HTML:    blank-line-delimited blocks → <p> tags
+ * - HTML:    blocks from text-blocks.ts: split at blank lines and list-marker
+ *            lines, with oversized blocks split at sentence boundaries;
+ *            list items carry their depth (Word "o" sub-bullets)
  * - Hash:    SHA-256 of trimmed text (same method as extractor.ts)
  * - Minimum: 50 characters to prevent storing empty or trivial snippets
  */
 
 import { upsertDocument } from '../storage/documents';
 import { sha256 } from '../utils/hash';
-import { escapeHtml } from '../utils/html';
+import { blocksToHtml, textToBlocks } from './text-blocks';
 import type { ClarityDocument } from '../../types';
 
 const MIN_LENGTH = 50;
@@ -24,12 +26,7 @@ export async function createDocumentFromPaste(rawText: string): Promise<ClarityD
   const firstLine = trimmed.split('\n').find(l => l.trim()) ?? 'Pasted text';
   const title = firstLine.trim().slice(0, 80);
 
-  // HTML: split on one or more blank lines → paragraph blocks
-  const paragraphs = trimmed.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
-  // Single-line pastes (no blank-line separators) become one paragraph
-  const html = (paragraphs.length > 0 ? paragraphs : [trimmed])
-    .map(p => `<p>${escapeHtml(p)}</p>`)
-    .join('\n');
+  const html = blocksToHtml(textToBlocks(trimmed));
 
   const contentHash = await sha256(trimmed);
 

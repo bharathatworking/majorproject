@@ -798,6 +798,14 @@ h6.reading-heading { font-size: 1rem; }
   list-style: disc;
 }
 .reading-list li { margin: 0.25rem 0; }
+ol.reading-list { list-style: decimal; }
+/* Nested lists (pasted Word sub-bullets): Word's level markers */
+.reading-list .reading-list { margin: 0.2rem 0; }
+ul.reading-list ul.reading-list,
+ol.reading-list ul.reading-list { list-style: circle; }
+.reading-list .reading-list ul.reading-list { list-style: square; }
+.reading-list ol.reading-list { list-style: lower-alpha; }
+.reading-list .reading-list ol.reading-list { list-style: lower-roman; }
 
 /* ── Node block ────────────────────────────────────────────── */
 .node-block {
@@ -847,6 +855,9 @@ ol.node-list { list-style: decimal; }
   padding-left: 0.25em;
 }
 .node-list li::marker { color: var(--accent); }
+.node-list .node-list { margin: 0.2em 0 0; }
+.node-list ul.node-list { list-style: circle; }
+.node-list .node-list ul.node-list { list-style: square; }
 
 .reading-content.dyslexia-font .node-list { padding-left: 1.9em; }
 .reading-content.dyslexia-font .node-list li { margin: 0.45em 0; }

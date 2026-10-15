@@ -14,6 +14,10 @@
  *    (eligible = fully checked + not fully checked), so a low NLI coverage
  *    can't hide behind a high pass rate. A pass rate is thesis-grade only when
  *    coverage ≥ THESIS_COVERAGE_MIN.
+ *  - Average similarity is a different number (mean SBERT cosine of every
+ *    checked result, passed or not). meaningOverview returns both, so the
+ *    Progress card and table show them from one computation and can't
+ *    disagree.
  */
 
 import {
@@ -142,4 +146,21 @@ export function averageSimilarity(results: readonly StoredResult[]): number | nu
     .map(r => r.similarity as number);
   if (scores.length === 0) return null;
   return scores.reduce((sum, s) => sum + s, 0) / scores.length;
+}
+
+/** A document's meaning numbers, as the Progress card and table show them. */
+export interface MeaningOverview {
+  stats: MeaningSummary;
+  avgSimilarity: number | null;
+}
+
+export function meaningOverview(results: readonly StoredResult[]): MeaningOverview {
+  return { stats: meaningStats(results), avgSimilarity: averageSimilarity(results) };
+}
+
+/** "42% (5/12)": passed / fully checked paragraphs; "—" when none were fully checked. */
+export function passRateLabel(stats: MeaningSummary): string {
+  const checked = stats.passed + stats.failed;
+  if (stats.passRate === null || checked === 0) return '—';
+  return `${Math.round(stats.passRate * 100)}% (${stats.passed}/${checked})`;
 }
