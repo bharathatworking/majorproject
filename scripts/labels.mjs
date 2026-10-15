@@ -18,9 +18,10 @@
  *    separator in some locales; import accepts , or ; (read from the header).
  *  - Export refuses to overwrite a CSV that already has labels, unless
  *    --force: a re-export must never wipe your work.
- *  - Import accepts faithful / unfaithful (also f / u, any case). An empty
- *    my_label leaves the item unreviewed; anything else is an error naming
- *    the row, and nothing is written. Labels go to `label`, notes to
+ *  - Import accepts faithful / unfaithful (also f / u, any case). `unsure`
+ *    (or ?) marks the item excluded: no label, kept out of the calibration.
+ *    An empty my_label leaves the item unreviewed; anything else is an error
+ *    naming the row, and nothing is written. Labels go to `label`, notes to
  *    `labelNote`, and `reviewed` becomes true.
  */
 
@@ -108,6 +109,7 @@ function normalizeLabel(value) {
   if (v === '') return null;
   if (v === 'f' || v === 'faithful') return 'faithful';
   if (v === 'u' || v === 'unfaithful') return 'unfaithful';
+  if (v === 'unsure' || v === '?') return 'unsure';
   return undefined;
 }
 
@@ -153,14 +155,22 @@ async function importLabels() {
       return;
     }
     const label = normalizeLabel(r[labelCol] ?? '');
-    if (label === undefined) errors.push(`row ${rowNo} (${id}): my_label "${r[labelCol]}" is not faithful / unfaithful / f / u`);
+    if (label === undefined) errors.push(`row ${rowNo} (${id}): my_label "${r[labelCol]}" is not faithful / unfaithful / unsure / f / u`);
     else if (label !== null) updates.push({ item, label, note: (r[noteCol] ?? '').trim() });
   });
   if (errors.length > 0) throw new Error(`Nothing imported:\n  ${errors.join('\n  ')}`);
 
   for (const { item, label, note } of updates) {
-    item.label = label;
-    item.reviewed = true;
+    if (label === 'unsure') {
+      // Kept out of the calibration: no label, not reviewed, marked excluded
+      delete item.label;
+      item.reviewed = false;
+      item.excluded = 'unsure';
+    } else {
+      item.label = label;
+      item.reviewed = true;
+      delete item.excluded;
+    }
     if (note) item.labelNote = note;
     else delete item.labelNote;
   }
@@ -170,7 +180,8 @@ async function importLabels() {
     `[Clarity] ${updates.length} labels read from ${file}; ` +
     `dev ${count('dev', 'faithful')} faithful / ${count('dev', 'unfaithful')} unfaithful, ` +
     `test ${count('test', 'faithful')} / ${count('test', 'unfaithful')}; ` +
-    `${real.filter(i => !i.reviewed).length} real items still unlabelled`,
+    `${real.filter(i => i.excluded === 'unsure').length} unsure (excluded), ` +
+    `${real.filter(i => !i.reviewed && !i.excluded).length} real items still unlabelled`,
   );
   if (flag('--dry-run')) {
     console.log('[Clarity] Dry run: paragraph-items.jsonl not written');
@@ -185,7 +196,7 @@ function selfTest() {
   if (JSON.stringify(back) !== JSON.stringify(rows)) throw new Error(`round trip failed: ${JSON.stringify(back)}`);
   const semi = parseCsv(toCsv(rows, ';'));
   if (JSON.stringify(semi) !== JSON.stringify(rows)) throw new Error('semicolon round trip failed');
-  for (const [v, want] of [['F', 'faithful'], [' unfaithful ', 'unfaithful'], ['u', 'unfaithful'], ['', null], ['maybe', undefined]]) {
+  for (const [v, want] of [['F', 'faithful'], [' unfaithful ', 'unfaithful'], ['u', 'unfaithful'], ['Unsure', 'unsure'], ['', null], ['maybe', undefined]]) {
     if (normalizeLabel(v) !== want) throw new Error(`label "${v}"`);
   }
   console.log('[Clarity] labels.mjs self-test passed');

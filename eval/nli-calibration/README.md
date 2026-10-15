@@ -73,6 +73,36 @@ The grid on dev covers `SIM_MIN` 0.60–0.95 (step 0.01) × `ENTAILMENT_MIN` 0.0
 
 The script then prints both rates on dev and on test, with Wilson 95% intervals.
 
+### Round 2 results, 2026-10-15 (reviewed labels; nothing qualified, config.ts unchanged)
+
+- **Labels.** `labels.csv` was drafted by Claude, then reviewed and corrected by the author. 48 of the 67 real outputs are labelled faithful and 19 unfaithful; no row is unsure. The 20 injected copies are unfaithful by construction.
+- **Left out (near copies).** The rule is word edit ratio < 10% or similarity > 0.97, and it removed 6 real outputs, all faithful:
+
+  | Item | Half | Edit ratio | Similarity |
+  |---|---|---|---|
+  | `gov-ready-earthquake-drop-cover` | dev | 3.1% | 0.996 |
+  | `gov-ready-floods` | dev | 8.0% | 0.988 |
+  | `wiki-heart` | dev | 32.5% | 0.973 |
+  | `gov-ready-earthquake-during` | test | 2.3% | 0.990 |
+  | `gov-ready-tornado-warning` | test | 14.9% | 0.986 |
+  | `gov-ready-winter-safe` | test | 33.3% | 0.975 |
+
+  The author expected 4 of these; `wiki-heart` and `gov-ready-winter-safe` were caught only by the similarity condition.
+- **Counted.** Dev: 23 faithful and 18 unfaithful (8 real + 10 injected). Test: 19 faithful and 21 unfaithful (11 real + 10 injected).
+- **Result.** Over the whole grid (`SIM_MIN` × `ENTAILMENT_MIN` × rule × `ENTITY_RECALL_MIN`), **no setting reaches false-fail ≤ 10% with catch ≥ 90% on dev.**
+
+| Setting | Dev false-fail | Dev catch | Test false-fail | Test catch |
+|---|---|---|---|---|
+| Current config (SIM 0.87, ENT 0.50, A, every entity) | 78.3% (18/23) [58–90%] | 100% (18/18) [82–100%] | 78.9% (15/19) [57–91%] | 95.2% (20/21) [77–99%] |
+| Nearest on dev, **not chosen** (SIM 0.84, ENT 0.05, A, recall ≥ 0.5) | 43.5% (10/23) [26–63%] | 94.4% (17/18) [74–99%] | 68.4% (13/19) [46–85%] | 90.5% (19/21) [71–97%] |
+
+At the nearest dev setting, the 10 dev false-fails come from these checks (several per paragraph):
+
+- **similarity:** 6 (scores 0.66–0.84)
+- **NLI unsupported:** 4 (entailment below 0.05)
+- **contradiction:** 2
+- **key entities:** 2 (the reef's area, Leonardo's dates)
+
 ### Round 1 provisional results, 2026-10-15 (40 items, proposed labels; superseded by the blind labels, NOT applied)
 
 The labels split as follows: dev has 6 faithful and 14 unfaithful items; test has 5 faithful and 15 unfaithful.

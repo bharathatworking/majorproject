@@ -323,7 +323,12 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
   - This is implemented as the entity rule (minimum share kept + main-claim numbers and dates) and as hypothesis context for short and referring sentences.
   - **The set:** 67 originals (47 added: 35 Wikipedia leads at pinned revisions and 12 Ready.gov / NWS texts). Each has 1 real qwen2.5:3b output; 20 have a copy with one injected error. Dev has 34 real items and test 33.
   - **Labels:** the real outputs are labelled blind through `eval/nli-calibration/labels.csv` (random order, no proposed labels), and the injected copies are auto-labelled unfaithful.
-  - **Next:** import the labels, then `npm run calibrate-meaning -- --reviewed-only`. That chooses `SIM_MIN`, `ENTAILMENT_MIN`, the rule and `ENTITY_RECALL_MIN` on dev, then reports test. All four stay at today's values until then.
+  - **Result (labels drafted by Claude, reviewed and corrected by the author: 48 faithful, 19 unfaithful):**
+    - 6 near copies were left out: word edit ratio < 10% or similarity > 0.97.
+    - **No setting reaches false-fail ≤ 10% with catch ≥ 90% on dev.**
+    - The nearest dev setting is SIM 0.84, ENT 0.05, rule A, recall ≥ 0.5: dev 43.5% false-fail and 94.4% catch; test 68.4% and 90.5%. It was not chosen.
+    - The current config scores 78.3% / 100% on dev and 78.9% / 95.2% on test.
+    - `config.ts` is unchanged. Details are in `eval/nli-calibration/README.md`.
 - **fp16 vs q8** (`npm run calibrate-nli -- --compare-fp16`, CPU): sentence decisions agree on 59/60 items (only `kit-f2` flips, contradiction 0.086 → 0.210) and paragraph decisions on 15/15. WebGPU ms per paragraph comes from `clarityNliExperiment()` in Chrome.
 - **Entity rules found on the dev half** (names by capitalised words, surname or acronym; diacritics; weekday redundancy; unit conversions) are fixes to wrongly reported drops, not thresholds. The test half was not used to design them.
 - **Calibration rules:**

@@ -29,6 +29,11 @@
  *    (robust to small-sample noise). The TEST half is only reported, with
  *    Wilson 95% intervals. When no setting qualifies, nothing is
  *    recommended and the nearest settings are shown.
+ *  - Left out: items labelled unsure (`excluded`), and real outputs that are
+ *    near copies of their original (word-level edit ratio < 10% or
+ *    similarity > 0.97): they aren't simplifications and would pass any
+ *    setting. The excluded ids are printed. Injected copies are kept.
+ *  - A confusion table (label × verdict) per half is printed with the rates.
  *  - "Paired catch" is also reported: of the injected copies whose real base
  *    passes, how many fail. The plain catch rate counts a copy as caught
  *    when its base already fails for another reason.
@@ -54,6 +59,9 @@ const range = (from, to, step) =>
 const SIM_GRID = range(0.6, 0.95, 0.01);
 const ENT_GRID = range(0.05, 0.95, 0.05);
 const RULES = ['A', 'B'];
+/** A real output is a near copy (left out) below this word edit ratio or above this similarity. */
+const NEAR_COPY_EDIT_RATIO = 0.1;
+const NEAR_COPY_SIMILARITY = 0.97;
 /** Minimum share of entities kept (1 = every entity, the rule before calibration). */
 const RECALL_GRID = [1, 0.9, 0.8, 0.75, 0.67, 0.5];
 
@@ -69,7 +77,24 @@ const ci = (k, n) => {
   const w = wilson(k, n);
   return w ? `[${(w[0] * 100).toFixed(0)}–${(w[1] * 100).toFixed(0)}%]` : '';
 };
-const label = item => item.label ?? item.proposedLabel;
+const label = item => (item.excluded ? undefined : item.label ?? item.proposedLabel);
+
+/** Word-level edit distance / the longer text's word count (lowercase letters and digits). */
+function wordEditRatio(a, b) {
+  const words = t => t.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  const x = words(a);
+  const y = words(b);
+  if (x.length === 0 && y.length === 0) return 0;
+  let prev = Array.from({ length: y.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= x.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= y.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[y.length] / Math.max(x.length, y.length);
+}
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -142,6 +167,31 @@ try {
     });
   }
 
+  // ── Near copies are not simplifications: they would pass any setting and
+  //    inflate the faithful side, so real outputs that barely change the
+  //    original are left out (injected copies stay: they test detection)
+  const excluded = [];
+  for (const r of [...results]) {
+    if (r.item.origin === 'injected') continue;
+    const ratio = wordEditRatio(toPlainText(paragraphs.get(r.item.paragraphId).text), toPlainText(r.item.simplified));
+    if (ratio < NEAR_COPY_EDIT_RATIO || r.similarity > NEAR_COPY_SIMILARITY) {
+      excluded.push({ id: r.item.id, split: r.item.split, label: r.label, editRatio: ratio, similarity: r.similarity });
+      results.splice(results.indexOf(r), 1);
+    }
+  }
+  console.log(
+    `\nNear copies excluded (word edit ratio < ${NEAR_COPY_EDIT_RATIO * 100}% or similarity > ${NEAR_COPY_SIMILARITY}): ` +
+    `${excluded.length}${excluded.length ? '' : ' (none)'}`,
+  );
+  for (const e of excluded) {
+    console.log(`  ${e.id.padEnd(40)} [${e.split}, ${e.label}] edit ratio ${(e.editRatio * 100).toFixed(1)}%, similarity ${e.similarity.toFixed(3)}`);
+  }
+  const counted = (split, l) => results.filter(r => r.item.split === split && r.label === l).length;
+  console.log(
+    `Counted: dev ${counted('dev', 'faithful')} faithful / ${counted('dev', 'unfaithful')} unfaithful, ` +
+    `test ${counted('test', 'faithful')} / ${counted('test', 'unfaithful')}`,
+  );
+
   /** Which checks fail an item at a setting (empty = passes). */
   const failuresAt = (r, s) => {
     const f = [];
@@ -178,6 +228,8 @@ try {
   const qualifying = grid.filter(g => g.falseFail <= MAX_FALSE_FAIL && g.catchRate >= MIN_CATCH);
 
   let chosen = null;
+  /** When nothing qualifies: the lowest dev false-fail with catch ≥ 90%, shown in full but never chosen. */
+  let nearest = null;
   if (qualifying.length > 0) {
     const bestFf = Math.min(...qualifying.map(g => g.falseFail));
     let pool = qualifying.filter(g => g.falseFail === bestFf);
@@ -199,6 +251,7 @@ try {
   } else {
     console.log(`\nDev: no setting meets false-fail ≤ ${MAX_FALSE_FAIL * 100}% and catch ≥ ${MIN_CATCH * 100}%. Nearest:`);
     const byFf = grid.filter(g => g.catchRate >= MIN_CATCH).sort((a, b) => a.falseFail - b.falseFail || b.catchRate - a.catchRate)[0];
+    nearest = byFf ?? null;
     const byCatch = grid.filter(g => g.falseFail <= MAX_FALSE_FAIL).sort((a, b) => b.catchRate - a.catchRate || a.falseFail - b.falseFail)[0];
     for (const [name, g] of [['lowest false-fail with catch ≥ 90%', byFf], ['highest catch with false-fail ≤ 10%', byCatch]]) {
       if (g) console.log(`  ${name}: SIM_MIN ${g.sim}, ENTAILMENT_MIN ${g.ent}, rule ${g.rule}, entity recall ≥ ${g.recall} → false-fail ${pct(g.falseFail)} (${g.ff}/${g.nFaithful}), catch ${pct(g.catchRate)} (${g.caught}/${g.nUnfaithful})`);
@@ -220,9 +273,19 @@ try {
         `   catch ${pct(r.catchRate)} (${r.caught}/${r.nUnfaithful}) ${ci(r.caught, r.nUnfaithful)}`,
       );
     }
+    // Confusion tables: label (rows) × verdict (columns)
+    for (const split of ['dev', 'test']) {
+      const r = rates(split, s);
+      console.log(`  ${split} confusion        passes   fails`);
+      console.log(`    faithful     ${String(r.nFaithful - r.ff).padStart(9)} ${String(r.ff).padStart(7)}`);
+      console.log(`    unfaithful   ${String(r.nUnfaithful - r.caught).padStart(9)} ${String(r.caught).padStart(7)}`);
+    }
     // Injected copies whose real base passes: is the injected error itself caught?
     const byId = new Map(results.map(r => [r.item.id, r]));
-    const paired = results.filter(r => r.item.injectedFrom && failuresAt(byId.get(r.item.injectedFrom), s).length === 0);
+    const paired = results.filter(r => {
+      const base = r.item.injectedFrom && byId.get(r.item.injectedFrom);
+      return base && failuresAt(base, s).length === 0;
+    });
     console.log(`  paired catch (injected copy failed while its real base passes): ${paired.filter(r => failuresAt(r, s).length > 0).length}/${paired.length}`);
     const types = [...new Set(results.filter(r => r.item.errorType).map(r => r.item.errorType))];
     console.log(`  catch by injected error (dev + test): ${types.map(t => {
@@ -243,6 +306,7 @@ try {
   };
   show('Current config', current);
   if (chosen) show('Chosen on dev', chosen);
+  if (nearest) show('Nearest on dev (does NOT qualify; not chosen)', nearest);
 
   if (verbose) {
     console.log('\nItems:');
@@ -264,7 +328,9 @@ try {
       at: new Date().toISOString(),
       reviewedOnly,
       chosen,
+      chosenRates: chosen && { dev: rates('dev', chosen), test: rates('test', chosen) },
       qualifying: qualifying.length,
+      excluded,
       items: results.map(r => ({
         id: r.item.id, split: r.item.split, label: r.label, similarity: r.similarity,
         missingEntities: r.missingEntities, sentenceScores: r.sentenceScores,
