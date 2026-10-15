@@ -26,7 +26,11 @@
  *    when no t qualifies. The chosen value is written into config.ts by hand,
  *    with the date and both rates, and then frozen for the benchmark.
  *  - Flags: --reviewed-only (items with reviewed: true), --verbose (every
- *    item's scores).
+ *    item's scores), --compare-fp16 (also scores every pruned pair with the
+ *    fp16 weights, npm run fetch-models -- --fp16, and reports how often the
+ *    sentence and paragraph decisions agree with q8; CPU only, so its
+ *    timings say nothing about WebGPU — clarityNliExperiment() measures
+ *    those in Chrome).
  */
 
 import { readFile } from 'node:fs/promises';
@@ -47,6 +51,7 @@ const MIN_CATCH = 0.9;
 const args = new Set(process.argv.slice(2));
 const reviewedOnly = args.has('--reviewed-only');
 const verbose = args.has('--verbose');
+const compareFp16 = args.has('--compare-fp16');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -88,14 +93,14 @@ async function embed(texts) {
 
 // ─── Model ────────────────────────────────────────────────────────────────────
 
-async function loadModel(modelId) {
+async function loadModel(modelId, dtype = 'q8') {
   const { AutoModelForSequenceClassification, AutoTokenizer, env } = await import('@huggingface/transformers');
   env.allowRemoteModels = false;
   env.allowLocalModels = true;
   env.localModelPath = join(ROOT, 'public', 'models') + '/';
   const tokenizer = await AutoTokenizer.from_pretrained(modelId);
   const model = await AutoModelForSequenceClassification.from_pretrained(modelId, {
-    dtype: 'q8',
+    dtype,
     device: 'cpu',
     session_options: { intraOpNumThreads: 1, interOpNumThreads: 1 },
   });
@@ -138,6 +143,7 @@ try {
   const config = await vite.ssrLoadModule('/src/lib/quality/config.ts');
   const premisesLib = await vite.ssrLoadModule('/src/lib/quality/premises.ts');
   const { splitSentences } = await vite.ssrLoadModule('/src/lib/quality/nli.ts');
+  const { nliVerdict } = await vite.ssrLoadModule('/src/lib/quality/verdict.ts');
   const { buildPremises, rankPremises, lexicalRank, aggregate } = premisesLib;
   const K = config.NLI_TOP_PREMISES;
 
@@ -156,6 +162,7 @@ try {
   );
 
   const { score } = await loadModel(config.NLI_MODEL_ID);
+  const fp16 = compareFp16 ? await loadModel(config.NLI_MODEL_ID, 'fp16') : null;
   const embeddingsOk = (await embed(['probe'])) !== null;
   console.log(`[Clarity] Premise ranking: ${embeddingsOk ? `${EMBED_MODEL} via Ollama` : 'word overlap (Ollama/all-minilm not reachable)'}`);
 
@@ -174,7 +181,9 @@ try {
     } else top = lexicalRank(premises, [hyp], K)[0];
     const [before] = await score([{ premise: paragraph, hypothesis: hyp }]);
     const pruned = top.map(i => all[i]);
+    const prunedFp16 = fp16 ? await fp16.score(top.map(i => ({ premise: premises[i], hypothesis: hyp }))) : null;
     results.push({
+      fp16Verdict: prunedFp16 && aggregate(prunedFp16, config.NLI_CONTRADICTION_AGG),
       item,
       label: label(item),
       verdicts: {
@@ -246,6 +255,7 @@ try {
   // ── Timing proxy: whole simplified paragraphs, one batch per paragraph, one CPU thread
   const before = [];
   const after = [];
+  const paragraphDecisions = [];
   let truncBefore = 0;
   let truncAfter = 0;
   let pairsBefore = 0;
@@ -260,6 +270,20 @@ try {
       : vecs ? rankPremises(vecs.slice(0, premises.length), vecs.slice(premises.length), K) : lexicalRank(premises, hyps, K);
     const oldPairs = hyps.map(h => ({ premise: p.text, hypothesis: h }));
     const newPairs = hyps.flatMap((h, i) => top[i].map(j => ({ premise: premises[j], hypothesis: h })));
+    if (fp16) {
+      // Paragraph decision under the app's rule, q8 vs fp16 (no glossary hints here)
+      const verdictOf = async (scorer) => {
+        const probs = await scorer(newPairs);
+        let offset = 0;
+        return nliVerdict(hyps.map((sentence, i) => {
+          const own = probs.slice(offset, offset + top[i].length);
+          offset += top[i].length;
+          const v = aggregate(own, config.NLI_CONTRADICTION_AGG);
+          return { sentence, entailment: v.entailment, contradiction: v.contradiction, exempt: false };
+        })).passed;
+      };
+      paragraphDecisions.push([await verdictOf(score), await verdictOf(fp16.score)]);
+    }
     let s = performance.now();
     const o = await score(oldPairs);
     before.push(performance.now() - s);
@@ -277,6 +301,31 @@ try {
       `before ${Math.round(mean(before))} ms per paragraph (${pairsBefore} pairs, ${truncBefore} truncated), ` +
       `after ${Math.round(mean(after))} ms per paragraph (${pairsAfter} pairs, ${truncAfter} truncated)`,
     );
+  }
+
+  // ── fp16 vs q8 decisions (same pruned premises)
+  if (fp16) {
+    const appStrategyKey = `top3 / ${config.NLI_CONTRADICTION_AGG}`;
+    const t = config.ENTAILMENT_MIN;
+    const agree = results.filter(r => fails(r.verdicts[appStrategyKey], t) === fails(r.fp16Verdict, t)).length;
+    const maxDiff = Math.max(...results.map(r => Math.max(
+      Math.abs(r.verdicts[appStrategyKey].entailment - r.fp16Verdict.entailment),
+      Math.abs(r.verdicts[appStrategyKey].contradiction - r.fp16Verdict.contradiction),
+    )));
+    const pAgree = paragraphDecisions.filter(([a, b]) => a === b).length;
+    console.log(
+      `
+fp16 vs q8 (CPU, ENTAILMENT_MIN ${t}, rule ${config.NLI_PARAGRAPH_RULE}): ` +
+      `sentence decisions agree ${agree}/${results.length}, paragraph decisions agree ${pAgree}/${paragraphDecisions.length}, ` +
+      `largest probability difference ${maxDiff.toFixed(4)}`,
+    );
+    for (const r of results.filter(r => fails(r.verdicts[appStrategyKey], t) !== fails(r.fp16Verdict, t))) {
+      const q = r.verdicts[appStrategyKey];
+      console.log(
+        `  differs ${r.item.id} [${r.label}]: q8 e=${q.entailment.toFixed(3)} c=${q.contradiction.toFixed(3)}, ` +
+        `fp16 e=${r.fp16Verdict.entailment.toFixed(3)} c=${r.fp16Verdict.contradiction.toFixed(3)} "${r.item.hypothesis}"`,
+      );
+    }
   }
 } finally {
   await vite.close();

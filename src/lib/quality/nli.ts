@@ -8,10 +8,13 @@
  *    Worker (nli.worker.ts) through Transformers.js, so inference never
  *    blocks the UI. The files ship in dist/ (npm run fetch-models); nothing
  *    is downloaded at runtime. The same q8 weights run on every backend, so
- *    the calibrated ENTAILMENT_MIN holds on WebGPU, wasm and in Node.
- *  - Backend: WebGPU first (the high-performance adapter, i.e. the discrete
- *    GPU), wasm when WebGPU is missing or fails to load or warm up. The
- *    worker reports which one it uses and the adapter vendor.
+ *    the calibrated ENTAILMENT_MIN holds on WebGPU, wasm and in Node. fp16
+ *    weights on WebGPU are an experiment only (debug:nliDevice =
+ *    'webgpu-fp16', lib/quality/nli-experiment.ts).
+ *  - Backend: WebGPU first (the system's adapter; the GPU is chosen in the
+ *    Windows Graphics settings), wasm when WebGPU is missing or fails to load
+ *    or warm up. The worker reports the backend, the dtype and the adapter
+ *    vendor.
  *  - Premises (lib/quality/premises.ts, SummaC zero-shot, Laban et al.,
  *    2022, TACL): each simplified sentence is scored against the original's
  *    sentences and 2-sentence windows, pruned to the NLI_TOP_PREMISES most
@@ -27,8 +30,9 @@
  *    definitions are removed first (lib/quality/glossary.ts).
  *  - Sentences are split from toPlainText(output), so every bullet item is
  *    its own hypothesis, with the same boundary rule as the rolling context.
- *  - NliClient sends all of a node's uncached pairs in one worker call (up to
- *    NLI_BATCH_SIZE) and keeps an in-memory LRU of pair scores keyed by
+ *  - NliClient sends a node's uncached pairs in batches of
+ *    NLI_BATCH_SIZE_WEBGPU (32) or NLI_BATCH_SIZE_WASM (8), by the backend
+ *    the model loaded on, and keeps an in-memory LRU of pair scores keyed by
  *    sha256(premise, hypothesis), so a retry or a cache re-check never
  *    re-scores an unchanged pair. The worker flags pairs over the model's
  *    512 tokens (scored truncated), and the check counts them. One client
@@ -48,7 +52,7 @@ import { toPlainText } from '../render/format-output';
 import { sha256 } from '../utils/hash';
 import { getNliBench, getNliDevice, saveNliBench } from '../storage/nli-bench';
 import {
-  NLI_BATCH_SIZE, NLI_CACHE_MAX, NLI_CONTRADICTION_AGG,
+  NLI_BATCH_SIZE_WASM, NLI_BATCH_SIZE_WEBGPU, NLI_CACHE_MAX, NLI_CONTRADICTION_AGG,
   NLI_LOAD_TIMEOUT_MS, NLI_MODEL_ID, NLI_SCORE_TIMEOUT_MS, NLI_TOP_PREMISES,
 } from './config';
 import { selectExemptions, stripParentheticalDefinitions } from './glossary';
@@ -57,7 +61,7 @@ import { aggregate, buildPremises, lexicalRank, rankPremises } from './premises'
 import { nliVerdict } from './verdict';
 import type { EmbedFn } from './semantic';
 import type {
-  EntailmentCheck, NliBackendName, NliBenchRecord, NliDevice, PremiseRanking, SentenceScore,
+  EntailmentCheck, NliBackendName, NliBenchRecord, NliDevice, NliDtype, PremiseRanking, SentenceScore,
 } from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -94,6 +98,7 @@ export type NliResponse =
       type: 'ready';
       loadMs: number;
       backend: NliBackendName;
+      dtype: NliDtype;
       adapter: GpuAdapterSummary | null;
       /** Why WebGPU was not used, when it was tried and failed. */
       webgpuError?: string;
@@ -105,6 +110,8 @@ export type NliResponse =
 /** The loaded model's backend. */
 export interface NliBackendInfo {
   backend: NliBackendName;
+  /** Weights loaded; absent from backends that don't say (tests): q8. */
+  dtype?: NliDtype;
   adapter: GpuAdapterSummary | null;
   loadMs: number;
   webgpuError?: string;
@@ -159,11 +166,17 @@ export interface WorkerBackendOptions {
   scoreTimeoutMs?: number;
 }
 
-/** "webgpu (nvidia ampere)" or "wasm". */
-function describeBackend(info: Pick<NliBackendInfo, 'backend' | 'adapter'>): string {
-  if (info.backend !== 'webgpu' || !info.adapter) return info.backend;
+/** "webgpu (nvidia ampere)", "webgpu fp16 (nvidia ampere)" or "wasm". */
+function describeBackend(info: Pick<NliBackendInfo, 'backend' | 'adapter' | 'dtype'>): string {
+  const name = info.dtype === 'fp16' ? `${info.backend} fp16` : info.backend;
+  if (info.backend !== 'webgpu' || !info.adapter) return name;
   const parts = [info.adapter.vendor, info.adapter.architecture].filter(Boolean).join(' ');
-  return parts ? `webgpu (${parts})` : 'webgpu';
+  return parts ? `${name} (${parts})` : name;
+}
+
+/** Pairs per worker call on a backend (config NLI_BATCH_SIZE_*). */
+export function batchSizeFor(backend: NliBackendName): number {
+  return backend === 'webgpu' ? NLI_BATCH_SIZE_WEBGPU : NLI_BATCH_SIZE_WASM;
 }
 
 /**
@@ -217,12 +230,12 @@ export function createWorkerBackend(
           case 'ready': {
             clearTimeout(timer);
             const info: NliBackendInfo = {
-              backend: msg.backend, adapter: msg.adapter, loadMs: msg.loadMs,
+              backend: msg.backend, dtype: msg.dtype, adapter: msg.adapter, loadMs: msg.loadMs,
               ...(msg.webgpuError !== undefined && { webgpuError: msg.webgpuError }),
             };
             console.log(
               `[Clarity] NLI model ${NLI_MODEL_ID} loaded on ${describeBackend(info)} in ${Math.round(msg.loadMs)} ms` +
-              (device === 'wasm' ? ' (wasm forced by debug:nliDevice)' : ''),
+              (device !== 'auto' ? ` (${device} requested by debug:nliDevice)` : ''),
             );
             if (msg.webgpuError) console.log(`[Clarity] NLI WebGPU not used: ${msg.webgpuError}`);
             resolve(info);
@@ -299,10 +312,11 @@ export class NliClient {
   private readonly cache = new Map<string, NliProbs>();
   private loaded: NliBackendInfo | null = null;
   private readonly backend: NliBackend;
-  private readonly batchSize: number;
+  /** Fixed batch size; undefined = by the loaded backend (batchSizeFor). */
+  private readonly batchSize: number | undefined;
   private readonly cacheMax: number;
 
-  constructor(backend: NliBackend, batchSize = NLI_BATCH_SIZE, cacheMax = NLI_CACHE_MAX) {
+  constructor(backend: NliBackend, batchSize?: number, cacheMax = NLI_CACHE_MAX) {
     this.backend = backend;
     this.batchSize = batchSize;
     this.cacheMax = cacheMax;
@@ -332,8 +346,15 @@ export class NliClient {
     return performance.now() - started;
   }
 
+  /** Pairs per worker call: the fixed size, else by the loaded backend. */
+  get currentBatchSize(): number {
+    return this.batchSize ?? batchSizeFor(this.loaded?.backend ?? 'wasm');
+  }
+
   /** Probabilities for every pair, in order, plus cache and truncation counts. */
   async scorePairs(pairs: NliPair[]): Promise<ScoredPairs> {
+    // The batch size depends on the backend, so load first (once)
+    if (!this.loaded && this.batchSize === undefined) await this.load();
     const keys = await Promise.all(pairs.map(p => sha256(`${p.premise}\u0000${p.hypothesis}`)));
     const probs: (NliProbs | undefined)[] = keys.map(k => this.touch(k));
     const cached = probs.filter(Boolean).length;
@@ -341,8 +362,9 @@ export class NliClient {
     // Distinct uncached pairs, scored in as few calls as the batch size allows
     const missing = [...new Set(keys.filter((_, i) => probs[i] === undefined))];
     const pairByKey = new Map(keys.map((k, i) => [k, pairs[i]]));
-    for (let i = 0; i < missing.length; i += this.batchSize) {
-      const batchKeys = missing.slice(i, i + this.batchSize);
+    const batchSize = this.currentBatchSize;
+    for (let i = 0; i < missing.length; i += batchSize) {
+      const batchKeys = missing.slice(i, i + batchSize);
       const scores = await this.backend.score(batchKeys.map(k => pairByKey.get(k) as NliPair));
       if (scores.length !== batchKeys.length) {
         throw new Error(`NLI returned ${scores.length} scores for ${batchKeys.length} pairs`);
@@ -377,12 +399,21 @@ export class NliClient {
 
 let defaultClient: NliClient | null = null;
 
-/** The app tab's client, backed by nli.worker.ts and the bundled model files. */
-export function getNliClient(): NliClient {
-  defaultClient ??= new NliClient(createWorkerBackend(
+/**
+ * A client with its own worker, backed by nli.worker.ts and the bundled model
+ * files. `getDevice` is read when the worker starts (default: the
+ * debug:nliDevice setting).
+ */
+export function createNliClient(getDevice: () => Promise<NliDevice> = getNliDevice): NliClient {
+  return new NliClient(createWorkerBackend(
     () => new Worker(new URL('./nli.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
-    { modelUrl: chrome.runtime.getURL('models/'), wasmUrl: chrome.runtime.getURL('ort/'), getDevice: getNliDevice },
+    { modelUrl: chrome.runtime.getURL('models/'), wasmUrl: chrome.runtime.getURL('ort/'), getDevice },
   ));
+}
+
+/** The app tab's client (one worker per tab). */
+export function getNliClient(): NliClient {
+  defaultClient ??= createNliClient();
   return defaultClient;
 }
 
@@ -430,6 +461,7 @@ export async function prepareNli(
   const record: NliBenchRecord = {
     backend: info.backend,
     adapterVendor: info.adapter?.vendor || null,
+    dtype: info.dtype ?? 'q8',
     ms,
     predictedParagraphMs: predictParagraphMs(ms),
     version: ctx.version,

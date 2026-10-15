@@ -70,11 +70,13 @@ export const THESIS_COVERAGE_MIN = 0.9;
 export const NLI_MODEL_ID = 'Xenova/nli-deberta-v3-xsmall';
 
 /**
- * Most premise/hypothesis pairs per worker inference call. A node's pairs
- * (NLI_TOP_PREMISES per simplified sentence) normally fit in one call; this
- * is only a cap on padded batch memory.
+ * Most premise/hypothesis pairs per worker inference call, by backend. A
+ * batch is padded to its longest pair, so a smaller batch wastes less work
+ * on padding; WebGPU still gains from 32 pairs at once, while wasm (one
+ * thread) gains nothing from big batches and pads more.
  */
-export const NLI_BATCH_SIZE = 64;
+export const NLI_BATCH_SIZE_WEBGPU = 32;
+export const NLI_BATCH_SIZE_WASM = 8;
 
 /**
  * Premises scored per simplified sentence: the most similar original

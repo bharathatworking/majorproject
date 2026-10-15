@@ -228,8 +228,14 @@ export type QualityMode = 'full' | 'lite';
 /** Where the NLI model runs. */
 export type NliBackendName = 'webgpu' | 'wasm';
 
-/** Requested NLI device: WebGPU first ('auto') or wasm only (debug override). */
-export type NliDevice = 'auto' | 'wasm';
+/**
+ * Requested NLI device: WebGPU first ('auto'), wasm only, or WebGPU with fp16
+ * weights (the fp16 experiment); the last two are debug overrides.
+ */
+export type NliDevice = 'auto' | 'wasm' | 'webgpu-fp16';
+
+/** Weights the NLI model runs with: 8-bit quantized (the default) or fp16 (experiment). */
+export type NliDtype = 'q8' | 'fp16';
 
 /**
  * NLI speed benchmark (chrome.storage.local `nli:bench`), re-run when the
@@ -239,6 +245,8 @@ export interface NliBenchRecord {
   backend: NliBackendName;
   /** GPU adapter vendor (e.g. "nvidia"); null on wasm. */
   adapterVendor: string | null;
+  /** Weights the benchmark ran with (absent in records from before the fp16 experiment: q8). */
+  dtype?: NliDtype;
   /** ms for one batch of the 8 benchmark pairs (after a warm-up). */
   ms: number;
   /** Predicted NLI ms per paragraph (lib/quality/mode.ts predictParagraphMs). */
@@ -424,7 +432,14 @@ export interface RunLog {
   qualityMode?: QualityMode;
   qualityModeReason?: string;
   /** NLI backend of this run; null when NLI never loaded. */
-  nli?: { backend: NliBackendName; adapterVendor: string | null; benchMs: number; predictedParagraphMs: number } | null;
+  nli?: {
+    backend: NliBackendName;
+    adapterVendor: string | null;
+    /** Weights used (absent in logs before the fp16 experiment: q8). */
+    dtype?: NliDtype;
+    benchMs: number;
+    predictedParagraphMs: number;
+  } | null;
   targetGrade: number;
   depthTier: SimplificationSpec['depthTier'];
   qualityThreshold: number;

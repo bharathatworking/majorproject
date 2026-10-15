@@ -7,7 +7,7 @@ import {
 import {
   CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_CONTRADICTION_AGG, NLI_TOP_PREMISES,
 } from '../../src/lib/quality/config';
-import type { NliBenchRecord } from '../../src/types';
+import type { NliBackendName, NliBenchRecord, NliDtype } from '../../src/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -68,6 +68,28 @@ describe('NliClient', () => {
     expect(batches.map(b => b.map(p => p.hypothesis))).toEqual([['a.', 'b.'], ['c.']]);
     expect(probs).toHaveLength(3);
     expect(cached).toBe(0);
+  });
+
+  it.each([['webgpu', 32], ['wasm', 8]] as [NliBackendName, number][])(
+    'batches %s pairs by %i (the backend it loaded on)',
+    async (backendName, size) => {
+      const { backend, batches } = fakeBackend();
+      backend.load = vi.fn(async () => ({ backend: backendName, adapter: null, loadMs: 0 }));
+      const client = new NliClient(backend);
+      const pairs = Array.from({ length: 40 }, (_, i) => ({ premise: 'p', hypothesis: `h${i}.` }));
+      await client.scorePairs(pairs);
+      expect(backend.load).toHaveBeenCalledTimes(1);
+      expect(batches.map(b => b.length)).toEqual(
+        Array.from({ length: Math.ceil(40 / size) }, (_, i) => Math.min(size, 40 - i * size)),
+      );
+      expect(client.currentBatchSize).toBe(size);
+    },
+  );
+
+  it('uses the wasm batch size for a backend without load()', async () => {
+    const { backend, batches } = fakeBackend();
+    await new NliClient(backend).scorePairs(Array.from({ length: 9 }, (_, i) => ({ premise: 'p', hypothesis: `h${i}.` })));
+    expect(batches.map(b => b.length)).toEqual([8, 1]);
   });
 
   it('answers repeated pairs from the cache without calling the worker', async () => {
@@ -309,6 +331,7 @@ class FakeWorker implements WorkerLike {
         ? { type: 'init-error', message: 'NLI model failed to load: 404 config.json' }
         : {
             type: 'ready', loadMs: 5, backend: 'webgpu',
+            dtype: (message.device === 'webgpu-fp16' ? 'fp16' : 'q8') as NliDtype,
             adapter: { vendor: 'nvidia', architecture: 'ampere', description: '' },
           });
     } else if (this.behaviour === 'score-error') {
@@ -346,6 +369,18 @@ describe('createWorkerBackend', () => {
     expect(info).toMatchObject({ backend: 'webgpu', adapter: { vendor: 'nvidia' } });
     expect(worker.received[0]).toMatchObject({ type: 'init', device: 'wasm' });
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[Clarity\] NLI model .* loaded on webgpu \(nvidia ampere\)/));
+  });
+
+  it('passes the fp16 experiment device and reports the dtype it loaded', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const worker = new FakeWorker();
+    const backend = createWorkerBackend(() => worker, { ...URLS, getDevice: async () => 'webgpu-fp16' });
+    const info = await backend.load();
+    expect(worker.received[0]).toMatchObject({ type: 'init', device: 'webgpu-fp16' });
+    expect(info.dtype).toBe('fp16');
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(
+      /loaded on webgpu fp16 \(nvidia ampere\) in \d+ ms \(webgpu-fp16 requested by debug:nliDevice\)$/,
+    ));
   });
 
   it('throws NliUnavailableError when the model fails to load, and retries on the next call', async () => {
@@ -436,7 +471,7 @@ describe('NLI benchmark', () => {
     const store = memoryStore();
     const record = await prepareNli(new NliClient(loadingBackend('webgpu')), CTX, store);
     expect(record).toMatchObject({
-      backend: 'webgpu', adapterVendor: 'nvidia', version: '1.0.0', webgpuAdapter: true, device: 'auto',
+      backend: 'webgpu', adapterVendor: 'nvidia', dtype: 'q8', version: '1.0.0', webgpuAdapter: true, device: 'auto',
     });
     expect(record.predictedParagraphMs).toBeGreaterThanOrEqual(0);
     expect(store.save).toHaveBeenCalledWith(record);

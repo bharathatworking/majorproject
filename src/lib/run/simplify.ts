@@ -850,7 +850,10 @@ export async function runSimplification(
     `meaning passed ${pct(meaning.passRate)} (${meaning.passed}/${meaning.passed + meaning.failed}), ` +
     `coverage ${pct(meaning.coverage)}; ` +
     `NLI avg ${meaning.avgNliMs === null ? 'n/a' : `${Math.round(meaning.avgNliMs)} ms`} per paragraph` +
-    (bench ? ` (backend ${bench.backend}${bench.adapterVendor ? ` ${bench.adapterVendor}` : ''})` : '') +
+    (bench
+      ? ` (backend ${bench.backend}${bench.dtype === 'fp16' ? ' fp16' : ''}` +
+        `${bench.adapterVendor ? ` ${bench.adapterVendor}` : ''})`
+      : '') +
     `, truncated pairs ${truncatedPairs}/${nliPairs}`,
   );
   if (meaning.failureBreakdown.failedParagraphs > 0) {
@@ -885,6 +888,7 @@ export async function runSimplification(
     nli: bench && {
       backend: bench.backend,
       adapterVendor: bench.adapterVendor,
+      dtype: bench.dtype ?? 'q8',
       benchMs: Math.round(bench.ms),
       predictedParagraphMs: Math.round(bench.predictedParagraphMs),
     },

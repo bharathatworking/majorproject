@@ -12,6 +12,9 @@
  *    file fails loudly instead of silently changing thesis results. Only the
  *    8-bit quantized weights (dtype 'q8' → model_quantized.onnx, 87 MB) are
  *    fetched. Files that already match their hash are skipped.
+ *  - `-- --fp16` also fetches the fp16 weights (model_fp16.onnx, 143 MB) for
+ *    the WebGPU fp16 experiment (debug:nliDevice = 'webgpu-fp16'). They are
+ *    left out by default because every file in public/ ships in dist/.
  *  - Wasm: copied from the installed onnxruntime-web, not downloaded, so the
  *    binary always matches the runtime JS that Vite bundles into the worker.
  *    Transformers.js uses the 'asyncify' build in browsers.
@@ -40,6 +43,13 @@ const MODEL_FILES = {
   'special_tokens_map.json':   '311de3f4eed9d76a43bf0d71f10e62e086ca65ccce9f15d5da0d2098bf519ecc',
   'onnx/model_quantized.onnx': '3fac2500c45c75af42c7711de0d1b93d59577456100208be0dc1f9e8811946b6',
 };
+
+/** Fetched only with --fp16 (same revision, hash from the Hugging Face LFS pointer). */
+const FP16_FILES = {
+  'onnx/model_fp16.onnx': '2b260529bd21b58665b2f5844eed902ba6c4ceb098e64c6c73eab3e5f0d327b2',
+};
+
+const withFp16 = process.argv.slice(2).includes('--fp16');
 
 /** ONNX Runtime files the worker points env.backends.onnx.wasm.wasmPaths at. */
 const ORT_FILES = ['ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm'];
@@ -87,7 +97,8 @@ async function copyOrtFiles() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 try {
-  for (const [name, hash] of Object.entries(MODEL_FILES)) await fetchModelFile(name, hash);
+  const files = { ...MODEL_FILES, ...(withFp16 ? FP16_FILES : {}) };
+  for (const [name, hash] of Object.entries(files)) await fetchModelFile(name, hash);
   await copyOrtFiles();
   console.log('[Clarity] Models ready. Run npm run build and reload dist/ in Chrome.');
 } catch (err) {

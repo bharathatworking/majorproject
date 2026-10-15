@@ -19,6 +19,11 @@
  *    coverage rule keeps them out of the pass rate.
  *  - Pure apart from hasWebGpuAdapter, and import-light (config + types), so
  *    Settings can show the current choice without loading the NLI chunk.
+ *  - hasWebGpuAdapter asks once per app tab and reuses the answer (module
+ *    state is fine on an extension page): adapters don't come and go during
+ *    a session, and each request costs time. It passes no powerPreference,
+ *    which Chrome ignores on Windows (crbug 369219127) and warns about on
+ *    the Errors page; the GPU is chosen in the Windows Graphics settings.
  */
 
 import { AUTO_LITE_PARAGRAPH_MS, NLI_TOP_PREMISES, NLI_TYPICAL_SENTENCES } from './config';
@@ -93,16 +98,28 @@ export function chooseQualityMode(setting: QualityModeSetting, evidence: SpeedEv
 
 /** The part of navigator.gpu used here (tsconfig has no WebGPU types). */
 interface GpuLike {
-  requestAdapter(options?: { powerPreference?: 'high-performance' | 'low-power' }): Promise<unknown>;
+  requestAdapter(): Promise<unknown>;
 }
 
-/** True when this page can get a WebGPU adapter; never throws. */
-export async function hasWebGpuAdapter(): Promise<boolean> {
+let adapterCheck: Promise<boolean> | null = null;
+
+async function checkAdapter(): Promise<boolean> {
   const gpu = (globalThis.navigator as { gpu?: GpuLike } | undefined)?.gpu;
   if (!gpu) return false;
   try {
-    return (await gpu.requestAdapter({ powerPreference: 'high-performance' })) != null;
+    return (await gpu.requestAdapter()) != null;
   } catch {
     return false;
   }
+}
+
+/** True when this page can get a WebGPU adapter; asked once per session, never throws. */
+export function hasWebGpuAdapter(): Promise<boolean> {
+  adapterCheck ??= checkAdapter();
+  return adapterCheck;
+}
+
+/** Forgets the session's adapter answer (tests). */
+export function resetWebGpuAdapterCache(): void {
+  adapterCheck = null;
 }

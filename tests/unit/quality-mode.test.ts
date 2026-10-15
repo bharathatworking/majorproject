@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   BENCH_PAIRS, chooseQualityMode, evidenceOf, hasWebGpuAdapter, isBenchStale, predictParagraphMs,
+  resetWebGpuAdapterCache,
   type SpeedEvidence,
 } from '../../src/lib/quality/mode';
 import { AUTO_LITE_PARAGRAPH_MS, NLI_TOP_PREMISES, NLI_TYPICAL_SENTENCES } from '../../src/lib/quality/config';
@@ -99,20 +100,34 @@ describe('isBenchStale', () => {
 // hasWebGpuAdapter
 // ---------------------------------------------------------------------------
 describe('hasWebGpuAdapter', () => {
+  beforeEach(() => resetWebGpuAdapterCache());
+  afterEach(() => resetWebGpuAdapterCache());
+
   it('is false without navigator.gpu (node)', async () => {
     expect(await hasWebGpuAdapter()).toBe(false);
   });
 
-  it('asks for the high-performance adapter', async () => {
-    const requestAdapter = vi.fn(async () => ({}));
+  it('asks for the adapter without a powerPreference (ignored on Windows, crbug 369219127)', async () => {
+    const requestAdapter = vi.fn(async (..._args: unknown[]) => ({}));
     vi.stubGlobal('navigator', { gpu: { requestAdapter } });
     expect(await hasWebGpuAdapter()).toBe(true);
-    expect(requestAdapter).toHaveBeenCalledWith({ powerPreference: 'high-performance' });
+    expect(requestAdapter).toHaveBeenCalledWith();
   });
 
-  it('is false when no adapter is returned or the request throws', async () => {
+  it('asks once per session and reuses the answer', async () => {
+    const requestAdapter = vi.fn(async () => ({}));
+    vi.stubGlobal('navigator', { gpu: { requestAdapter } });
+    await Promise.all([hasWebGpuAdapter(), hasWebGpuAdapter()]);
+    expect(await hasWebGpuAdapter()).toBe(true);
+    expect(requestAdapter).toHaveBeenCalledTimes(1);
+  });
+
+  it('is false when no adapter is returned', async () => {
     vi.stubGlobal('navigator', { gpu: { requestAdapter: async () => null } });
     expect(await hasWebGpuAdapter()).toBe(false);
+  });
+
+  it('is false when the request throws', async () => {
     vi.stubGlobal('navigator', { gpu: { requestAdapter: async () => { throw new Error('blocked'); } } });
     expect(await hasWebGpuAdapter()).toBe(false);
   });
@@ -147,6 +162,8 @@ describe('quality mode storage', () => {
     expect(await getNliDevice()).toBe('auto');
     await chrome.storage.local.set({ 'debug:nliDevice': 'wasm' });
     expect(await getNliDevice()).toBe('wasm');
+    await chrome.storage.local.set({ 'debug:nliDevice': 'webgpu-fp16' });
+    expect(await getNliDevice()).toBe('webgpu-fp16');
     await chrome.storage.local.set({ 'debug:nliDevice': 'gpu' });
     expect(await getNliDevice()).toBe('auto');
   });

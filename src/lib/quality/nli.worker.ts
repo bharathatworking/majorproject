@@ -11,13 +11,20 @@
  *    defaults to a CDN URL and loads the wasm factory from a blob: URL, which
  *    script-src 'self' (rightly) blocks. Compiling the wasm itself needs
  *    'wasm-unsafe-eval' in the extension CSP, and nothing more.
- *  - WebGPU first: the worker asks for the 'high-performance' adapter (the
- *    discrete GPU on a laptop with two), hands that adapter to ONNX Runtime
- *    so it can't pick another one, loads the same q8 weights with device
- *    'webgpu' and runs one warm-up pair. Any failure there (no adapter,
- *    unsupported op, shader error) falls back to wasm. The WebGPU build of
- *    ONNX Runtime uses the same asyncify wasm files, and WGSL shaders are not
- *    script, so no CSP change is needed.
+ *  - WebGPU first: the worker requests an adapter once per worker (one model
+ *    load), hands it to ONNX Runtime so it can't pick another one, loads the
+ *    same q8 weights with device 'webgpu' and runs one warm-up pair. Any
+ *    failure there (no adapter, unsupported op, shader error) falls back to
+ *    wasm. The WebGPU build of ONNX Runtime uses the same asyncify wasm
+ *    files, and WGSL shaders are not script, so no CSP change is needed.
+ *  - No powerPreference: Chrome ignores it on Windows (crbug 369219127) and
+ *    logs a warning that lands on the chrome://extensions Errors page. Which
+ *    GPU Chrome uses is set in Windows Settings → System → Display →
+ *    Graphics (Chrome → High performance).
+ *  - fp16 experiment: device 'webgpu-fp16' (debug:nliDevice) loads the fp16
+ *    weights on WebGPU instead of q8, since ONNX Runtime's WebGPU backend is
+ *    built for float math and may run quantized ops on the CPU. A wasm
+ *    fallback always uses q8. The 'ready' message reports the dtype used.
  *  - Single-threaded wasm: threads need SharedArrayBuffer, which needs a
  *    cross-origin-isolated page.
  *  - Truncation: each pair is also tokenized without truncation, and pairs
@@ -29,7 +36,7 @@
 
 import { AutoModelForSequenceClassification, AutoTokenizer, env } from '@huggingface/transformers';
 import type { GpuAdapterSummary, NliPair, NliProbs, NliRequest, NliResponse } from './nli';
-import type { NliBackendName, NliDevice } from '../../types';
+import type { NliBackendName, NliDevice, NliDtype } from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -45,7 +52,7 @@ interface GpuAdapterLike {
   info?: { vendor?: string; architecture?: string; description?: string };
 }
 interface GpuLike {
-  requestAdapter(options?: { powerPreference?: 'high-performance' | 'low-power' }): Promise<GpuAdapterLike | null>;
+  requestAdapter(): Promise<GpuAdapterLike | null>;
 }
 
 type Tokenizer = Awaited<ReturnType<typeof AutoTokenizer.from_pretrained>>;
@@ -55,6 +62,7 @@ interface Loaded {
   tokenizer: Tokenizer;
   model: Model;
   backend: NliBackendName;
+  dtype: NliDtype;
   adapter: GpuAdapterSummary | null;
   webgpuError?: string;
   /** Logit index of each label. */
@@ -100,17 +108,14 @@ function labelIndex(model: Model): Loaded['index'] {
   return { entailment: find('entailment'), contradiction: find('contradiction'), neutral: find('neutral') };
 }
 
-/** The high-performance adapter, handed to ONNX Runtime; throws when there is none. */
-async function useHighPerformanceAdapter(): Promise<GpuAdapterSummary> {
+/** The system's WebGPU adapter, handed to ONNX Runtime; throws when there is none. */
+async function useWebGpuAdapter(): Promise<GpuAdapterSummary> {
   const gpu = scope.navigator.gpu;
   if (!gpu) throw new Error('navigator.gpu is not available');
-  const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
+  const adapter = await gpu.requestAdapter();
   if (!adapter) throw new Error('no WebGPU adapter');
-  const webgpu = env.backends.onnx.webgpu as { powerPreference?: string; adapter?: unknown } | undefined;
-  if (webgpu) {
-    webgpu.powerPreference = 'high-performance';
-    webgpu.adapter = adapter;
-  }
+  const webgpu = env.backends.onnx.webgpu as { adapter?: unknown } | undefined;
+  if (webgpu) webgpu.adapter = adapter;
   return {
     vendor: adapter.info?.vendor ?? '',
     architecture: adapter.info?.architecture ?? '',
@@ -118,9 +123,13 @@ async function useHighPerformanceAdapter(): Promise<GpuAdapterSummary> {
   };
 }
 
-async function loadOn(modelId: string, backend: NliBackendName): Promise<Pick<Loaded, 'model' | 'index'>> {
-  const model = await AutoModelForSequenceClassification.from_pretrained(modelId, { dtype: 'q8', device: backend });
-  return { model, index: labelIndex(model) };
+async function loadOn(
+  modelId: string,
+  backend: NliBackendName,
+  dtype: NliDtype,
+): Promise<Pick<Loaded, 'model' | 'index' | 'backend' | 'dtype'>> {
+  const model = await AutoModelForSequenceClassification.from_pretrained(modelId, { dtype, device: backend });
+  return { model, index: labelIndex(model), backend, dtype };
 }
 
 async function load(modelId: string, modelUrl: string, wasmUrl: string, device: NliDevice): Promise<Loaded> {
@@ -128,10 +137,11 @@ async function load(modelId: string, modelUrl: string, wasmUrl: string, device: 
   const tokenizer = await AutoTokenizer.from_pretrained(modelId);
 
   let webgpuError: string | undefined;
-  if (device === 'auto') {
+  if (device !== 'wasm') {
     try {
-      const adapter = await useHighPerformanceAdapter();
-      const candidate: Loaded = { tokenizer, ...(await loadOn(modelId, 'webgpu')), backend: 'webgpu', adapter };
+      const adapter = await useWebGpuAdapter();
+      const dtype: NliDtype = device === 'webgpu-fp16' ? 'fp16' : 'q8';
+      const candidate: Loaded = { tokenizer, ...(await loadOn(modelId, 'webgpu', dtype)), adapter };
       await score(candidate, WARMUP);
       return candidate;
     } catch (err) {
@@ -140,8 +150,7 @@ async function load(modelId: string, modelUrl: string, wasmUrl: string, device: 
   }
   return {
     tokenizer,
-    ...(await loadOn(modelId, 'wasm')),
-    backend: 'wasm',
+    ...(await loadOn(modelId, 'wasm', 'q8')),
     adapter: null,
     ...(webgpuError !== undefined && { webgpuError }),
   };
@@ -199,6 +208,7 @@ scope.onmessage = async (event) => {
         type: 'ready',
         loadMs: performance.now() - started,
         backend: loaded.backend,
+        dtype: loaded.dtype,
         adapter: loaded.adapter,
         ...(loaded.webgpuError !== undefined && { webgpuError: loaded.webgpuError }),
       });

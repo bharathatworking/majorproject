@@ -1066,9 +1066,22 @@ describe('runSimplification quality mode', () => {
     const log = await lastLog(doc.id);
     expect(log).toMatchObject({
       qualityMode: 'full',
-      nli: { backend: 'webgpu', adapterVendor: 'nvidia', benchMs: 40, predictedParagraphMs: 90 },
+      nli: { backend: 'webgpu', adapterVendor: 'nvidia', dtype: 'q8', benchMs: 40, predictedParagraphMs: 90 },
     });
     expect((await getDocument(doc.id))?.results[0].lite).toBeUndefined();
+  });
+
+  it('records fp16 weights in the run log and the summary line', async () => {
+    nliBenchResult = { ...FAST_WEBGPU, dtype: 'fp16', device: 'webgpu-fp16' };
+    nodes = [CURIE];
+    replies = { n0: ['Marie Curie won the Nobel Prize in 1903.'] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect((await getDocument(doc.id))?.runLogs?.at(-1)?.nli).toMatchObject({ backend: 'webgpu', dtype: 'fp16' });
+    expect(vi.mocked(console.log).mock.calls.map(c => String(c[0])))
+      .toContainEqual(expect.stringMatching(/\(backend webgpu fp16 nvidia\)/));
   });
 
   it('Auto decides from a matching stored benchmark without loading the model', async () => {
