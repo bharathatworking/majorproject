@@ -864,7 +864,13 @@ ol.node-list { list-style: decimal; }
   font-family: system-ui, sans-serif;
   font-size: 0.68rem;
   line-height: 1.4;
-  pointer-events: none;
+  /* A failure reason can be long: one line, cut with an ellipsis. The full
+     text is in the title tooltip, so the badge takes hover (it sits beside
+     the clickable text, not over it). */
+  max-width: min(70%, 32rem);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   opacity: 0;
   transition: opacity var(--transition);
 }
@@ -1087,6 +1093,53 @@ ol.node-list { list-style: decimal; }
 .comparison-delta.positive { color: var(--success); }
 .comparison-delta.negative { color: var(--error); }
 .comparison-row.meaning-row { grid-template-columns: 1fr auto; }
+
+/* Thesis metric: meaning preserved per document */
+.meaning-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+  margin-top: 1.5rem;
+  overflow-x: auto;
+}
+.meaning-card-hint {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 0.25rem 0 0.75rem;
+}
+.meaning-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.meaning-table th,
+.meaning-table td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+.meaning-table thead th {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.75rem;
+}
+.meaning-table .meaning-doc-title,
+.meaning-table thead th:first-child {
+  text-align: left;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meaning-table .meaning-doc-title {
+  font-weight: 400;
+  color: var(--text-primary);
+}
+.meaning-table .meaning-pass-rate { color: var(--accent-light); font-weight: 600; }
+.meaning-table .coverage-low { color: var(--warning); }
 
 /* ── Settings page ─────────────────────────────────────────── */
 .settings-page { max-width: 640px; }

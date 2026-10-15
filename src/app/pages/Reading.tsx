@@ -4,9 +4,11 @@ import { parseSimplifiedText } from '../../lib/render/format-output';
 import { getHostname } from '../../lib/utils/url';
 // run-log.ts has type-only imports; never import lib/quality/score.ts here
 import { buildRunReport, runReportFileName } from '../../lib/run/run-log';
-// similarity.ts, not semantic.ts: the latter pulls compromise into this chunk
-import { SIMILARITY_THRESHOLD } from '../../lib/quality/similarity';
-import type { Block, ClarityDocument, ContentNode, StoredResult, DisplayPrefs, RunMode } from '../../types';
+// similarity.ts, not semantic.ts or meaning.ts: those pull compromise into this chunk
+import { meaningBadge } from '../../lib/quality/similarity';
+import type {
+  Block, ClarityDocument, ContentNode, StoredMeaning, StoredResult, DisplayPrefs, RunMode,
+} from '../../types';
 import type { RunState, LiveNodeState } from '../hooks/useRunState';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -19,7 +21,7 @@ interface ReadingProps {
   onStartRun: (doc: ClarityDocument, mode: RunMode, startIndex: number) => void;
   onCancelRun: () => void;
   onDismissError: () => void;
-  onDismissNotice: () => void;
+  onDismissNotice: (message: string) => void;
   onUpdatePrefs: (patch: Partial<DisplayPrefs>) => void;
 }
 
@@ -30,8 +32,21 @@ type NodeGroup =
 interface NodeResult {
   text: string;
   status: 'pending' | 'streaming' | 'done' | 'error';
-  similarity?: number;
+  meaning?: StoredMeaning;
   skipped?: boolean;
+}
+
+/** The meaning-check fields of a stored result. */
+function storedMeaning(r: StoredResult): StoredMeaning {
+  return {
+    similarity: r.similarity,
+    entityRecall: r.entityRecall,
+    minEntailment: r.minEntailment,
+    maxContradiction: r.maxContradiction,
+    nliChecked: r.nliChecked,
+    passed: r.passed,
+    reasons: r.reasons,
+  };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -129,10 +144,10 @@ export function Reading({
   const getResult = useCallback((nodeId: string): NodeResult => {
     if (isLiveRun && runState!.liveResults[nodeId]) {
       const live: LiveNodeState = runState!.liveResults[nodeId];
-      return { text: live.text, status: live.status, similarity: live.similarity, skipped: live.skipped };
+      return { text: live.text, status: live.status, meaning: live.meaning, skipped: live.skipped };
     }
     const s = storedById.get(nodeId);
-    if (s) return { text: s.simplifiedText, status: s.status, similarity: s.similarity, skipped: s.skipped };
+    if (s) return { text: s.simplifiedText, status: s.status, meaning: storedMeaning(s), skipped: s.skipped };
     return { text: '', status: 'pending' };
   }, [isLiveRun, runState, storedById]);
 
@@ -282,13 +297,13 @@ export function Reading({
         </div>
       )}
 
-      {/* ── Notice banner (non-fatal, e.g. meaning checker missing) ── */}
-      {runState?.notice && runState.docId === activeDoc.id && (
-        <div className="banner banner-info" role="status">
-          <span>{runState.notice}</span>
-          <button className="banner-dismiss" onClick={onDismissNotice} aria-label="Dismiss">×</button>
+      {/* ── Notice banners (non-fatal, e.g. embedding or NLI model missing) ── */}
+      {runState && runState.docId === activeDoc.id && runState.notices.map(notice => (
+        <div key={notice} className="banner banner-info" role="status">
+          <span>{notice}</span>
+          <button className="banner-dismiss" onClick={() => onDismissNotice(notice)} aria-label="Dismiss">×</button>
         </div>
-      )}
+      ))}
 
       {/* ── Reading column ── */}
       <div className={contentClasses}>
@@ -397,6 +412,7 @@ function NodeBlock({
 
   // Re-parsed on every streamed chunk; cheap (linear in a single node's text)
   const blocks = useMemo(() => parseSimplifiedText(result.text), [result.text]);
+  const badge = isDone && result.meaning ? meaningBadge(result.meaning) : null;
 
   return (
     <div
@@ -436,13 +452,10 @@ function NodeBlock({
         )}
       </Tag>
 
-      {/* Meaning-check score; CSS shows it on hover/focus */}
-      {isDone && result.similarity !== undefined && (
-        <span
-          className={`meaning-badge ${result.similarity < SIMILARITY_THRESHOLD ? 'meaning-low' : ''}`}
-          title="How closely the simplified text keeps the original meaning"
-        >
-          meaning {Math.round(result.similarity * 100)}%
+      {/* Meaning-check verdict; CSS shows it on hover/focus */}
+      {badge && (
+        <span className={`meaning-badge ${badge.warn ? 'meaning-low' : ''}`} title={badge.title}>
+          {badge.label}
         </span>
       )}
 

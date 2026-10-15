@@ -10,10 +10,10 @@ Generated from commit `2edaf92` (2026-10-15). If the code and this file disagree
 
 **Clarity** is a Chrome MV3 extension that rewrites web pages, pasted text or PDFs at the user's reading level.
 
-- It runs fully on the device. A **local Ollama** server at `http://localhost:11434` does the rewriting, using the chat model chosen in Settings (default `qwen2.5:3b`) and, optionally, the `all-minilm` embedding model for a meaning check.
-- There is no backend, no database and no cloud API. The only network targets are Ollama and the captured page itself.
+- It runs fully on the device. A **local Ollama** server at `http://localhost:11434` does the rewriting, using the chat model chosen in Settings (default `qwen2.5:3b`) and, optionally, the `all-minilm` embedding model for a meaning check. A bundled NLI cross-encoder (`Xenova/nli-deberta-v3-xsmall`, run with Transformers.js in a Web Worker) checks every simplified sentence.
+- There is no backend, no database and no cloud API. The only network targets are Ollama and the captured page itself. The NLI model and the ONNX Runtime wasm ship inside `dist/` (`npm run fetch-models`), never downloaded at runtime.
 - What the user gets: a readability dashboard (eight grade metrics), a streamed paragraph-by-paragraph rewrite with click-to-reveal of the original, reading presets, a dyslexia font, focus mode, a progress chart and a downloadable JSON run report.
-- The research angle (stages 6C and 7): checking that the rewrite keeps the meaning (embedding similarity plus entity preservation), scoring candidate outputs, and A/B-testing prompt variants through the "Extra quality (slower)" toggle.
+- The research angle (stages 6C and 7): checking that the rewrite keeps the meaning (thesis standard: SBERT similarity ≥ 0.87, every entity kept, and no simplified sentence contradicted or unsupported per NLI), scoring candidate outputs, and A/B-testing prompt variants through the "Extra quality (slower)" toggle.
 - **Academic context:** this is the author's final-year university major project.
 - **Thesis goal:** Clarity must beat Chrome's "Ask Gemini" (Gemini in Chrome) at simplification while preserving meaning, proven with a fair benchmark. The two targets:
   - At least 87% of paragraphs pass the meaning check.
@@ -32,6 +32,7 @@ Generated from commit `2edaf92` (2026-10-15). If the code and this file disagree
 | LLM | Ollama HTTP API: `/api/chat` (streamed NDJSON), `/api/embed`, `/api/tags` |
 | Extraction | `@mozilla/readability`, `dompurify` |
 | NLP | `compromise` + `compromise-dates` + `compromise-numbers` (entity detection) |
+| NLI | `@huggingface/transformers` 4.3.1 (Apache-2.0) + `onnxruntime-web` (MIT, wasm backend, single-threaded) in a Web Worker; model `Xenova/nli-deberta-v3-xsmall`, 8-bit quantized (87 MB), ONNX conversion of `cross-encoder/nli-deberta-v3-xsmall` (Apache-2.0; base `microsoft/deberta-v3-xsmall`, MIT). Labels: 0 contradiction, 1 entailment, 2 neutral |
 | PDF | `pdfjs-dist` 6.x (worker loaded through a `?url` import) |
 | Charts | `chart.js` 4 |
 | Font | `@fontsource/opendyslexic` (bundled, no CDN) |
@@ -45,6 +46,8 @@ There is no lint config.
 CLAUDE.md, README.md, PROJECT_CONTEXT.md
 package.json, tsconfig.json, vite.config.ts, vitest.config.ts
 icons/                       icon16/32/48/128.png
+scripts/fetch-models.mjs     npm run fetch-models: NLI model (pinned, SHA-256 checked) + ORT wasm into public/
+public/models/, public/ort/  git-ignored; copied by Vite into dist/models/ and dist/ort/
 src/
   manifest.ts                MV3 manifest (defineManifest); holds the pinned `key`
   background/index.ts        service worker: toolbar click, inject extractor, store doc, open app tab
@@ -62,7 +65,9 @@ src/
                   difficult-words.ts, data/common-words.txt
     profile/      resolver.ts, presets.ts
     prompt-builder/  builder.ts, variants.ts
-    quality/      similarity.ts, semantic.ts, score.ts
+    quality/      config.ts (every quality constant), similarity.ts (UI-safe stats/badge),
+                  semantic.ts (SBERT + entities), glossary.ts, nli.ts, nli.worker.ts,
+                  meaning.ts (thesis verdict), score.ts
     render/       format-output.ts
     run/          simplify.ts, run-log.ts, timing.ts
     segmentation/ segmenter.ts, ner.ts
@@ -70,8 +75,9 @@ src/
     utils/        hash.ts, html.ts, url.ts, restricted-pages.ts, write-queue.ts
   types/          index.ts (all shared types), compromise-numbers.d.ts, crxjs.d.ts
 tests/
-  mocks/          chrome.ts (installChromeMock), fixtures.ts (makeReport, makeDocInput)
-  unit/           19 *.test.ts files (see section 8)
+  mocks/          chrome.ts (installChromeMock), fixtures.ts (makeReport, makeDocInput,
+                  makeAssessment, makeEntailment, makeRunMeaningSummary)
+  unit/           23 *.test.ts files (see section 8)
 ```
 
 `dist/`, `node_modules/` and `coverage/` are git-ignored.
@@ -110,26 +116,31 @@ tests/
    2. **Segment.** `segmentHtml(html, title, hash)` (`src/lib/segmentation/segmenter.ts`, uses `DOMParser`) returns flat `ContentNode`s with **deterministic IDs `n0, n1, …`**. `<li>` items are flattened to top-level `list-item` nodes. No NER happens here. `simplifiableNodes` (drops tables and empty nodes) is the shared filter, so a node index means the same node in both Reading and the run.
    3. **Order.** `rotateFrom(nodes, startIndex)` starts at the first node visible in Reading and wraps around. Each node takes the first path that applies:
       - **Already simple:** `isAlreadySimple` (`src/lib/metrics/node-grade.ts`) finds the node's grade at or below the target. The original is stored as `done` with `skipped: true`, with no model call.
-      - **Cache hit:** `src/lib/storage/cache.ts` keys on `sha256(node text + sorted spec JSON + model)`, plus a quality tag for Extra-quality runs. Only outputs that passed the stage 6C checks are cached.
+      - **Cache hit:** `src/lib/storage/cache.ts` keys on `sha256(node text + sorted spec JSON + model)`, plus a quality tag for Extra-quality runs. Only outputs that passed the stage 6C checks are cached, with their verdict. Entries carry `format: CACHE_FORMAT` (2); older entries (judged by the old 0.80 standard) are misses. A cached verdict that was not fully checked (NLI or embedding model missing then) is a miss while both checks are available.
       - **Model:** `detectEntities` (`src/lib/segmentation/ner.ts`, dynamically imported) runs for this node only, then steps 4 to 7 below.
       - The rolling context is the last sentence of the previous node in **document** order, if that node is done.
    4. **Prompt.** `buildPrompt` (`src/lib/prompt-builder/builder.ts`) returns a system prompt plus a user prompt. Reader flags become numbered system rules 7+ via `readerRules`. The user prompt carries a node-type hint, the entities to preserve, the rolling context and a lexical hint: `findDifficultWords` lists up to 8 (`MAX_DIFFICULT_WORDS`) uncommon, non-entity words longer than 3 letters. The hint is left out when `keepTerms` is on or the tier is `none`. The last parameter selects a prompt variant (`standard` adds nothing).
    5. **Call.** `OllamaProvider.simplifyChunk` POSTs `/api/chat` with `stream: true` and `keep_alive: '10m'`. `parseOllamaStream` (`src/lib/llm/ollama-stream.ts`) buffers lines split across chunks, skips malformed lines with a `[Clarity]` warning, throws on `{"error": ...}` lines and stops at `done: true`. Ollama is stateless, so the "session" is just a stored system prompt (`createBaseSession`).
-   6. **Stage 6C: meaning preservation** (`src/lib/quality/semantic.ts`; the compromise-free parts are in `similarity.ts`). It covers every node except headings and texts under 8 words (`shouldCheckNode`, `MIN_WORDS_FOR_CHECK`).
-      - `checkMeaning` embeds the original and the output in one `/api/embed` call; it passes when the cosine is at least `SIMILARITY_THRESHOLD = 0.80`.
-      - `findMissingEntities` checks that each entity survives. The match ignores case, possessive 's and thousands separators, and numbers also match by value.
-      - A failure triggers one retry with `MEANING_RETRY_INSTRUCTION` prepended. `pickBetterVersion` keeps a passing version over a failing one, then the higher similarity, then fewer missing entities; the original version wins ties.
-      - Failures never fail the run. An embed 404 turns the meaning score off for the rest of the run and shows `EMBED_MISSING_NOTICE` once; the entity check still runs.
-   7. **Stage 7: candidate scoring** (`src/lib/quality/score.ts`). `total = 0.5·meaning + 0.3·readability + 0.2·length` (`WEIGHTS`), where meaning is similarity × entity recall.
+   6. **Stage 6C: meaning preservation, thesis standard** (`assessMeaning` in `src/lib/quality/meaning.ts`; every constant in `config.ts`). It covers every node except headings and texts under 8 words (`shouldCheckNode`, `MIN_WORDS_FOR_CHECK`). A version **passes** only if all three hold:
+      - **SBERT:** `checkMeaning` (`semantic.ts`) embeds original and output in one `/api/embed` call; cosine ≥ `SIMILARITY_THRESHOLD = 0.87`.
+      - **Entities:** `findMissingEntities` finds none missing (case, possessive 's and thousands separators ignored; numbers also match by value). `entityRecall` is over distinct entity texts.
+      - **NLI** (`checkEntailment` in `nli.ts`): the output is split into sentences (`splitSentences`: `toPlainText`, then the `(?<=[.!?])\s+` rule and line breaks, so each bullet is a sentence). Premise = the original paragraph, hypothesis = each sentence. Every non-exempt sentence needs entailment ≥ `ENTAILMENT_MIN = 0.5`, and every sentence contradiction ≤ `CONTRADICTION_MAX = 0.2`.
+      - **Glossary exemptions** (`glossary.ts`, pure, reusable by the offline benchmark): a sentence that defines one of this node's hinted words (`hintedWords` in `builder.ts`, the exact lexical-hint list; empty with `keepTerms` or tier `none`) — "X means / is / is a type of / refers to …" — skips the entailment requirement, never the contradiction one. One exemption per word, at most `floor(0.3 × sentences)` (`GLOSSARY_EXEMPTION_MAX_RATE`), so nodes of 1–3 sentences get none. Parenthetical definitions of hinted words (`word (definition)`) are removed before NLI. Each exemption is logged.
+      - **Runtime:** `nli.worker.ts` runs `AutoTokenizer` + `AutoModelForSequenceClassification` (`dtype: 'q8'`, `device: 'wasm'`, one thread) with `env.allowRemoteModels = false`, model files from `chrome.runtime.getURL('models/')` and the wasm from `ort/` (`wasmPaths` set explicitly, `useWasmCache` off — the default loads the factory from a `blob:` URL, which the CSP blocks). Labels come from the model's `id2label`. `NliClient` batches pairs (`NLI_BATCH_SIZE = 8`) and keeps an in-memory LRU (`NLI_CACHE_MAX = 500`) keyed by `sha256(premise, hypothesis)`. The worker is created lazily, once per app tab.
+      - **Reasons and retry:** reasons are ordered dropped entities ("You dropped the number 1945."), contradicted sentences, unsupported sentences ("This sentence is not supported by the original: "…""), then drift ("…similarity 0.82, needs 0.87"). A failure triggers one retry; `buildRetryInstruction` prepends `MEANING_RETRY_INSTRUCTION` plus the first `MAX_RETRY_REASONS = 3` reasons. `pickBetterVersion` keeps a passing version, then the higher `meaningScore`; the first version wins ties.
+      - **Fallbacks never fail the run.** An embed 404 shows `EMBED_MISSING_NOTICE` once and drops SBERT for the run. An NLI model that can't load (`NliUnavailableError`: missing files, wasm blocked, worker crash, 60 s load timeout) shows `NLI_MISSING_NOTICE` once and drops NLI for the run (`nliChecked: false`). A single failed NLI request skips NLI for that node only. `passed` means every check that ran passed; `fullyChecked` means all three ran.
+      - **NLI timing:** each assessed version logs `[Clarity] NLI nX: S sentences (C cached, E exempt) N ms`; the run summary has the average, and a warning above `NLI_SLOW_MS = 500`.
+   7. **Stage 7: candidate scoring** (`src/lib/quality/score.ts`). `total = 0.5·meaning + 0.3·readability + 0.2·length` (`WEIGHTS`), where meaning is `meaningScore(assessment)` = similarity × entity recall × minimum entailment (each part only when measured; 1 for unchecked nodes).
       - Extra quality **off** (the default): the 6C retry, at most 2 calls.
       - Extra quality **on**: if the streamed `standard` output fails 6C or scores below `QUALITY_THRESHOLD = 0.75`, the `stepwise` and `example-guided` variants (`src/lib/prompt-builder/variants.ts`) are generated without streaming, in place of the 6C retry. `pickBestCandidate` prefers passing versions, then the highest total; ties go to `standard`.
       - Hard cap: `MAX_MODEL_CALLS_PER_NODE = 3`. Headings and texts under 8 words always get one call.
-   8. **Persist.** Each finished node (`done` or `error`) is saved immediately with `saveDocument`. The kept version's score goes into `StoredResult.similarity`. Each node logs `[Clarity] Node nX (model|cache|skipped|error) N.NN s`, and the run logs a summary line (`summarizeRun` in `src/lib/run/timing.ts`).
+   8. **Persist.** Each finished node (`done` or `error`) is saved immediately with `saveDocument`. The kept version's verdict goes on the result (`StoredMeaning`: `similarity`, `entityRecall`, `minEntailment`, `maxContradiction`, `nliChecked`, `passed`, `reasons`). Each node logs `[Clarity] Node nX (source, meaning status) N.NN s`, and the run logs a summary line (`summarizeRun` in `src/lib/run/timing.ts`) with the meaning pass rate, coverage and NLI average. Below 90% coverage (`THESIS_COVERAGE_MIN`) it warns that the pass rate is not thesis-grade.
+      - **Thesis metric** (`summarizeMeaning` / `meaningStats` in `similarity.ts`): each node is `passed`/`failed` (fully checked), `not-fully-checked` (a check fell back), `excluded` (headings, short texts, already simple) or `error`. Pass rate = passed / fully checked; coverage = fully checked / (fully checked + not fully checked). The run log's `summary.meaning` has these counts, `avgNliMs`, and the glossary `exemptedSentences` count and `exemptionRate`.
    9. **Finish.** The run computes `simplifiedReport`, calls `recordSession(targetGrade)`, then `addRunLog` (also when cancelled). The report and rolling context use `toPlainText`; the stored text keeps the raw output with its bullet markers.
 5. **Display.** `Reading` re-segments the HTML and merges `runState.liveResults` with `doc.results`. `NodeBlock` renders `parseSimplifiedText` blocks as real `<p>`, `<ul>`/`<ol>` and `<li>` elements (never `dangerouslySetInnerHTML`).
-   - Clicking a paragraph reveals the original. Focus mode dims the others. Hovering shows a "meaning NN%" badge, amber below 0.80. Skipped nodes show an "already simple" tag.
-   - "Download run report (JSON)" saves `buildRunReport(doc)` (format `clarity-run-report/1`, the last 5 runs).
-   - `Progress` (a `React.lazy` page with Chart.js) shows the weekly trend, a before/after comparison and "Meaning Kept" (`averageSimilarity`).
+   - Clicking a paragraph reveals the original. Focus mode dims the others. Hovering shows the meaning badge (`meaningBadge`): "meaning ✓ 0.91", "meaning ✓ 0.91 · no NLI", or amber "meaning ⚠ <first reason>" with every reason and value in the tooltip; results from before the thesis standard show "meaning 0.82". Skipped nodes show an "already simple" tag. Non-fatal notices (`runState.notices`, deduplicated) render as info banners.
+   - "Download run report (JSON)" saves `buildRunReport(doc)` (format `clarity-run-report/2`, the last 5 runs).
+   - `Progress` (a `React.lazy` page with Chart.js) shows the weekly trend, a before/after comparison with "Meaning Kept" (`averageSimilarity`), and a "Meaning Preserved" table with one row per stored document: pass rate (the thesis metric), coverage (amber below 90%), average similarity and passed / failed / not-fully-checked counts.
 
 ### App-level state rules
 - The run lives in `useRunState` at App level, with an `AbortController`, so streaming survives route changes.
@@ -139,7 +150,9 @@ tests/
 - The sidebar status chip polls `/api/tags` every 30 s (`AVAILABILITY_POLL_MS`) and on window focus.
 
 ### Bundle splitting
-The main app chunk is about 274 kB (93 kB gzip). **Never statically import** `pdfjs-dist`, `chart.js`, `pages/Progress`, `lib/run/simplify`, `lib/segmentation/ner`, `lib/quality/semantic` or `lib/quality/score` from App, Reading, Dashboard, Settings, the segmenter or any hook. Type-only imports are fine. Never import `src/lib/metrics/` from the background or content scripts, because the word list (`?raw` import) would end up in the worker.
+The main app chunk is about 278 kB (94 kB gzip). **Never statically import** `pdfjs-dist`, `chart.js`, `@huggingface/transformers`, `pages/Progress`, `lib/run/simplify`, `lib/segmentation/ner`, `lib/quality/semantic`, `lib/quality/meaning`, `lib/quality/nli` or `lib/quality/score` from App, Reading, Dashboard, Settings, the segmenter or any hook. Type-only imports are fine. UI code reads thresholds from `lib/quality/config.ts` and stats from `lib/quality/similarity.ts`, which import nothing heavy. Never import `src/lib/metrics/` from the background or content scripts, because the word list (`?raw` import) would end up in the worker.
+- The run module loads `nli.ts` with a dynamic `import()`; Transformers.js and the ONNX Runtime JS live only in the worker chunk (`assets/nli.worker-*.js`, about 490 kB), built as an ES module worker (`worker.format: 'es'`).
+- `vite.config.ts` adds the `onnxruntime-web-use-extern-wasm` resolve condition, so ORT loads its wasm and factory `.mjs` only from `wasmPaths` (`dist/ort/`) instead of Vite emitting a second 27 MB copy.
 
 ## 5. Key files
 
@@ -150,13 +163,17 @@ The main app chunk is about 274 kB (93 kB gzip). **Never statically import** `pd
 | `src/app/App.tsx` | Routing, the Ollama status poll, `handleStartRun`, `readingDoc` vs `activeDoc`, writes session `appTabId` |
 | `src/app/pages/Reading.tsx` | Renders nodes and results, `NodeBlock`, run buttons, run report download |
 | `src/app/pages/Settings.tsx` | Presets, profile fields, AI model dropdown (from `/api/tags`), Extra quality toggle, custom words, clear data, About (shows the extension ID) |
-| `src/app/hooks/useRunState.ts` | Lazily loads the run module; holds `liveResults`, `notice`, cancel |
-| `src/lib/run/simplify.ts` | `runSimplification`, `selectNodesToRun`, `rotateFrom`, `classifyError`, `STORED_TYPE` |
+| `src/app/hooks/useRunState.ts` | Lazily loads the run module; holds `liveResults` (with each node's `meaning`), `notices`, cancel |
+| `src/lib/run/simplify.ts` | `runSimplification`, `selectNodesToRun`, `rotateFrom`, `classifyError`, `STORED_TYPE`, `EMBED_MISSING_NOTICE`, `NLI_MISSING_NOTICE` |
 | `src/lib/llm/ollama-provider.ts` | `OllamaProvider` (`simplifyChunk`, `embed`, `/api/tags` checks), `DEFAULT_LLM_MODEL`, `EMBED_MODEL`, `OllamaHttpError`, `chatModelsFromTags` |
-| `src/lib/prompt-builder/builder.ts` | `buildPrompt`, `readerRules` |
+| `src/lib/prompt-builder/builder.ts` | `buildPrompt`, `readerRules`, `hintedWords` (the lexical-hint list, shared with the NLI glossary exemption) |
 | `src/lib/prompt-builder/variants.ts` | `PROMPT_VARIANTS`, `EXTRA_VARIANTS`, `EXAMPLES`, `pickExample`, `stripExampleLabel` |
-| `src/lib/quality/score.ts` | `scoreCandidate`, `pickBestCandidate`, `WEIGHTS`, `QUALITY_THRESHOLD`, `MAX_MODEL_CALLS_PER_NODE`, length and grade constants |
-| `src/lib/quality/semantic.ts` / `similarity.ts` | 6C checks / `cosineSimilarity`, `averageSimilarity`, thresholds |
+| `src/lib/quality/config.ts` | Every quality constant: `SIMILARITY_THRESHOLD` 0.87, `ENTAILMENT_MIN` 0.5, `CONTRADICTION_MAX` 0.2, `MIN_WORDS_FOR_CHECK`, `GLOSSARY_EXEMPTION_MAX_RATE`, `MAX_RETRY_REASONS`, `THESIS_COVERAGE_MIN`, the NLI model id, batch, cache, timeouts and `NLI_SLOW_MS`, and the stage 7 `WEIGHTS`, `QUALITY_THRESHOLD`, `MAX_MODEL_CALLS_PER_NODE`, grade and length constants. Import-free |
+| `src/lib/quality/meaning.ts` | `assessMeaning` (thesis verdict), reasons, `buildRetryInstruction`, `meaningScore`, `pickBetterVersion`, `candidatePasses`, `toStoredMeaning`, `MEANING_RETRY_INSTRUCTION` |
+| `src/lib/quality/nli.ts` / `nli.worker.ts` / `glossary.ts` | `checkEntailment`, `splitSentences`, `NliClient`, `createWorkerBackend`, `getNliClient`, `NliUnavailableError` / the Transformers.js worker / `isGlossarySentence`, `selectExemptions`, `stripParentheticalDefinitions` |
+| `src/lib/quality/score.ts` | `scoreCandidate`, `pickBestCandidate`, `readabilityScore`, `lengthScore` |
+| `src/lib/quality/semantic.ts` / `similarity.ts` | `checkMeaning`, `findMissingEntities`, `shouldCheckNode` / `cosineSimilarity`, `averageSimilarity`, `meaningStatusOf`, `summarizeMeaning`, `meaningStats`, `meaningBadge` |
+| `scripts/fetch-models.mjs` | Downloads the NLI model files from a pinned commit (SHA-256 checked) and copies the ORT asyncify wasm + `.mjs` from `node_modules/onnxruntime-web/dist` |
 | `src/lib/metrics/engine.ts` | `computeReadabilityReport` (eight formulas plus derived stats) |
 | `src/lib/profile/presets.ts` | `PRESETS` (Beginner, Student, Dyslexic-friendly, Non-native English, Elderly reader, Technical learner), `getPreset`, `editProfile` (sets `preset: 'custom'`) |
 | `src/lib/storage/documents.ts` | Document CRUD behind the `enqueue` write queue |
@@ -169,10 +186,10 @@ The main app chunk is about 274 kB (93 kB gzip). **Never statically import** `pd
 
 | Area | Key | Shape / owner |
 |---|---|---|
-| `local` | `doc:<id>` | `ClarityDocument` (`results: StoredResult[]`, optional `similarity`/`skipped`; `runLogs` holds the last 5) — `documents.ts`, max 10 docs, evicts the oldest non-active one |
+| `local` | `doc:<id>` | `ClarityDocument` (`results: StoredResult[]` with optional `StoredMeaning` fields and `skipped`; `runLogs` holds the last 5) — `documents.ts`, max 10 docs, evicts the oldest non-active one |
 | `local` | `docs:index` | `DocumentIndexEntry[]` plus `contentHash` for dedup |
 | `local` | `docs:active` | Active document ID |
-| `local` | `cache:<hash>`, `cache:index` | `{ text, similarity? }`; LRU index, 2,000 entries (`CACHE_MAX_ENTRIES`) — `cache.ts`, cleared by "Clear document history" |
+| `local` | `cache:<hash>`, `cache:index` | `{ text, meaning: StoredMeaning \| null, format: 2 }`; LRU index, 2,000 entries (`CACHE_MAX_ENTRIES`) — `cache.ts`, cleared by "Clear document history". Other formats read as misses |
 | `local` | `progress:weekly` | `WeeklyProgressRecord[]` (`weekStart`, `targetGradeSum`, `sessionCount`), 30-day retention, Monday-aligned — `progress.ts`; survives "Clear documents" |
 | `sync` | `userProfile` | `UserProfile` (includes `preset`); default adult / auto / general / novice / plain |
 | `sync` | `llmModel` | Ollama chat model name; falls back to `qwen2.5:3b` |
@@ -183,9 +200,10 @@ The main app chunk is about 274 kB (93 kB gzip). **Never statically import** `pd
 
 ### Core shapes (from `src/types/index.ts`)
 - `ContentNode { id; type: 'heading'|'paragraph'|'list'|'list-item'|'table'|'blockquote'; level?; text; entities? }`
-- `StoredResult { nodeId; originalText; simplifiedText; status: 'pending'|'streaming'|'done'|'error'; type; level?; similarity?; skipped? }`
+- `StoredResult { nodeId; originalText; simplifiedText; status: 'pending'|'streaming'|'done'|'error'; type; level?; skipped? }` plus `StoredMeaning { similarity?; entityRecall?; minEntailment?; maxContradiction?; nliChecked?; passed?; reasons? }`. `passed` is set exactly when the node was checked under the thesis standard; results from before it have only `similarity`.
+- `MeaningAssessment` (meaning.ts output): `similarity|null`, `entityRecall`, `missingEntities`, `minEntailment|null`, `maxContradiction|null`, `nliChecked`, `fullyChecked`, `passed`, `reasons`, `exemptedSentences`, `exemptionRate|null`, `nliMs|null`, `nliSentences`.
 - `ReadabilityReport`: Flesch ease, FK grade, Fog, SMOG, Coleman-Liau, ARI, Dale-Chall, average sentence and word length, complex-word %, long-sentence %, type-token ratio, jargon density and `estimatedGradeLevel`.
-- `RunLog`: run metadata (mode, model, extraQuality, target, tier, threshold, weights), a summary (counts by `NodeSource`, timings) and per-node `NodeRunLog` with `CandidateLog[]` scores.
+- `RunLog`: run metadata (mode, model, extraQuality, target, tier, threshold, weights, `meaningThresholds`), a summary (counts by `NodeSource`, timings, `meaning: RunMeaningSummary`) and per-node `NodeRunLog` (`meaningStatus`, the kept version's `meaning` with `exemptedSentences`/`exemptionRate`/`nliMs`) with `CandidateLog[]` (scores incl. `minEntailment`, `maxContradiction`, `passed`; `reasons`, `nliChecked`, exemptions, `nliMs`).
 
 ### Write discipline
 Every mutating function in `documents.ts` goes through `enqueue` (from `createWriteQueue` in `src/lib/utils/write-queue.ts`); `cache.ts` has its own queue. `runLogs` is written only by `addRunLog`, and `saveDocument` keeps the stored logs and ignores the caller's copy.
@@ -194,6 +212,7 @@ Every mutating function in `documents.ts` goes through `enqueue` (from `createWr
 
 ```powershell
 npm install
+npm run fetch-models   # once per clone: NLI model + ORT wasm into public/ (~114 MB, git-ignored)
 npm run build          # production build -> dist/
 npm run dev            # crxjs watch / hot reload
 npm test               # vitest run (tests/unit/**/*.test.ts)
@@ -205,7 +224,7 @@ npx vitest run --coverage --coverage.include="src/lib/**"
 ```
 
 Runtime setup for manual testing:
-1. `ollama pull qwen2.5:3b` and, optionally, `ollama pull all-minilm`. Without the second, the meaning check is skipped with a one-time notice.
+1. `ollama pull qwen2.5:3b` and, optionally, `ollama pull all-minilm`. Without the second, the similarity check is skipped with a one-time notice. Without `npm run fetch-models` before the build, the NLI check is skipped with a one-time notice (results `nliChecked: false`, not thesis-grade).
 2. Set the user env var `OLLAMA_ORIGINS=chrome-extension://emnnfgmpahidhdpdakmblphimmamckon` and fully restart Ollama. Without it, Ollama returns 403.
 3. Open `chrome://extensions`, turn on Developer mode, use "Load unpacked" on `dist/` (Chrome 138+), click the toolbar icon on an article.
 
@@ -215,20 +234,22 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - Pure modules need no mocks.
 - Code that touches storage uses `installChromeMock()` from `tests/mocks/chrome.ts` (an in-memory `local`/`sync`/`session` store via `vi.stubGlobal`).
 - Only `segmenter.test.ts` uses `// @vitest-environment happy-dom` as its first line.
-- `simplify.test.ts` mocks the segmenter with `vi.mock` and `embed` with `vi.spyOn(OllamaProvider.prototype, 'embed')`, and saves a grade-1 target in `beforeEach`.
+- `simplify.test.ts` mocks the segmenter with `vi.mock`, `embed` with `vi.spyOn(OllamaProvider.prototype, 'embed')`, and `lib/quality/nli` with `vi.mock` (`checkEntailment` answers per text; `nliMode` 'unavailable' throws `NliUnavailableError`, 'error' a plain Error), and saves a grade-1 target in `beforeEach`.
+- `nli.test.ts` never loads the model: `NliClient` gets a fake `NliBackend`, and `createWorkerBackend` a fake `WorkerLike`.
 
 ## 8. Current status
 
-- **Done:** phases 1 to 4 (capture and documents, Reading, Progress and Settings, paste and PDF), reading presets, purpose-aware prompt rules and the lexical hint, the stage 6C semantic check, the performance work (skip easy nodes, result cache, start at the visible node, model setting, lazy loading) and stage 7 (candidate scoring, prompt variants, run report).
-- **Health on 2026-10-15:** `npm test` passes (19 files, 278 tests), and `npm run typecheck` passes with 0 errors. Not re-run for this file: `npm run build`.
-- **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, score, run-log, timing, simplify.
+- **Done:** phases 1 to 4 (capture and documents, Reading, Progress and Settings, paste and PDF), reading presets, purpose-aware prompt rules and the lexical hint, the stage 6C semantic check, the performance work (skip easy nodes, result cache, start at the visible node, model setting, lazy loading), stage 7 (candidate scoring, prompt variants, run report) and Prompt 9 (the thesis meaning standard: SBERT ≥ 0.87 + entities + local NLI, glossary exemptions, pass rate and coverage).
+- **Health on 2026-10-15:** `npm test` passes (23 files, 378 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
+- **Open question on the NLI check (measured 2026-10-15, Node 24 single-thread wasm, same model and runtime as Chrome):** a 5-sentence paragraph with a 144-token premise takes about 730 ms (over the 500 ms budget). With the whole paragraph as premise, faithful paraphrases often score neutral (entailment 0.00), so the pass rate may be far below what the outputs deserve. Not yet measured in Chrome; options are pending the author's decision.
+- **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, similarity, glossary, nli, meaning, score, run-log, timing, simplify.
 - **Known issues (not yet fixed):**
   - Progress records the *target grade setting* per session, not measured reading ability.
   - Leftovers from the old Chrome built-in AI provider: the unused `_onProgress` parameter of `createBaseSession`, the `'list'` and `'table'` entries in `STORED_TYPE`, and the `'downloadable'` and `'downloading'` values in `LLMAvailability`. A built-in AI (Gemini Nano) provider is **cancelled** and will not be added.
   - Cancel doesn't abort the HTTP request: `simplifyChunk` doesn't pass the run's `AbortSignal` to `fetch`, so Ollama finishes generating the current node.
 - The README now states Chrome 138+, matching the manifest.
 - **Planned work after stage 7, in this order:**
-  1. **Prompt 9: meaning engine at thesis standard.** SBERT cosine ≥ 0.87 (the current check uses `all-minilm` at 0.80), plus the entity check, plus NLI entailment via Transformers.js in a Web Worker, with the models bundled locally.
+  1. **Prompt 9 follow-up:** settle the NLI premise granularity and speed (see the open question above).
   2. **Prompt 10: fine-tuned model.** A LoRA fine-tune named `clarity-simplify`, built in a `training/` folder on Colab from Qwen2.5-3B-Instruct and exported as GGUF for Ollama.
   3. **Prompt 11:** integrate the fine-tuned model into the hybrid engine.
   4. **Prompt 12:**
@@ -246,7 +267,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 ### Hard rules (from CLAUDE.md, mandatory)
 1. Before coding: read the files you will change, state a short plan (files + approach), then implement.
 2. Never change or remove `key` in `src/manifest.ts`. It pins the extension ID `emnnfgmpahidhdpdakmblphimmamckon`, which `OLLAMA_ORIGINS` allows. The ID also appears in the README and in Settings → About.
-3. No `eval`, no remote code, no CSP relaxation. The CSP is `script-src 'self'; object-src 'none'; connect-src 'self' http://localhost:11434;`. Don't re-add pdf.js's removed `isEvalSupported` option. A new network target needs both a CSP change and `host_permissions`.
+3. No `eval`, no remote code, no CSP relaxation beyond `'wasm-unsafe-eval'`. The CSP is `script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; connect-src 'self' http://localhost:11434;`. `'wasm-unsafe-eval'` only lets the NLI worker compile the bundled ONNX Runtime WebAssembly; it is the only allowed relaxation (never `'unsafe-eval'`, never a remote host). Models are bundled, never downloaded at runtime (`env.allowRemoteModels = false`). Don't re-add pdf.js's removed `isEvalSupported` option. A new network target needs both a CSP change and `host_permissions`.
 4. No `default_popup` (it would stop `chrome.action.onClicked` from firing) and no side panel. The app is a full tab.
 5. No module-level state in `src/background/index.ts`. MV3 kills idle workers, so state goes in `chrome.storage.session` or `chrome.storage.local`.
 6. Node IDs stay deterministic (`n0, n1, …`), because stored results are matched back to nodes by ID.
@@ -262,6 +283,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - Components use named exports; only `App` is a default export.
 - All styling lives in `src/app/app.css`, with plain class names (no CSS modules, no Tailwind).
 - Shared types live in `src/types/index.ts`; ambient module declarations sit next to it as `src/types/*.d.ts`.
+- Every quality number lives in `src/lib/quality/config.ts`; no magic numbers in the other quality modules.
 - Shared helpers live in `src/lib/utils/`: `sha256` (`hash.ts`), `escapeHtml` (`html.ts`), `getHostname` (`url.ts`, returns `null` instead of throwing, so use it in render code instead of `new URL()`), `isRestrictedUrl` and `isRestrictedPageError` (`restricted-pages.ts`), and `createWriteQueue` (`write-queue.ts`).
 - "Phase 1–4" in comments means the original build phases; "stage 6C" and "stage 7" are the quality work.
 

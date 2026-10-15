@@ -1,56 +1,46 @@
 /**
- * Semantic preservation (pipeline stage 6C): checks that a simplified node
- * still says what the original said.
+ * Semantic preservation (pipeline stage 6C), the embedding and entity parts.
+ * lib/quality/meaning.ts combines them with the NLI check (nli.ts) into the
+ * thesis verdict, and owns the reasons and the retry pick.
  *
  * Design decisions:
- *  - Two independent checks. Meaning: cosine similarity of Sentence-BERT
- *    embeddings (all-minilm via Ollama /api/embed) against SIMILARITY_THRESHOLD.
+ *  - Meaning: cosine similarity of Sentence-BERT embeddings (all-minilm via
+ *    Ollama /api/embed); meaning.ts compares it against SIMILARITY_THRESHOLD.
  *    Entities: every NER entity of the node (names, numbers, dates) must still
- *    appear in the output. Failing either check fails the version.
+ *    appear in the output.
  *  - Pure apart from the injected `embed` function, so tests need no fetch or
- *    provider mocks. The run loop (lib/run/simplify.ts) owns the retry.
+ *    provider mocks.
  *  - Entity matching is forgiving about form, not content: case, possessive
  *    's, punctuation and thousands separators are ignored, and number entities
  *    also match by parsed value ("three" = "3", "1,500" = "1500").
  *  - Headings and texts under MIN_WORDS_FOR_CHECK words are not checked:
  *    embeddings of a few words are noisy, and a retry there costs more than it
  *    saves.
- *  - Retry pick: a version that passes beats one that fails; otherwise the
- *    higher similarity wins, then fewer missing entities, and the original
- *    wins ties (it was produced without the stronger, more literal retry
- *    instruction).
  */
 
 import nlp from 'compromise';
 import numberPlugin, { type NumbersMethods } from 'compromise-numbers';
-import { cosineSimilarity, MIN_WORDS_FOR_CHECK, SIMILARITY_THRESHOLD } from './similarity';
-import type { ContentNode, Entity, MeaningCandidate, MeaningCheck } from '../../types';
-
-// Compromise-free parts live in similarity.ts; re-exported for existing callers
-export { averageSimilarity, cosineSimilarity, MIN_WORDS_FOR_CHECK, SIMILARITY_THRESHOLD } from './similarity';
+import { MIN_WORDS_FOR_CHECK } from './config';
+import { cosineSimilarity } from './similarity';
+import type { ContentNode, Entity, MeaningCheck } from '../../types';
 
 nlp.plugin(numberPlugin);
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-/** Prepended to the user prompt when a node is retried after failing a check. */
-export const MEANING_RETRY_INSTRUCTION =
-  'Your previous version changed the meaning. Keep every fact, number and name from the original.';
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 /** Batch embedding function, e.g. OllamaProvider.embed. */
 export type EmbedFn = (texts: string[]) => Promise<number[][]>;
 
 // ─── Meaning ──────────────────────────────────────────────────────────────────
 
-/** Embeds both texts in one request and compares them against the threshold. */
+/** Embeds both texts in one request and returns their cosine similarity. */
 export async function checkMeaning(
   original: string,
   simplified: string,
   embed: EmbedFn,
 ): Promise<MeaningCheck> {
   const [a, b] = await embed([original, simplified]);
-  const similarity = cosineSimilarity(a, b);
-  return { similarity, passed: similarity >= SIMILARITY_THRESHOLD };
+  return { similarity: cosineSimilarity(a, b) };
 }
 
 // ─── Entities ─────────────────────────────────────────────────────────────────
@@ -77,7 +67,7 @@ function numberValues(text: string): number[] {
  * Entity texts from the original that the simplified text no longer contains,
  * deduplicated in order of appearance.
  */
-export function findMissingEntities(entities: Entity[], simplified: string): string[] {
+export function findMissingEntities(entities: readonly Entity[], simplified: string): string[] {
   const haystack = normalize(simplified);
   let simplifiedNumbers: Set<number> | null = null;
   const missing: string[] = [];
@@ -104,31 +94,4 @@ export function findMissingEntities(entities: Entity[], simplified: string): str
 export function shouldCheckNode(node: ContentNode): boolean {
   if (node.type === 'heading') return false;
   return node.text.trim().split(/\s+/).filter(Boolean).length >= MIN_WORDS_FOR_CHECK;
-}
-
-/** True when no entity is missing and the similarity (if measured) meets the threshold. */
-export function passesChecks(candidate: MeaningCandidate): boolean {
-  return (
-    candidate.missingEntities.length === 0 &&
-    (candidate.similarity === undefined || candidate.similarity >= SIMILARITY_THRESHOLD)
-  );
-}
-
-/** Chooses between the first attempt and the retry (rule in the file header). */
-export function pickBetterVersion(
-  original: MeaningCandidate,
-  retry: MeaningCandidate,
-): MeaningCandidate {
-  const originalPasses = passesChecks(original);
-  if (originalPasses !== passesChecks(retry)) return originalPasses ? original : retry;
-
-  if (
-    original.similarity !== undefined &&
-    retry.similarity !== undefined &&
-    original.similarity !== retry.similarity
-  ) {
-    return retry.similarity > original.similarity ? retry : original;
-  }
-
-  return retry.missingEntities.length < original.missingEntities.length ? retry : original;
 }

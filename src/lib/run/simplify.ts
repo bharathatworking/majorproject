@@ -27,18 +27,29 @@
  * document order, and the simplified report joins text in document order.
  * Per-node and total timings are logged with the [Clarity] prefix.
  *
- * Semantic preservation (stage 6C, lib/quality/semantic.ts): each finished
- * node that passes shouldCheckNode is scored for meaning (embedding cosine
- * vs the original) and for dropped entities. A failing node is retried once
- * with MEANING_RETRY_INSTRUCTION and the better version is kept; its
- * similarity is stored on the result. The check never fails a run: a missing
- * embedding model (404) shows one notice and disables the meaning score for
- * the rest of the run, other embed errors skip it for that node, and a failed
- * retry keeps the first version.
+ * Semantic preservation (stage 6C, thesis standard, lib/quality/meaning.ts):
+ * each finished node that passes shouldCheckNode is assessed with
+ * assessMeaning: SBERT cosine ≥ 0.87, every entity kept, and no simplified
+ * sentence contradicted or unsupported by the original (NLI, lib/quality/
+ * nli.ts, in a Web Worker). A failing node is retried once with a retry
+ * instruction naming the specific reasons, and the better version is kept;
+ * its assessment (similarity, entityRecall, minEntailment, maxContradiction,
+ * nliChecked, passed, reasons) is stored on the result. The check never fails
+ * a run:
+ *   - Missing embedding model (404): one notice, no similarity for the rest
+ *     of the run. Other embed errors skip it for that node.
+ *   - NLI model not loadable: one notice, nliChecked: false for the rest of
+ *     the run (SBERT + entities still apply). Other NLI errors skip it for
+ *     that node.
+ *   - A failed retry keeps the first version.
+ * The run log counts every node as passed / failed / not fully checked /
+ * excluded; when coverage (fully checked / eligible) is below
+ * THESIS_COVERAGE_MIN it warns that the pass rate is not thesis-grade.
  *
  * Prompt optimization (stage 7, lib/quality/score.ts and
  * lib/prompt-builder/variants.ts): every model output is scored with
- * scoreCandidate (meaning 0.5, readability 0.3, length 0.2).
+ * scoreCandidate (meaning 0.5, readability 0.3, length 0.2), whose meaning
+ * part is the assessment's meaningScore.
  *   - "Extra quality (slower)" off: the stage 6C retry above, unchanged.
  *   - On: the streamed 'standard' version is kept when it passes 6C and its
  *     total is at least QUALITY_THRESHOLD. Otherwise 'stepwise' and
@@ -49,6 +60,10 @@
  *   - Never more than MAX_MODEL_CALLS_PER_NODE calls per node. Headings and
  *     short texts (no 6C check) always get one call. Extra-quality results
  *     are cached under their own key.
+ *
+ * Cache: only passing versions are cached, with their assessment. A cached
+ * verdict that was not fully checked (NLI or embedding model missing at the
+ * time) counts as a miss once both checks are available, so coverage recovers.
  *
  * Run log: every node, and every candidate's variant, scores and time, goes
  * into a RunLog that addRunLog appends to the document at the end of the run
@@ -63,7 +78,7 @@
 
 import { EMBED_MODEL, OllamaHttpError, OllamaProvider } from '../llm/ollama-provider';
 import { resolveProfile } from '../profile/resolver';
-import { buildPrompt } from '../prompt-builder/builder';
+import { buildPrompt, hintedWords } from '../prompt-builder/builder';
 import { EXTRA_VARIANTS, stripExampleLabel } from '../prompt-builder/variants';
 import { segmentHtml, simplifiableNodes } from '../segmentation/segmenter';
 import { getExtraQuality, getLlmModel, getUserProfile } from '../storage/settings';
@@ -75,19 +90,25 @@ import { addRunLog, saveDocument } from '../storage/documents';
 import { cacheKey, getCached, putCached } from '../storage/cache';
 import { recordSession } from '../storage/progress';
 import { toPlainText } from '../render/format-output';
+import { checkMeaning, shouldCheckNode } from '../quality/semantic';
 import {
-  checkMeaning, findMissingEntities, MEANING_RETRY_INSTRUCTION, passesChecks,
-  pickBetterVersion, shouldCheckNode,
-} from '../quality/semantic';
+  assessMeaning, buildRetryInstruction, candidatePasses, pickBetterVersion, toStoredMeaning,
+} from '../quality/meaning';
+import { pickBestCandidate, scoreCandidate, type ScoredCandidate } from '../quality/score';
 import {
-  MAX_MODEL_CALLS_PER_NODE, pickBestCandidate, QUALITY_THRESHOLD, scoreCandidate, WEIGHTS,
-  type ScoredCandidate,
-} from '../quality/score';
+  CONTRADICTION_MAX, ENTAILMENT_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
+  NLI_MODEL_ID, NLI_SLOW_MS, QUALITY_THRESHOLD, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN, WEIGHTS,
+} from '../quality/config';
+import { isFullyChecked, meaningStatusOf, summarizeMeaning } from '../quality/similarity';
 import { formatSeconds, summarizeRun, type NodeTiming } from './timing';
 import type {
-  CachedResult, CandidateLog, CandidateScores, ClarityDocument, ContentNode, MeaningCandidate,
-  NodeRunLog, NodeSource, PromptVariantId, RunLog, RunMode, StoredResult,
+  CachedResult, CandidateLog, CandidateScores, ClarityDocument, ContentNode, EntailmentCheck,
+  MeaningAssessment, MeaningStatus, NodeMeaningLog, NodeRunLog, NodeSource, PromptVariantId,
+  RunLog, RunMode, StoredMeaning, StoredResult,
 } from '../../types';
+
+/** The NLI module, loaded on first use (keeps it and its worker out of other chunks). */
+type NliModule = typeof import('../quality/nli');
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -96,10 +117,10 @@ export interface RunCallbacks {
   onNodeStart:  (nodeId: string) => void;
   onNodeChunk:  (nodeId: string, accumulated: string) => void;
   /**
-   * `similarity` is set when the meaning check scored the kept version;
+   * `meaning` is set when the meaning check assessed the kept version;
    * `skipped` when the node was already simple and kept as is.
    */
-  onNodeDone:   (nodeId: string, finalText: string, similarity?: number, skipped?: boolean) => void;
+  onNodeDone:   (nodeId: string, finalText: string, meaning?: StoredMeaning, skipped?: boolean) => void;
   onNodeError:  (nodeId: string) => void;
   onBannerError: (message: string) => void;
   /** Non-fatal information for the user (e.g. meaning checker not installed). */
@@ -124,13 +145,39 @@ function lastSentence(plainText: string): string {
 /** Rounds to 4 decimals so the run report stays readable. */
 const round4 = (x: number) => Math.round(x * 10_000) / 10_000;
 
+const round4OrNull = (x: number | null) => (x === null ? null : round4(x));
+
 function roundScores(s: CandidateScores): CandidateScores {
   return {
     gradeGap: round4(s.gradeGap),
-    similarity: s.similarity === null ? null : round4(s.similarity),
+    similarity: round4OrNull(s.similarity),
     entityRecall: round4(s.entityRecall),
     lengthRatio: round4(s.lengthRatio),
+    minEntailment: round4OrNull(s.minEntailment),
+    maxContradiction: round4OrNull(s.maxContradiction),
+    passed: s.passed,
     total: round4(s.total),
+  };
+}
+
+/** Stored meaning fields, rounded for the run log. */
+function roundMeaning(m: StoredMeaning): StoredMeaning {
+  return {
+    ...m,
+    ...(m.similarity !== undefined && { similarity: round4(m.similarity) }),
+    ...(m.entityRecall !== undefined && { entityRecall: round4(m.entityRecall) }),
+    ...(m.minEntailment !== undefined && { minEntailment: round4(m.minEntailment) }),
+    ...(m.maxContradiction !== undefined && { maxContradiction: round4(m.maxContradiction) }),
+  };
+}
+
+/** Run-log meaning of a model-produced kept version. */
+function meaningLog(a: MeaningAssessment): NodeMeaningLog {
+  return {
+    ...roundMeaning(toStoredMeaning(a)),
+    exemptedSentences: a.exemptedSentences,
+    exemptionRate: round4OrNull(a.exemptionRate),
+    nliMs: a.nliMs === null ? null : Math.round(a.nliMs),
   };
 }
 
@@ -178,6 +225,12 @@ function classifyError(err: unknown, model: string): string {
 
 /** Shown once per run when the embedding model is missing (HTTP 404). */
 export const EMBED_MISSING_NOTICE = `Install the meaning checker: ollama pull ${EMBED_MODEL}`;
+
+/** Shown once per run when the NLI model can't be loaded. */
+export const NLI_MISSING_NOTICE =
+  'The sentence-level meaning check (NLI) is unavailable, so this run uses similarity and ' +
+  'entities only and its pass rate is not thesis-grade. Run npm run fetch-models, ' +
+  'npm run build, and reload the extension.';
 
 // Maps ContentNode.type → StoredResult.type (handles the now-removed 'list' type too)
 const STORED_TYPE: Record<ContentNode['type'], StoredResult['type']> = {
@@ -292,13 +345,20 @@ export async function runSimplification(
 
   let firstError: string | null = null;
 
-  // Meaning check: per-run flag, turned off after the first 404 from /api/embed
+  // Meaning checks: per-run flags, turned off after the first 404 from
+  // /api/embed or the first NLI model load failure
   let embedAvailable = true;
+  let nliAvailable = true;
+  let nliModule: NliModule | null = null;
 
   // Timing and run log: recorded per node, summarized after the loop
   const timings: NodeTiming[] = [];
   const nodeLogs: NodeRunLog[] = [];
   let firstResultMs: number | null = null;
+  // NLI time of every assessed version, and the kept versions' sentence counts
+  const nliTimes: number[] = [];
+  let keptNliSentences = 0;
+  let keptExempted = 0;
   // Model calls made for the current node (reset per node; read on errors too)
   let nodeCalls = 0;
 
@@ -306,10 +366,14 @@ export async function runSimplification(
     node: ContentNode,
     source: NodeSource,
     nodeStartedAt: number,
-    details: Partial<Pick<NodeRunLog, 'variantUsed' | 'candidates' | 'similarity'>> = {},
+    details: Partial<Pick<NodeRunLog, 'variantUsed' | 'candidates' | 'meaning'>> = {},
   ) {
     const now = performance.now();
     const ms = now - nodeStartedAt;
+    const meaningStatus: MeaningStatus =
+      source === 'error' ? 'error'
+      : source === 'skipped' ? 'excluded'
+      : meaningStatusOf(details.meaning);
     timings.push({ nodeId: node.id, source, ms });
     nodeLogs.push({
       nodeId: node.id,
@@ -320,10 +384,11 @@ export async function runSimplification(
       retries: Math.max(0, nodeCalls - 1),
       ms: Math.round(ms),
       candidates: details.candidates ?? [],
-      ...(details.similarity !== undefined && { similarity: round4(details.similarity) }),
+      meaningStatus,
+      ...(details.meaning && { meaning: details.meaning }),
     });
     if (firstResultMs === null && source !== 'error') firstResultMs = now - runStart;
-    console.log(`[Clarity] Node ${node.id} (${source}) ${formatSeconds(ms)}`);
+    console.log(`[Clarity] Node ${node.id} (${source}, meaning ${meaningStatus}) ${formatSeconds(ms)}`);
   }
 
   /** Last sentence of the previous node in document order, if it is done. */
@@ -354,27 +419,68 @@ export async function runSimplification(
     return stripThinkingArtifacts(fullText);
   }
 
-  /** Scores one version of a node; never throws for embedding failures. */
-  async function assess(node: ContentNode, text: string): Promise<MeaningCandidate> {
-    const plainText = toPlainText(text);
-    const candidate: MeaningCandidate = {
-      text,
-      missingEntities: findMissingEntities(node.entities ?? [], plainText),
-    };
-    if (!embedAvailable) return candidate;
+  /** SBERT cosine of one version; null when unavailable (never throws). */
+  async function similarityOf(nodeId: string, original: string, plain: string): Promise<number | null> {
+    if (!embedAvailable) return null;
     try {
-      const { similarity } = await checkMeaning(node.text, plainText, texts => llm.embed(texts));
-      candidate.similarity = similarity;
+      return (await checkMeaning(original, plain, texts => llm.embed(texts))).similarity;
     } catch (err) {
       if (err instanceof OllamaHttpError && err.status === 404) {
         embedAvailable = false;
-        console.log(`[Clarity] Embedding model ${EMBED_MODEL} not installed; meaning check skipped`);
+        console.log(`[Clarity] Embedding model ${EMBED_MODEL} not installed; similarity check skipped`);
         if (!signal.aborted) callbacks.onNotice(EMBED_MISSING_NOTICE);
       } else {
-        console.warn('[Clarity] Meaning check failed for node', node.id, err);
+        console.warn('[Clarity] Similarity check failed for node', nodeId, err);
       }
+      return null;
     }
-    return candidate;
+  }
+
+  /** Turns NLI off for the rest of the run and tells the user once. */
+  function disableNli(err: unknown) {
+    if (!nliAvailable) return;
+    nliAvailable = false;
+    console.warn(`[Clarity] NLI model ${NLI_MODEL_ID} unavailable; meaning check falls back to SBERT + entities`, err);
+    if (!signal.aborted) callbacks.onNotice(NLI_MISSING_NOTICE);
+  }
+
+  /** Sentence-level NLI of one version; null when unavailable (never throws). */
+  async function entailmentOf(
+    nodeId: string,
+    original: string,
+    simplified: string,
+    hinted: readonly string[],
+  ): Promise<EntailmentCheck | null> {
+    if (!nliAvailable || signal.aborted) return null;
+    try {
+      nliModule ??= await import('../quality/nli');
+    } catch (err) {
+      disableNli(err);
+      return null;
+    }
+    try {
+      const result = await nliModule.checkEntailment(
+        original, simplified, hinted, nliModule.getNliClient(), { label: nodeId },
+      );
+      nliTimes.push(result.ms);
+      console.log(
+        `[Clarity] NLI ${nodeId}: ${result.sentences} sentences ` +
+        `(${result.cachedPairs} cached, ${result.exemptedSentences.length} exempt) ${Math.round(result.ms)} ms`,
+      );
+      return result;
+    } catch (err) {
+      if (err instanceof nliModule.NliUnavailableError) disableNli(err);
+      else console.warn('[Clarity] NLI check failed for node', nodeId, err);
+      return null;
+    }
+  }
+
+  /** Thesis meaning assessment of one version of a checked node. */
+  function assess(node: ContentNode, text: string, hinted: readonly string[]): Promise<MeaningAssessment> {
+    return assessMeaning(node.text, text, node.entities ?? [], hinted, {
+      similarity: (original, plain) => similarityOf(node.id, original, plain),
+      entail: (original, simplified, words) => entailmentOf(node.id, original, simplified, words),
+    });
   }
 
   /**
@@ -390,6 +496,8 @@ export async function runSimplification(
     const node: ContentNode = { ...segmentedNode, entities };
     const checked = shouldCheckNode(node);
     const difficultWords = doc.report ? findDifficultWords(node.text, entities, wordSet) : [];
+    // The words the prompt names; the NLI glossary exemption uses the same list
+    const hinted = hintedWords(spec, difficultWords);
 
     /** User prompt for a variant; falls back to the bare text without a report. */
     const promptFor = (variant: PromptVariantId): string =>
@@ -397,46 +505,46 @@ export async function runSimplification(
         ? buildPrompt(node, spec, doc.report, contextFor(node), difficultWords, variant).user
         : node.text;
 
-    /** Generates, checks (6C) and scores one candidate. Null if aborted. */
+    /**
+     * Generates, checks (6C) and scores one candidate. `retryReasons` (null
+     * for a first attempt) are named in the retry instruction. Null if aborted.
+     */
     async function attempt(
       variant: PromptVariantId,
-      retryInstruction: boolean,
+      retryReasons: string[] | null,
       stream: boolean,
     ): Promise<Attempt | null> {
       const started = performance.now();
       const prompt = promptFor(variant);
       const raw = await completeText(
-        node.id, retryInstruction ? `${MEANING_RETRY_INSTRUCTION}\n\n${prompt}` : prompt, stream,
+        node.id,
+        retryReasons === null ? prompt : `${buildRetryInstruction(retryReasons)}\n\n${prompt}`,
+        stream,
       );
       if (raw === null) return null;
       const text = variant === 'example-guided' ? stripExampleLabel(raw) : raw;
-      const meaning: MeaningCandidate = checked
-        ? await assess(node, text)
-        : { text, missingEntities: [] };
+      const meaning = checked ? await assess(node, text, hinted) : null;
       if (signal.aborted) return null;
-      const scores = scoreCandidate({
-        original: node.text,
-        simplified: text,
-        spec,
-        wordSet,
-        similarity: meaning.similarity,
-        entityCount: checked ? entities.length : 0,
-        missingEntityCount: meaning.missingEntities.length,
-      });
-      return { ...meaning, variant, scores, retryInstruction, ms: performance.now() - started };
+      const scores = scoreCandidate({ original: node.text, simplified: text, spec, wordSet, meaning });
+      return {
+        text, meaning, variant, scores,
+        retryInstruction: retryReasons !== null,
+        ms: performance.now() - started,
+      };
     }
 
-    const first = await attempt('standard', false, true);
+    const first = await attempt('standard', null, true);
     if (first === null) return null;
     const tried: Attempt[] = [first];
     let chosen = first;
 
     if (checked) {
-      const firstPasses = passesChecks(first);
+      const firstPasses = candidatePasses(first);
+      const reasons = firstPasses ? null : first.meaning?.reasons ?? [];
       if (extraQuality && (!firstPasses || first.scores.total < QUALITY_THRESHOLD)) {
         for (const variant of EXTRA_VARIANTS.slice(0, MAX_MODEL_CALLS_PER_NODE - 1)) {
           try {
-            const next = await attempt(variant, !firstPasses, false);
+            const next = await attempt(variant, reasons, false);
             if (next === null) return null;
             tried.push(next);
           } catch (err) {
@@ -448,10 +556,10 @@ export async function runSimplification(
         chosen = pickBestCandidate(tried);
       } else if (!extraQuality && !firstPasses) {
         try {
-          const retry = await attempt('standard', true, true);
+          const retry = await attempt('standard', reasons, true);
           if (retry === null) return null;
           tried.push(retry);
-          chosen = pickBetterVersion(first, retry) === retry ? retry : first;
+          chosen = pickBetterVersion(first, retry);
         } catch (err) {
           if (signal.aborted) return null;
           // The first version is still usable; don't fail the node over the retry
@@ -466,16 +574,27 @@ export async function runSimplification(
       chosen: t === chosen,
       ms: Math.round(t.ms),
       scores: roundScores(t.scores),
-      missingEntities: t.missingEntities,
+      missingEntities: t.meaning?.missingEntities ?? [],
+      reasons: t.meaning?.reasons ?? [],
+      nliChecked: t.meaning?.nliChecked ?? false,
+      exemptedSentences: t.meaning?.exemptedSentences ?? [],
+      exemptionRate: round4OrNull(t.meaning?.exemptionRate ?? null),
+      nliMs: t.meaning?.nliMs == null ? null : Math.round(t.meaning.nliMs),
     }));
     return { chosen, candidates };
   }
 
-  /** Cache lookup that never fails the node: a storage error counts as a miss. */
+  /**
+   * Cache lookup that never fails the node: a storage error counts as a miss.
+   * A verdict that was not fully checked is a miss while both checks are
+   * available, so the node gets the full thesis check this time.
+   */
   async function lookupCache(key: string): Promise<CachedResult | null> {
     if (mode === 'all') return null;  // "Re-simplify all" asks for new text
     try {
-      return await getCached(key);
+      const cached = await getCached(key);
+      if (cached?.meaning && !isFullyChecked(cached.meaning) && embedAvailable && nliAvailable) return null;
+      return cached;
     } catch (err) {
       console.warn('[Clarity] Cache read failed', err);
       return null;
@@ -510,43 +629,47 @@ export async function runSimplification(
       // b. Cache, then c. the model
       const key = await cacheKey(node.text, spec, model, extraQuality ? 'extra' : 'standard');
       const cached = await lookupCache(key);
-      let chosen: MeaningCandidate;
+      let fullText: string;
+      let stored: StoredMeaning | null;
       let source: NodeSource;
       let details: Parameters<typeof finishNode>[3];
       if (cached) {
-        chosen = { text: cached.text, similarity: cached.similarity, missingEntities: [] };
+        fullText = cached.text;
+        stored = cached.meaning;
         source = 'cache';
-        details = { similarity: cached.similarity };
+        details = stored ? { meaning: roundMeaning(stored) } : {};
       } else {
         callbacks.onNodeStart(node.id);
         const generated = await generate(node);
         if (generated === null) break;
-        chosen = generated.chosen;
+        const { chosen } = generated;
+        fullText = chosen.text;
+        stored = chosen.meaning ? toStoredMeaning(chosen.meaning) : null;
         source = 'model';
-        details = { variantUsed: generated.chosen.variant, candidates: generated.candidates };
-        // Unchecked versions pass too (no similarity, no missing entities)
-        if (passesChecks(chosen)) {
-          await putCached(key, {
-            text: chosen.text,
-            ...(chosen.similarity !== undefined && { similarity: chosen.similarity }),
-          }).catch(err => console.warn('[Clarity] Cache write failed', err));
+        details = {
+          variantUsed: chosen.variant,
+          candidates: generated.candidates,
+          ...(chosen.meaning && { meaning: meaningLog(chosen.meaning) }),
+        };
+        if (chosen.meaning) {
+          keptNliSentences += chosen.meaning.nliSentences;
+          keptExempted += chosen.meaning.exemptedSentences.length;
+        }
+        // Unchecked versions (headings, short texts) pass too
+        if (candidatePasses(chosen)) {
+          await putCached(key, { text: fullText, meaning: stored })
+            .catch(err => console.warn('[Clarity] Cache write failed', err));
         }
       }
 
-      const fullText = chosen.text;
-      callbacks.onNodeDone(node.id, fullText, chosen.similarity);
+      callbacks.onNodeDone(node.id, fullText, stored ?? undefined);
       doneCount++;
       // Metrics and rolling context use marker-free text (one sentence per
       // bullet); the raw text with markers is what gets stored and rendered.
       plainById.set(node.id, toPlainText(fullText));
 
       // Persist this node's result immediately
-      await persist({
-        ...base,
-        simplifiedText: fullText,
-        status: 'done',
-        ...(chosen.similarity !== undefined && { similarity: chosen.similarity }),
-      });
+      await persist({ ...base, simplifiedText: fullText, status: 'done', ...stored });
 
       callbacks.onProgress(doneCount, toRun.length);
       finishNode(node, source, nodeStartedAt, details);
@@ -567,11 +690,32 @@ export async function runSimplification(
 
   const summary = summarizeRun(timings, performance.now() - runStart);
   const firstResult = firstResultMs === null ? 'n/a' : formatSeconds(firstResultMs);
+  const meaning = {
+    ...summarizeMeaning(nodeLogs.map(n => n.meaningStatus)),
+    avgNliMs: nliTimes.length > 0 ? nliTimes.reduce((a, b) => a + b, 0) / nliTimes.length : null,
+    exemptedSentences: keptExempted,
+    exemptionRate: keptNliSentences > 0 ? keptExempted / keptNliSentences : null,
+  };
+  const pct = (x: number | null) => (x === null ? 'n/a' : `${Math.round(x * 100)}%`);
   console.log(
     `[Clarity] Run${signal.aborted ? ' (cancelled)' : ''}: ${summary.line}; ` +
     `first result after ${firstResult}; model ${model}` +
-    `${extraQuality ? '; extra quality' : ''}`,
+    `${extraQuality ? '; extra quality' : ''}; ` +
+    `meaning passed ${pct(meaning.passRate)} (${meaning.passed}/${meaning.passed + meaning.failed}), ` +
+    `coverage ${pct(meaning.coverage)}; ` +
+    `NLI avg ${meaning.avgNliMs === null ? 'n/a' : `${Math.round(meaning.avgNliMs)} ms`} per paragraph`,
   );
+  if (meaning.coverage !== null && !meaning.thesisGrade) {
+    console.warn(
+      `[Clarity] Meaning coverage ${pct(meaning.coverage)} is below ${pct(THESIS_COVERAGE_MIN)}: ` +
+      `the pass rate is not thesis-grade for this run`,
+    );
+  }
+  if (meaning.avgNliMs !== null && meaning.avgNliMs > NLI_SLOW_MS) {
+    console.warn(
+      `[Clarity] NLI averages ${Math.round(meaning.avgNliMs)} ms per paragraph, above the ${NLI_SLOW_MS} ms budget`,
+    );
+  }
 
   const runLog: RunLog = {
     id: crypto.randomUUID(),
@@ -585,6 +729,13 @@ export async function runSimplification(
     depthTier: spec.depthTier,
     qualityThreshold: QUALITY_THRESHOLD,
     weights: { ...WEIGHTS },
+    meaningThresholds: {
+      similarity: SIMILARITY_THRESHOLD,
+      entailmentMin: ENTAILMENT_MIN,
+      contradictionMax: CONTRADICTION_MAX,
+      glossaryExemptionMaxRate: GLOSSARY_EXEMPTION_MAX_RATE,
+      nliModel: NLI_MODEL_ID,
+    },
     summary: {
       nodes: summary.nodes,
       counts: summary.counts,
@@ -592,6 +743,13 @@ export async function runSimplification(
       secondsPerNode: summary.secondsPerNode === null ? null : round4(summary.secondsPerNode),
       secondsPerModelNode: summary.secondsPerModelNode === null ? null : round4(summary.secondsPerModelNode),
       firstResultSeconds: firstResultMs === null ? null : round4(firstResultMs / 1000),
+      meaning: {
+        ...meaning,
+        passRate: round4OrNull(meaning.passRate),
+        coverage: round4OrNull(meaning.coverage),
+        avgNliMs: meaning.avgNliMs === null ? null : Math.round(meaning.avgNliMs),
+        exemptionRate: round4OrNull(meaning.exemptionRate),
+      },
     },
     nodes: nodeLogs,
   };

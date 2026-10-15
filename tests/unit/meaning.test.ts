@@ -1,0 +1,249 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  assessMeaning, buildRetryInstruction, candidatePasses, contradictionReason, driftReason,
+  droppedEntityReason, meaningScore, MEANING_RETRY_INSTRUCTION, NO_SENTENCES_REASON,
+  pickBetterVersion, toStoredMeaning, unsupportedReason, type MeaningDeps,
+} from '../../src/lib/quality/meaning';
+import { MAX_RETRY_REASONS, SIMILARITY_THRESHOLD } from '../../src/lib/quality/config';
+import { makeAssessment, makeEntailment } from '../mocks/fixtures';
+import type { EntailmentCheck, Entity, MeaningCandidate } from '../../src/types';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const ORIGINAL = 'The war ended in 1945 when Germany surrendered to the Allies in Berlin.';
+const KEEPS = 'The war ended in 1945. Germany gave up to the Allies in Berlin.';
+const DROPS = 'The war ended. Germany gave up to the Allies in Berlin.';
+
+function entity(text: string, type: Entity['type']): Entity {
+  return { text, type, start: 0, end: text.length };
+}
+const ENTITIES = [entity('1945', 'date'), entity('Germany', 'place'), entity('Berlin', 'place')];
+
+const UNSUPPORTED = makeEntailment({
+  minEntailment: 0.1, unsupportedSentences: ['Germany gave up to the Allies in Berlin.'],
+});
+
+function deps(similarity: number | null, nli: EntailmentCheck | null): MeaningDeps {
+  return { similarity: vi.fn(async () => similarity), entail: vi.fn(async () => nli) };
+}
+
+// ---------------------------------------------------------------------------
+// assessMeaning — the thesis standard, every pass/fail combination
+// ---------------------------------------------------------------------------
+describe('assessMeaning: all three checks', () => {
+  const cases = [
+    { sbert: true,  entities: true,  nli: true,  passed: true },
+    { sbert: false, entities: true,  nli: true,  passed: false },
+    { sbert: true,  entities: false, nli: true,  passed: false },
+    { sbert: true,  entities: true,  nli: false, passed: false },
+    { sbert: false, entities: false, nli: true,  passed: false },
+    { sbert: false, entities: true,  nli: false, passed: false },
+    { sbert: true,  entities: false, nli: false, passed: false },
+    { sbert: false, entities: false, nli: false, passed: false },
+  ];
+
+  it.each(cases)('SBERT $sbert, entities $entities, NLI $nli → passed $passed', async (c) => {
+    const a = await assessMeaning(
+      ORIGINAL,
+      c.entities ? KEEPS : DROPS,
+      ENTITIES,
+      [],
+      deps(c.sbert ? 0.92 : 0.8, c.nli ? makeEntailment() : UNSUPPORTED),
+    );
+    expect(a.passed).toBe(c.passed);
+    expect(a.fullyChecked).toBe(true);
+    expect(a.nliChecked).toBe(true);
+    expect(a.reasons.length > 0).toBe(!c.passed);
+  });
+
+  it('passes at exactly the similarity threshold and fails just below', async () => {
+    expect(SIMILARITY_THRESHOLD).toBe(0.87);
+    expect((await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.87, makeEntailment()))).passed).toBe(true);
+    expect((await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.869, makeEntailment()))).passed).toBe(false);
+  });
+
+  it('fails on a contradiction alone, even when every sentence is entailed enough', async () => {
+    const nli = makeEntailment({ maxContradiction: 0.21, contradictedSentences: ['The war ended in 1945.'] });
+    const a = await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.92, nli));
+    expect(a.passed).toBe(false);
+    expect(a.reasons).toEqual([contradictionReason('The war ended in 1945.')]);
+  });
+
+  it('passes entailment and contradiction exactly at their limits', async () => {
+    const nli = makeEntailment({ minEntailment: 0.5, maxContradiction: 0.2 });
+    expect((await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.9, nli))).passed).toBe(true);
+  });
+
+  it('computes entity recall over distinct entity texts', async () => {
+    const a = await assessMeaning(ORIGINAL, 'Germany gave up.', [...ENTITIES, entity('Germany', 'place')], [], deps(0.9, makeEntailment()));
+    expect(a.missingEntities).toEqual(['1945', 'Berlin']);
+    expect(a.entityRecall).toBeCloseTo(1 / 3);
+  });
+
+  it('gives the NLI check the raw output and the hinted words, and SBERT the plain text', async () => {
+    const d = deps(0.9, makeEntailment());
+    await assessMeaning(ORIGINAL, '- The war ended in 1945\n- Germany gave up in Berlin', ENTITIES, ['surrendered'], d);
+    expect(d.entail).toHaveBeenCalledWith(ORIGINAL, '- The war ended in 1945\n- Germany gave up in Berlin', ['surrendered']);
+    expect(d.similarity).toHaveBeenCalledWith(ORIGINAL, 'The war ended in 1945.\nGermany gave up in Berlin.');
+  });
+
+  it('carries the NLI exemptions and timing', async () => {
+    const nli = makeEntailment({ exemptedSentences: ['X means y.'], exemptionRate: 0.25, ms: 321, sentences: 4 });
+    const a = await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.9, nli));
+    expect(a).toMatchObject({ exemptedSentences: ['X means y.'], exemptionRate: 0.25, nliMs: 321, nliSentences: 4 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assessMeaning — fallbacks (a check unavailable)
+// ---------------------------------------------------------------------------
+describe('assessMeaning: fallbacks', () => {
+  it('without NLI, judges SBERT + entities and marks nliChecked false', async () => {
+    const a = await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.9, null));
+    expect(a).toMatchObject({
+      passed: true, nliChecked: false, fullyChecked: false, minEntailment: null, maxContradiction: null,
+      exemptionRate: null, nliMs: null, nliSentences: 0,
+    });
+    expect((await assessMeaning(ORIGINAL, DROPS, ENTITIES, [], deps(0.9, null))).passed).toBe(false);
+    expect((await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.8, null))).passed).toBe(false);
+  });
+
+  it('without the embedding model, judges entities + NLI and is not fully checked', async () => {
+    const a = await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(null, makeEntailment()));
+    expect(a).toMatchObject({ passed: true, similarity: null, nliChecked: true, fullyChecked: false });
+    expect((await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(null, UNSUPPORTED))).passed).toBe(false);
+  });
+
+  it('with neither, judges entities alone', async () => {
+    expect((await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(null, null))).passed).toBe(true);
+    expect((await assessMeaning(ORIGINAL, DROPS, ENTITIES, [], deps(null, null))).passed).toBe(false);
+  });
+
+  it('runs both checks in parallel', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const slow = <T>(value: T) => async () => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(r => setTimeout(r, 5));
+      inFlight--;
+      return value;
+    };
+    await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], { similarity: slow(0.9), entail: slow(makeEntailment()) });
+    expect(maxInFlight).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reasons and the retry instruction
+// ---------------------------------------------------------------------------
+describe('reasons', () => {
+  it('names a dropped entity by type', () => {
+    expect(droppedEntityReason('1945', 'number')).toBe('You dropped the number 1945.');
+    expect(droppedEntityReason('4 July 1776', 'date')).toBe('You dropped the date 4 July 1776.');
+    expect(droppedEntityReason('Marie Curie', 'person')).toBe('You dropped the name Marie Curie.');
+    expect(droppedEntityReason('Paris', 'place')).toBe('You dropped the place Paris.');
+    expect(droppedEntityReason('UNESCO', 'org')).toBe('You dropped the organization UNESCO.');
+    expect(droppedEntityReason('Magna Carta', 'other')).toBe('You dropped "Magna Carta".');
+  });
+
+  it('quotes the failing sentence', () => {
+    expect(unsupportedReason('Germany won.')).toBe('This sentence is not supported by the original: "Germany won."');
+    expect(contradictionReason('It was 1918.')).toBe('This sentence contradicts the original: "It was 1918."');
+  });
+
+  it('states the similarity and the threshold for drift', () => {
+    expect(driftReason(0.8234)).toBe('The meaning drifted from the original (similarity 0.82, needs 0.87).');
+  });
+
+  it('orders reasons: entities, contradictions, unsupported, drift — without listing a sentence twice', async () => {
+    const nli = makeEntailment({
+      minEntailment: 0.01, maxContradiction: 0.9,
+      contradictedSentences: ['The war ended.'],
+      unsupportedSentences: ['The war ended.', 'Germany gave up to the Allies in Berlin.'],
+    });
+    const a = await assessMeaning(ORIGINAL, DROPS, ENTITIES, [], deps(0.8, nli));
+    expect(a.reasons).toEqual([
+      'You dropped the date 1945.',
+      contradictionReason('The war ended.'),
+      unsupportedReason('Germany gave up to the Allies in Berlin.'),
+      driftReason(0.8),
+    ]);
+  });
+
+  it('explains an output with no sentences', async () => {
+    const nli = makeEntailment({ minEntailment: 0, sentences: 0 });
+    const a = await assessMeaning(ORIGINAL, '', [], [], deps(0.1, nli));
+    expect(a.reasons).toContain(NO_SENTENCES_REASON);
+  });
+});
+
+describe('buildRetryInstruction', () => {
+  it('names the specific reasons after the base instruction', () => {
+    expect(buildRetryInstruction(['You dropped the number 1945.'])).toBe(
+      `${MEANING_RETRY_INSTRUCTION} Fix these problems:\n- You dropped the number 1945.`,
+    );
+  });
+
+  it(`names at most ${MAX_RETRY_REASONS} reasons, most important first`, () => {
+    const text = buildRetryInstruction(['a', 'b', 'c', 'd']);
+    expect(text).toContain('- a\n- b\n- c');
+    expect(text).not.toContain('- d');
+  });
+
+  it('is the base instruction without reasons', () => {
+    expect(buildRetryInstruction([])).toBe(MEANING_RETRY_INSTRUCTION);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// meaningScore / pickBetterVersion / toStoredMeaning
+// ---------------------------------------------------------------------------
+describe('meaningScore', () => {
+  it('multiplies similarity, entity recall and minimum entailment', () => {
+    expect(meaningScore(makeAssessment({ similarity: 0.9, entityRecall: 0.5, minEntailment: 0.8 }))).toBeCloseTo(0.36);
+  });
+
+  it('leaves out parts that were not measured', () => {
+    expect(meaningScore(makeAssessment({ similarity: null, entityRecall: 1, minEntailment: 0.8 }))).toBeCloseTo(0.8);
+    expect(meaningScore(makeAssessment({ similarity: 0.9, entityRecall: 1, minEntailment: null }))).toBeCloseTo(0.9);
+  });
+
+  it('clamps a negative similarity to 0', () => {
+    expect(meaningScore(makeAssessment({ similarity: -0.2 }))).toBe(0);
+  });
+});
+
+describe('pickBetterVersion', () => {
+  const version = (text: string, overrides = {}): MeaningCandidate => ({ text, meaning: makeAssessment(overrides) });
+
+  it('prefers a passing version over a failing one with a higher score', () => {
+    const first = version('first', { passed: false, similarity: 0.99 });
+    const retry = version('retry', { passed: true, similarity: 0.88 });
+    expect(pickBetterVersion(first, retry).text).toBe('retry');
+  });
+
+  it('keeps the higher meaning score when both fail or both pass', () => {
+    expect(pickBetterVersion(version('o', { passed: false, minEntailment: 0.3 }), version('r', { passed: false, minEntailment: 0.4 })).text).toBe('r');
+    expect(pickBetterVersion(version('o', { similarity: 0.95 }), version('r', { similarity: 0.9 })).text).toBe('o');
+  });
+
+  it('keeps the first version on a tie', () => {
+    expect(pickBetterVersion(version('o'), version('r')).text).toBe('o');
+  });
+
+  it('treats an unchecked version as passing', () => {
+    expect(candidatePasses({ text: 'x', meaning: null })).toBe(true);
+    expect(candidatePasses(version('x', { passed: false }))).toBe(false);
+  });
+});
+
+describe('toStoredMeaning', () => {
+  it('stores the verdict fields and leaves unmeasured ones out', () => {
+    expect(toStoredMeaning(makeAssessment({ similarity: null, minEntailment: null, maxContradiction: null, nliChecked: false })))
+      .toEqual({ entityRecall: 1, nliChecked: false, passed: true, reasons: [] });
+    expect(toStoredMeaning(makeAssessment())).toEqual({
+      similarity: 0.92, entityRecall: 1, minEntailment: 0.95, maxContradiction: 0.02,
+      nliChecked: true, passed: true, reasons: [],
+    });
+  });
+});

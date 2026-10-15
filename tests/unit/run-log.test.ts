@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   appendRunLog, buildRunReport, runReportFileName, MAX_RUN_LOGS, RUN_REPORT_FORMAT,
 } from '../../src/lib/run/run-log';
+import { makeRunMeaningSummary } from '../mocks/fixtures';
 import type { ClarityDocument, RunLog } from '../../src/types';
 
 function log(id: string): RunLog {
@@ -9,9 +10,14 @@ function log(id: string): RunLog {
     id, startedAt: 1, finishedAt: 2, cancelled: false, mode: 'all', model: 'qwen2.5:3b',
     extraQuality: false, targetGrade: 6, depthTier: 'moderate', qualityThreshold: 0.75,
     weights: { meaning: 0.5, readability: 0.3, length: 0.2 },
+    meaningThresholds: {
+      similarity: 0.87, entailmentMin: 0.5, contradictionMax: 0.2, glossaryExemptionMaxRate: 0.3,
+      nliModel: 'Xenova/nli-deberta-v3-xsmall',
+    },
     summary: {
       nodes: 0, counts: { model: 0, cache: 0, skipped: 0, error: 0 }, totalSeconds: 0,
       secondsPerNode: null, secondsPerModelNode: null, firstResultSeconds: null,
+      meaning: makeRunMeaningSummary(),
     },
     nodes: [],
   };

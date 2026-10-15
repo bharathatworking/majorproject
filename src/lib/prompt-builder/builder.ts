@@ -57,6 +57,15 @@ function gradeLevelDescription(spec: SimplificationSpec): string {
 }
 
 /**
+ * The difficult words the user prompt actually names (the lexical hint): none
+ * when the reader keeps terms or the tier is 'none'. The NLI glossary
+ * exemption (lib/quality/glossary.ts) uses exactly this list.
+ */
+export function hintedWords(spec: SimplificationSpec, difficultWords: readonly string[]): string[] {
+  return spec.keepTerms || spec.depthTier === 'none' ? [] : [...difficultWords];
+}
+
+/**
  * Builds a per-node {system, user} prompt pair for the Ollama chat API.
  *
  * The system prompt is shared across all nodes in a run (stored once by
@@ -136,10 +145,11 @@ ${extraRules}`;
     user += `IMPORTANT: Preserve the following entities EXACTLY as written: ${entityList}\n\n`;
   }
 
-  if (difficultWords.length > 0 && !spec.keepTerms && spec.depthTier !== 'none') {
+  const hinted = hintedWords(spec, difficultWords);
+  if (hinted.length > 0) {
     user +=
       'These words may be hard for the reader. Replace them with simpler words ' +
-      `or briefly explain them: ${difficultWords.join(', ')}\n\n`;
+      `or briefly explain them: ${hinted.join(', ')}\n\n`;
   }
 
   // Stage 7 prompt variant ('standard' adds nothing)

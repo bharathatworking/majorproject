@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
-  scoreCandidate, pickBestCandidate, readabilityScore, lengthScore,
-  WEIGHTS, QUALITY_THRESHOLD, GRADE_GAP_SCALE, BELOW_TARGET_FACTOR, LENGTH_MAX, LENGTH_MIN,
-  type ScoredCandidate,
+  scoreCandidate, pickBestCandidate, readabilityScore, lengthScore, type ScoredCandidate,
 } from '../../src/lib/quality/score';
+import {
+  WEIGHTS, QUALITY_THRESHOLD, GRADE_GAP_SCALE, BELOW_TARGET_FACTOR, LENGTH_MAX, LENGTH_MIN,
+} from '../../src/lib/quality/config';
 import { estimateNodeGrade } from '../../src/lib/metrics/node-grade';
+import { makeAssessment } from '../mocks/fixtures';
 import type { CandidateScores, SimplificationSpec } from '../../src/types';
 
 const words = new Set<string>();
@@ -20,6 +22,10 @@ function spec(targetGrade: number): SimplificationSpec {
 const ORIGINAL =
   'Marie Curie received the Nobel Prize in Physics in 1903 for her research on radiation.';
 const SIMPLE = 'Marie Curie won the Nobel Prize in 1903. She studied radiation.';
+
+/** scoreCandidate input without a meaning assessment (an unchecked node). */
+const input = (simplified: string, target: number, original = ORIGINAL) =>
+  ({ original, simplified, spec: spec(target), wordSet: words, meaning: null });
 
 // ---------------------------------------------------------------------------
 // Parts
@@ -65,72 +71,69 @@ describe('scoreCandidate', () => {
 
   it('reports a signed grade gap against the target', () => {
     const grade = estimateNodeGrade(SIMPLE, words);
-    const s = scoreCandidate({ original: ORIGINAL, simplified: SIMPLE, spec: spec(4), wordSet: words });
-    expect(s.gradeGap).toBeCloseTo(grade - 4);
-    const easyTarget = scoreCandidate({ original: ORIGINAL, simplified: SIMPLE, spec: spec(20), wordSet: words });
-    expect(easyTarget.gradeGap).toBeLessThan(0);
+    expect(scoreCandidate(input(SIMPLE, 4)).gradeGap).toBeCloseTo(grade - 4);
+    expect(scoreCandidate(input(SIMPLE, 20)).gradeGap).toBeLessThan(0);
   });
 
-  it('total is the weighted sum of meaning, readability and length', () => {
-    const target = 6;
-    const s = scoreCandidate({
-      original: ORIGINAL, simplified: SIMPLE, spec: spec(target), wordSet: words,
-      similarity: 0.9, entityCount: 4, missingEntityCount: 1,
-    });
-    expect(s.similarity).toBe(0.9);
-    expect(s.entityRecall).toBe(0.75);
+  it('total is the weighted sum of meaning (the assessment), readability and length', () => {
+    const meaning = makeAssessment({ similarity: 0.9, entityRecall: 0.75, minEntailment: 0.8, maxContradiction: 0.05 });
+    const s = scoreCandidate({ ...input(SIMPLE, 6), meaning });
+    expect(s).toMatchObject({ similarity: 0.9, entityRecall: 0.75, minEntailment: 0.8, maxContradiction: 0.05, passed: true });
     expect(s.lengthRatio).toBeCloseTo(11 / 15);
     const expected =
-      WEIGHTS.meaning * 0.9 * 0.75 +
+      WEIGHTS.meaning * 0.9 * 0.75 * 0.8 +
       WEIGHTS.readability * readabilityScore(s.gradeGap) +
       WEIGHTS.length * lengthScore(s.lengthRatio);
     expect(s.total).toBeCloseTo(expected);
   });
 
-  it('uses entity recall alone for meaning when the similarity is unmeasured', () => {
-    const s = scoreCandidate({
-      original: ORIGINAL, simplified: SIMPLE, spec: spec(30), wordSet: words,
-      entityCount: 2, missingEntityCount: 1,
-    });
+  it('records a failed assessment', () => {
+    expect(scoreCandidate({ ...input(SIMPLE, 6), meaning: makeAssessment({ passed: false }) }).passed).toBe(false);
+  });
+
+  it('uses the measured parts only when a check fell back', () => {
+    const meaning = makeAssessment({ similarity: null, entityRecall: 0.5, minEntailment: null, maxContradiction: null });
+    const s = scoreCandidate({ ...input(SIMPLE, 30), meaning });
     expect(s.similarity).toBeNull();
-    expect(s.entityRecall).toBe(0.5);
+    expect(s.minEntailment).toBeNull();
     // Far below target 30 still counts half, so compute rather than assume 1
     expect(s.total).toBeCloseTo(
       WEIGHTS.meaning * 0.5 + WEIGHTS.readability * readabilityScore(s.gradeGap) + WEIGHTS.length,
     );
   });
 
-  it('gives full entity recall when the original has no entities', () => {
-    const s = scoreCandidate({ original: ORIGINAL, simplified: SIMPLE, spec: spec(6), wordSet: words });
-    expect(s.entityRecall).toBe(1);
+  it('gives an unchecked node full meaning', () => {
+    const s = scoreCandidate(input(SIMPLE, 6));
+    expect(s).toMatchObject({ similarity: null, entityRecall: 1, minEntailment: null, passed: true });
   });
 
   it('scores an empty output low', () => {
-    const s = scoreCandidate({
-      original: ORIGINAL, simplified: '   ', spec: spec(6), wordSet: words, similarity: 0,
-    });
+    const s = scoreCandidate({ ...input('   ', 6), meaning: makeAssessment({ similarity: 0 }) });
     expect(s.lengthRatio).toBe(0);
     expect(s.total).toBe(0);
   });
 
   it('counts words without bullet markers', () => {
-    const bullets = scoreCandidate({
-      original: 'One two three four.', simplified: '- One two.\n- Three four.', spec: spec(6), wordSet: words,
-    });
-    expect(bullets.lengthRatio).toBe(1);
+    expect(scoreCandidate(input('- One two.\n- Three four.', 6, 'One two three four.')).lengthRatio).toBe(1);
   });
 
   it('a faithful, on-level rewrite clears the quality threshold and a drifting one does not', () => {
     const good = scoreCandidate({
-      original: ORIGINAL, simplified: SIMPLE, spec: spec(estimateNodeGrade(SIMPLE, words)), wordSet: words,
-      similarity: 0.92, entityCount: 1, missingEntityCount: 0,
+      ...input(SIMPLE, estimateNodeGrade(SIMPLE, words)),
+      meaning: makeAssessment({ similarity: 0.92, minEntailment: 0.95 }),
     });
     const bad = scoreCandidate({
-      original: ORIGINAL, simplified: 'She liked science.', spec: spec(1), wordSet: words,
-      similarity: 0.4, entityCount: 1, missingEntityCount: 1,
+      ...input('She liked science.', 1),
+      meaning: makeAssessment({ similarity: 0.4, entityRecall: 0, minEntailment: 0.1, passed: false }),
     });
     expect(good.total).toBeGreaterThanOrEqual(QUALITY_THRESHOLD);
     expect(bad.total).toBeLessThan(QUALITY_THRESHOLD);
+  });
+
+  it('an unsupported sentence lowers the meaning part', () => {
+    const supported = scoreCandidate({ ...input(SIMPLE, 6), meaning: makeAssessment({ minEntailment: 0.95 }) });
+    const unsupported = scoreCandidate({ ...input(SIMPLE, 6), meaning: makeAssessment({ minEntailment: 0.2 }) });
+    expect(unsupported.total).toBeLessThan(supported.total);
   });
 });
 
@@ -138,22 +141,23 @@ describe('scoreCandidate', () => {
 // pickBestCandidate
 // ---------------------------------------------------------------------------
 describe('pickBestCandidate', () => {
-  const scores = (total: number): CandidateScores =>
-    ({ gradeGap: 0, similarity: null, entityRecall: 1, lengthRatio: 1, total });
-  const cand = (
-    text: string, total: number, extra: Partial<ScoredCandidate> = {},
-  ): ScoredCandidate => ({ text, variant: 'standard', missingEntities: [], scores: scores(total), ...extra });
+  const scores = (total: number): CandidateScores => ({
+    gradeGap: 0, similarity: null, entityRecall: 1, lengthRatio: 1,
+    minEntailment: null, maxContradiction: null, passed: true, total,
+  });
+  const cand = (text: string, total: number, passed = true): ScoredCandidate =>
+    ({ text, variant: 'standard', meaning: makeAssessment({ passed }), scores: scores(total) });
 
   it('keeps the highest total', () => {
     const best = pickBestCandidate([cand('a', 0.6), cand('b', 0.9), cand('c', 0.7)]);
     expect(best.text).toBe('b');
   });
 
-  it('prefers a version that passes the 6C checks over a higher-scoring failing one', () => {
-    const failing = cand('fails', 0.95, { missingEntities: ['Marie Curie'] });
-    const lowSim = cand('low-sim', 0.9, { similarity: 0.5 });
-    const passing = cand('passes', 0.7, { similarity: 0.85 });
-    expect(pickBestCandidate([failing, lowSim, passing]).text).toBe('passes');
+  it('prefers a version that passes the meaning checks over a higher-scoring failing one', () => {
+    const failing = cand('fails', 0.95, false);
+    const alsoFailing = cand('also-fails', 0.9, false);
+    const passing = cand('passes', 0.7);
+    expect(pickBestCandidate([failing, alsoFailing, passing]).text).toBe('passes');
   });
 
   it('keeps the first candidate on a tie', () => {
@@ -161,9 +165,12 @@ describe('pickBestCandidate', () => {
   });
 
   it('picks by total when every candidate fails', () => {
-    const a = cand('a', 0.5, { similarity: 0.6 });
-    const b = cand('b', 0.6, { similarity: 0.7 });
-    expect(pickBestCandidate([a, b]).text).toBe('b');
+    expect(pickBestCandidate([cand('a', 0.5, false), cand('b', 0.6, false)]).text).toBe('b');
+  });
+
+  it('treats an unchecked candidate as passing', () => {
+    const unchecked: ScoredCandidate = { text: 'u', variant: 'standard', meaning: null, scores: scores(0.5) };
+    expect(pickBestCandidate([cand('fails', 0.9, false), unchecked]).text).toBe('u');
   });
 
   it('throws on an empty list', () => {

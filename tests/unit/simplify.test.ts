@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
-import type { ClarityDocument, ContentNode, StoredResult } from '../../src/types';
+import type { ClarityDocument, ContentNode, EntailmentCheck, StoredResult } from '../../src/types';
 import { installChromeMock, type ChromeMock } from '../mocks/chrome';
-import { makeDocInput, makeReport } from '../mocks/fixtures';
+import { makeDocInput, makeEntailment, makeReport } from '../mocks/fixtures';
 
 // The real segmenter needs DOMParser; a fixed node list keeps this test in the
 // node environment (happy-dom is confined to segmenter.test.ts).
@@ -32,15 +32,40 @@ vi.mock('../../src/lib/segmentation/segmenter', () => ({
   simplifiableNodes: (list: ContentNode[]) => list,
 }));
 
+/**
+ * NLI mock: the worker and model never load in node. `nliMode` 'unavailable'
+ * makes checkEntailment throw NliUnavailableError (model not loadable), 'error'
+ * a plain Error (one failed request); otherwise it answers nliResults[text] or
+ * a passing result.
+ */
+let nliMode: 'ok' | 'unavailable' | 'error';
+let nliResults: Record<string, EntailmentCheck>;
+vi.mock('../../src/lib/quality/nli', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/lib/quality/nli')>();
+  return {
+    ...actual,
+    getNliClient: vi.fn(() => ({})),
+    checkEntailment: vi.fn(async (_original: string, simplified: string) => {
+      if (nliMode === 'unavailable') throw new actual.NliUnavailableError('model files missing');
+      if (nliMode === 'error') throw new Error('NLI scoring timed out');
+      return nliResults[simplified] ?? makeEntailment();
+    }),
+  };
+});
+
 /** Easy enough (estimated grade below 0) to be skipped at any target. */
 const EASY: ContentNode = { id: 'n0', type: 'paragraph', text: 'The cat sat on the mat.', entities: [] };
 
-const { runSimplification, selectNodesToRun, rotateFrom, EMBED_MISSING_NOTICE } = await import('../../src/lib/run/simplify');
+const {
+  runSimplification, selectNodesToRun, rotateFrom, EMBED_MISSING_NOTICE, NLI_MISSING_NOTICE,
+} = await import('../../src/lib/run/simplify');
 const { DEFAULT_PROFILE } = await import('../../src/lib/storage/settings');
 const { getDocument, upsertDocument, saveDocument } = await import('../../src/lib/storage/documents');
 const { OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
-const { MEANING_RETRY_INSTRUCTION } = await import('../../src/lib/quality/semantic');
-const { MAX_MODEL_CALLS_PER_NODE, QUALITY_THRESHOLD } = await import('../../src/lib/quality/score');
+const { MEANING_RETRY_INSTRUCTION, driftReason, unsupportedReason } = await import('../../src/lib/quality/meaning');
+const { MAX_MODEL_CALLS_PER_NODE, QUALITY_THRESHOLD } = await import('../../src/lib/quality/config');
+const nli = await import('../../src/lib/quality/nli');
+const checkEntailmentMock = vi.mocked(nli.checkEntailment);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -136,6 +161,9 @@ beforeEach(async () => {
   chatStatus = null;
   models = [];
   nodes = NODES;
+  nliMode = 'ok';
+  nliResults = {};
+  checkEntailmentMock.mockClear();
 });
 
 afterEach(() => {
@@ -261,6 +289,7 @@ describe('runSimplification meaning check', () => {
     await runSimplification(doc, callbacks(), 'all');
 
     expect(embedSpy).not.toHaveBeenCalled();
+    expect(checkEntailmentMock).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect((await getDocument(doc.id))?.results.every(r => r.similarity === undefined)).toBe(true);
   });
@@ -278,7 +307,7 @@ describe('runSimplification meaning check', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(embedSpy).toHaveBeenCalledWith([CURIE.text, reply]);
     expect((await savedResult(doc.id, 'n0'))?.similarity).toBeCloseTo(0.93);
-    expect(cb.onNodeDone).toHaveBeenCalledWith('n0', reply, expect.closeTo(0.93));
+    expect(cb.onNodeDone).toHaveBeenCalledWith('n0', reply, expect.objectContaining({ similarity: expect.closeTo(0.93) }));
   });
 
   it('retries a low score with the meaning instruction and keeps a better retry', async () => {
@@ -293,7 +322,8 @@ describe('runSimplification meaning check', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(prompts[0].startsWith(MEANING_RETRY_INSTRUCTION)).toBe(false);
-    expect(prompts[1].startsWith(`${MEANING_RETRY_INSTRUCTION}\n\n`)).toBe(true);
+    expect(prompts[1].startsWith(MEANING_RETRY_INSTRUCTION)).toBe(true);
+    expect(prompts[1]).toContain(`- ${driftReason(0.6)}\n\n`);
     const saved = await savedResult(doc.id, 'n0');
     expect(saved?.simplifiedText).toBe(retry);
     expect(saved?.similarity).toBeCloseTo(0.88);
@@ -313,7 +343,7 @@ describe('runSimplification meaning check', () => {
     const saved = await savedResult(doc.id, 'n0');
     expect(saved?.simplifiedText).toBe(first);
     expect(saved?.similarity).toBeCloseTo(0.7);
-    expect(cb.onNodeDone).toHaveBeenLastCalledWith('n0', first, expect.closeTo(0.7));
+    expect(cb.onNodeDone).toHaveBeenLastCalledWith('n0', first, expect.objectContaining({ similarity: expect.closeTo(0.7) }));
   });
 
   it('retries on a missing entity and keeps the retry that restores it', async () => {
@@ -321,12 +351,13 @@ describe('runSimplification meaning check', () => {
     const retry = 'Marie Curie won the Nobel Prize in 1903.';
     nodes = [CURIE];
     replies = { n0: [first, retry] };
-    scores = { [first]: 0.95, [retry]: 0.86 };
+    scores = { [first]: 0.95, [retry]: 0.9 };
     const doc = await storedDoc();
 
     await runSimplification(doc, callbacks(), 'all');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(prompts[1]).toContain('- You dropped the name Marie Curie.');
     expect((await savedResult(doc.id, 'n0'))?.simplifiedText).toBe(retry);
   });
 
@@ -364,6 +395,220 @@ describe('runSimplification meaning check', () => {
     expect(saved?.simplifiedText).toBe(first);
     expect(cb.onNodeError).not.toHaveBeenCalled();
     expect(cb.onBannerError).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runSimplification — thesis standard: NLI, stored verdict, fallback, metric
+// ---------------------------------------------------------------------------
+describe('runSimplification thesis meaning standard', () => {
+  const GOOD_CURIE = 'Marie Curie won the Nobel Prize in 1903.';
+  const GOOD_DARWIN = 'Charles Darwin wrote about evolution in 1859.';
+  const lastLog = async (docId: string) => (await getDocument(docId))?.runLogs?.at(-1);
+
+  beforeEach(() => {
+    scores = { [GOOD_CURIE]: 0.92, [GOOD_DARWIN]: 0.92 };
+  });
+
+  it('stores the full verdict on the result', async () => {
+    nodes = [CURIE];
+    replies = { n0: [GOOD_CURIE] };
+    nliResults = { [GOOD_CURIE]: makeEntailment({ minEntailment: 0.9, maxContradiction: 0.03 }) };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect((await getDocument(doc.id))?.results[0]).toMatchObject({
+      similarity: expect.closeTo(0.92), entityRecall: 1, minEntailment: 0.9, maxContradiction: 0.03,
+      nliChecked: true, passed: true, reasons: [],
+    });
+  });
+
+  it('passes no hinted words when the reader keeps terms', async () => {
+    await chrome.storage.sync.set({
+      userProfile: { ...DEFAULT_PROFILE, targetGradeLevel: 1, domainFamiliarity: 'expert' },
+    });
+    nodes = [CURIE];
+    replies = { n0: [GOOD_CURIE] };
+    const doc = await upsertDocument(makeDocInput('hash-keep', { report: makeReport({ estimatedGradeLevel: 16 }) }));
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(checkEntailmentMock.mock.calls[0][2]).toEqual([]);
+  });
+
+  it('scores every simplified sentence against the original, with the hinted words', async () => {
+    nodes = [CURIE];
+    replies = { n0: [GOOD_CURIE] };
+    // Grade 16 against target 1 → the lexical hint is sent and reused for NLI
+    const doc = await upsertDocument(makeDocInput('hash-nli', { report: makeReport({ estimatedGradeLevel: 16 }) }));
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(checkEntailmentMock).toHaveBeenCalledTimes(1);
+    const [original, simplified, hinted] = checkEntailmentMock.mock.calls[0];
+    expect(original).toBe(CURIE.text);
+    expect(simplified).toBe(GOOD_CURIE);
+    // Exactly the words the prompt named
+    expect((hinted as string[]).length).toBeGreaterThan(0);
+    expect(prompts[0]).toContain(`briefly explain them: ${(hinted as string[]).join(', ')}\n`);
+  });
+
+  it('retries an unsupported sentence, naming it in the prompt', async () => {
+    const first = 'Marie Curie won the Nobel Prize in 1903. She was born in Paris.';
+    nodes = [CURIE];
+    replies = { n0: [first, GOOD_CURIE] };
+    scores = { [first]: 0.9, [GOOD_CURIE]: 0.92 };
+    nliResults = {
+      [first]: makeEntailment({ minEntailment: 0.04, unsupportedSentences: ['She was born in Paris.'] }),
+    };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(prompts[1]).toContain(`- ${unsupportedReason('She was born in Paris.')}`);
+    const saved = (await getDocument(doc.id))?.results[0];
+    expect(saved).toMatchObject({ simplifiedText: GOOD_CURIE, passed: true });
+    const node = (await lastLog(doc.id))?.nodes[0];
+    expect(node?.candidates[0].reasons).toEqual([unsupportedReason('She was born in Paris.')]);
+    expect(node?.candidates[0].scores.passed).toBe(false);
+    expect(node?.meaningStatus).toBe('passed');
+  });
+
+  it('stores a failing verdict with its reasons when the retry fails too', async () => {
+    const bad = 'Marie Curie won the Nobel Prize in 1945.';
+    nodes = [CURIE];
+    replies = { n0: [bad, bad] };
+    scores = { [bad]: 0.9 };
+    nliResults = { [bad]: makeEntailment({ minEntailment: 0.01, maxContradiction: 0.98, contradictedSentences: [bad] }) };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const saved = (await getDocument(doc.id))?.results[0];
+    expect(saved).toMatchObject({ status: 'done', passed: false, nliChecked: true });
+    expect(saved?.reasons?.[0]).toBe(`This sentence contradicts the original: "${bad}"`);
+    expect(cacheKeys()).toHaveLength(0);
+    expect((await lastLog(doc.id))?.summary.meaning).toMatchObject({ passed: 0, failed: 1, passRate: 0, coverage: 1 });
+  });
+
+  it('falls back to SBERT + entities with one notice when the NLI model cannot load', async () => {
+    nliMode = 'unavailable';
+    nodes = [CURIE, DARWIN];
+    replies = { n0: [GOOD_CURIE], n1: [GOOD_DARWIN] };
+    const doc = await storedDoc();
+    const cb = callbacks();
+
+    await runSimplification(doc, cb, 'all');
+
+    // Tried once, then off for the rest of the run
+    expect(checkEntailmentMock).toHaveBeenCalledTimes(1);
+    expect(cb.onNotice).toHaveBeenCalledTimes(1);
+    expect(cb.onNotice).toHaveBeenCalledWith(NLI_MISSING_NOTICE);
+    expect(cb.onBannerError).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const saved = await getDocument(doc.id);
+    expect(statuses(saved)).toEqual({ n0: 'done', n1: 'done' });
+    for (const r of saved?.results ?? []) {
+      expect(r).toMatchObject({ nliChecked: false, passed: true, similarity: expect.closeTo(0.92) });
+      expect(r.minEntailment).toBeUndefined();
+    }
+  });
+
+  it('warns that a run without NLI is not thesis-grade and counts it as not fully checked', async () => {
+    nliMode = 'unavailable';
+    nodes = [CURIE, DARWIN];
+    replies = { n0: [GOOD_CURIE], n1: [GOOD_DARWIN] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect((await lastLog(doc.id))?.summary.meaning).toMatchObject({
+      passed: 0, failed: 0, notFullyChecked: 2, passRate: null, coverage: 0, thesisGrade: false,
+    });
+    expect(vi.mocked(console.warn).mock.calls.map(c => String(c[0])))
+      .toContainEqual(expect.stringMatching(/^\[Clarity\] Meaning coverage 0% is below 90%: the pass rate is not thesis-grade/));
+  });
+
+  it('a failed NLI request skips NLI for that node only, without a notice', async () => {
+    nodes = [CURIE, DARWIN];
+    replies = { n0: [GOOD_CURIE], n1: [GOOD_DARWIN] };
+    checkEntailmentMock.mockRejectedValueOnce(new Error('NLI scoring timed out'));
+    const doc = await storedDoc();
+    const cb = callbacks();
+
+    await runSimplification(doc, cb, 'all');
+
+    expect(cb.onNotice).not.toHaveBeenCalled();
+    const saved = await getDocument(doc.id);
+    expect(saved?.results.map(r => r.nliChecked)).toEqual([false, true]);
+  });
+
+  it('summarizes passed, failed, not fully checked and excluded nodes in the run log', async () => {
+    nodes = [
+      { ...EASY, id: 'n9' }, CURIE, DARWIN,
+      { id: 'n3', type: 'heading', level: 2, text: 'Famous scientists of the modern era', entities: [] },
+    ];
+    replies = { n0: [GOOD_CURIE], n1: [GOOD_DARWIN, GOOD_DARWIN] };
+    nliResults = { [GOOD_DARWIN]: makeEntailment({ minEntailment: 0.1, unsupportedSentences: [GOOD_DARWIN] }) };
+    await setTargetGrade(4);
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const log = await lastLog(doc.id);
+    expect(log?.nodes.map(n => [n.nodeId, n.meaningStatus])).toEqual([
+      ['n9', 'excluded'], ['n0', 'passed'], ['n1', 'failed'], ['n3', 'excluded'],
+    ]);
+    expect(log?.summary.meaning).toMatchObject({ passed: 1, failed: 1, notFullyChecked: 0, excluded: 2 });
+    expect(log?.summary.meaning.passRate).toBeCloseTo(0.5);
+    expect(log?.summary.meaning.coverage).toBe(1);
+    expect(log?.summary.meaning.thesisGrade).toBe(true);
+    expect(log?.summary.meaning.avgNliMs).toBe(100);
+  });
+
+  it('records glossary exemptions in the run log', async () => {
+    nodes = [CURIE];
+    replies = { n0: [GOOD_CURIE] };
+    nliResults = { [GOOD_CURIE]: makeEntailment({ exemptedSentences: ['Radiation means energy.'], exemptionRate: 0.25, sentences: 4 }) };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const log = await lastLog(doc.id);
+    expect(log?.nodes[0].meaning).toMatchObject({ exemptedSentences: ['Radiation means energy.'], exemptionRate: 0.25 });
+    expect(log?.nodes[0].candidates[0].exemptedSentences).toEqual(['Radiation means energy.']);
+    expect(log?.summary.meaning).toMatchObject({ exemptedSentences: 1, exemptionRate: 0.25 });
+  });
+
+  it('caches the verdict with the text and reuses it', async () => {
+    nodes = [CURIE];
+    replies = { n0: [GOOD_CURIE] };
+    await runSimplification(await storedDoc('hash-a'), callbacks(), 'remaining');
+    checkEntailmentMock.mockClear();
+
+    const second = await storedDoc('hash-b');
+    await runSimplification(second, callbacks(), 'remaining');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(checkEntailmentMock).not.toHaveBeenCalled();
+    expect((await getDocument(second.id))?.results[0]).toMatchObject({ nliChecked: true, passed: true });
+    expect((await lastLog(second.id))?.nodes[0]).toMatchObject({ source: 'cache', meaningStatus: 'passed' });
+  });
+
+  it('treats a cached verdict without NLI as a miss once NLI is available again', async () => {
+    nliMode = 'unavailable';
+    nodes = [CURIE];
+    replies = { n0: [GOOD_CURIE, GOOD_CURIE] };
+    await runSimplification(await storedDoc('hash-a'), callbacks(), 'remaining');
+    nliMode = 'ok';
+
+    const second = await storedDoc('hash-b');
+    await runSimplification(second, callbacks(), 'remaining');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await getDocument(second.id))?.results[0]).toMatchObject({ nliChecked: true });
   });
 });
 
@@ -453,7 +698,7 @@ describe('runSimplification speed paths', () => {
     await runSimplification(second, cb, 'remaining');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(cb.onNodeDone).toHaveBeenCalledWith('n0', reply, expect.closeTo(0.91));
+    expect(cb.onNodeDone).toHaveBeenCalledWith('n0', reply, expect.objectContaining({ similarity: expect.closeTo(0.91) }));
     expect((await getDocument(second.id))?.results[0].similarity).toBeCloseTo(0.91);
   });
 
@@ -509,10 +754,10 @@ describe('runSimplification speed paths', () => {
     await runSimplification(await storedDoc(), callbacks(), 'all');
 
     const lines = vi.mocked(console.log).mock.calls.map(c => String(c[0]));
-    expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n0 \(skipped\) \d+\.\d\d s$/));
-    expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n1 \(model\) /));
+    expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n0 \(skipped, meaning excluded\) \d+\.\d\d s$/));
+    expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n1 \(model, meaning excluded\) /));
     expect(lines).toContainEqual(expect.stringMatching(
-      /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 1 skipped, 0 errors; .*model qwen2\.5:3b$/,
+      /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 1 skipped, 0 errors; .*model qwen2\.5:3b; meaning passed n\/a \(0\/0\), coverage n\/a; NLI avg n\/a per paragraph$/,
     ));
   });
 });
@@ -523,7 +768,7 @@ describe('runSimplification speed paths', () => {
 describe('runSimplification extra quality', () => {
   /** Passes 6C, short and plain: scores above the quality threshold. */
   const GOOD = 'Marie Curie won a big prize in 1903.';
-  /** Passes 6C (similarity 0.85, entity kept) but reads far above the target. */
+  /** Passes 6C (similarity 0.9, entity kept) but reads far above the target. */
   const HARD =
     'Marie Curie received the prestigious Nobel Prize in Physics in 1903, recognizing ' +
     'extraordinary investigations concerning radioactivity.';
@@ -555,7 +800,7 @@ describe('runSimplification extra quality', () => {
   it('tries both other variants when standard scores low, and keeps the best', async () => {
     await enableExtraQuality();
     replies = { n0: [HARD, 'Marie Curie liked science.', GOOD] };
-    scores = { [HARD]: 0.85, 'Marie Curie liked science.': 0.82, [GOOD]: 0.93 };
+    scores = { [HARD]: 0.9, 'Marie Curie liked science.': 0.82, [GOOD]: 0.93 };
     const doc = await storedDoc();
     const cb = callbacks();
 
@@ -584,15 +829,17 @@ describe('runSimplification extra quality', () => {
   it('adds the meaning-retry instruction to the variants when standard fails 6C', async () => {
     await enableExtraQuality();
     replies = { n0: ['She liked science.', 'Marie Curie liked rays.', 'Marie Curie won in 1903.'] };
-    scores = { 'She liked science.': 0.5, 'Marie Curie liked rays.': 0.6, 'Marie Curie won in 1903.': 0.84 };
+    scores = { 'She liked science.': 0.5, 'Marie Curie liked rays.': 0.6, 'Marie Curie won in 1903.': 0.9 };
     const doc = await storedDoc();
 
     await runSimplification(doc, callbacks(), 'all');
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(prompts[0].startsWith(MEANING_RETRY_INSTRUCTION)).toBe(false);
-    expect(prompts[1].startsWith(`${MEANING_RETRY_INSTRUCTION}\n\n`)).toBe(true);
-    expect(prompts[2].startsWith(`${MEANING_RETRY_INSTRUCTION}\n\n`)).toBe(true);
+    for (const prompt of prompts.slice(1)) {
+      expect(prompt.startsWith(MEANING_RETRY_INSTRUCTION)).toBe(true);
+      expect(prompt).toContain('- You dropped the name Marie Curie.');
+    }
     expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe('Marie Curie won in 1903.');
     const node = (await lastLog(doc.id))?.nodes[0];
     expect(node?.candidates.map(c => c.retryInstruction)).toEqual([false, true, true]);
@@ -618,7 +865,7 @@ describe('runSimplification extra quality', () => {
   it('keeps going when a variant request fails', async () => {
     await enableExtraQuality();
     replies = { n0: [HARD, FAIL, GOOD] };
-    scores = { [HARD]: 0.85, [GOOD]: 0.93 };
+    scores = { [HARD]: 0.9, [GOOD]: 0.93 };
     const doc = await storedDoc();
     const cb = callbacks();
 
@@ -660,7 +907,7 @@ describe('runSimplification extra quality', () => {
 
   it('off: a low score alone does not trigger extra calls', async () => {
     replies = { n0: [HARD] };
-    scores = { [HARD]: 0.85 };
+    scores = { [HARD]: 0.9 };
 
     await runSimplification(await storedDoc(), callbacks(), 'all');
 
@@ -724,6 +971,15 @@ describe('runSimplification run log', () => {
     const doc = await storedDoc();
     for (let i = 0; i < 6; i++) await runSimplification((await getDocument(doc.id))!, callbacks(), 'all');
     expect((await getDocument(doc.id))?.runLogs).toHaveLength(5);
+  });
+
+  it('records the meaning standard of the run', async () => {
+    const doc = await storedDoc();
+    await runSimplification(doc, callbacks(), 'all');
+    expect((await getDocument(doc.id))?.runLogs?.[0].meaningThresholds).toEqual({
+      similarity: 0.87, entailmentMin: 0.5, contradictionMax: 0.2, glossaryExemptionMaxRate: 0.3,
+      nliModel: 'Xenova/nli-deberta-v3-xsmall',
+    });
   });
 
   it('saves a log marked cancelled when the run is cancelled', async () => {

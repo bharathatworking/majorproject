@@ -1,8 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart, registerables } from 'chart.js';
 import { getWeeklyProgress } from '../../lib/storage/progress';
-import { averageSimilarity } from '../../lib/quality/similarity';
-import type { ClarityDocument } from '../../types';
+import { getDocument, listDocuments } from '../../lib/storage/documents';
+// similarity.ts and config.ts are import-free of compromise and Transformers.js
+import { averageSimilarity, meaningStats } from '../../lib/quality/similarity';
+import {
+  CONTRADICTION_MAX, ENTAILMENT_MIN, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN,
+} from '../../lib/quality/config';
+import type { ClarityDocument, MeaningSummary } from '../../types';
 
 Chart.register(...registerables);
 
@@ -185,6 +190,98 @@ export function Progress({ activeDoc }: ProgressProps) {
       ) : (
         <p className="comparison-hint">Run a simplification to see your Before vs. After comparison here.</p>
       )}
+
+      <MeaningTable />
+    </div>
+  );
+}
+
+// ─── MeaningTable ─────────────────────────────────────────────────────────────
+
+interface DocMeaningRow {
+  id: string;
+  title: string;
+  stats: MeaningSummary;
+  avgSimilarity: number | null;
+}
+
+const percent = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`);
+
+/**
+ * Thesis metric per stored document: the share of fully checked paragraphs
+ * whose meaning was preserved, with coverage next to it so missing checks
+ * can't hide behind a high pass rate (see lib/quality/similarity.ts).
+ */
+function MeaningTable() {
+  const [rows, setRows] = useState<DocMeaningRow[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const index = await listDocuments();
+      const docs = await Promise.all(index.map(entry => getDocument(entry.id)));
+      const next = docs
+        .filter((d): d is ClarityDocument => d !== null)
+        .map(d => ({
+          id: d.id,
+          title: d.title,
+          stats: meaningStats(d.results),
+          avgSimilarity: averageSimilarity(d.results),
+        }))
+        .filter(r => r.stats.passed + r.stats.failed + r.stats.notFullyChecked > 0);
+      if (!cancelled) setRows(next);
+    }
+    load().catch(err => console.warn('[Clarity] Meaning stats failed to load', err));
+
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== 'local') return;
+      if (Object.keys(changes).some(k => k === 'docs:index' || k.startsWith('doc:'))) {
+        load().catch(err => console.warn('[Clarity] Meaning stats failed to load', err));
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => { cancelled = true; chrome.storage.onChanged.removeListener(listener); };
+  }, []);
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="meaning-card">
+      <h2 className="section-heading">Meaning Preserved</h2>
+      <p className="meaning-card-hint">
+        A paragraph passes when its similarity is at least {SIMILARITY_THRESHOLD.toFixed(2)}, every
+        name, number and date is kept, and no sentence is unsupported (entailment below{' '}
+        {ENTAILMENT_MIN.toFixed(2)}) or contradicted (above {CONTRADICTION_MAX.toFixed(2)}). The pass
+        rate counts fully checked paragraphs only; coverage below {percent(THESIS_COVERAGE_MIN)} means
+        it is not thesis-grade.
+      </p>
+      <table className="meaning-table">
+        <thead>
+          <tr>
+            <th scope="col">Document</th>
+            <th scope="col">Passed</th>
+            <th scope="col">Coverage</th>
+            <th scope="col">Avg similarity</th>
+            <th scope="col" title="Passed / failed / not fully checked">P / F / N</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ id, title, stats, avgSimilarity }) => (
+            <tr key={id}>
+              <th scope="row" className="meaning-doc-title">{title}</th>
+              <td className="meaning-pass-rate">{percent(stats.passRate)}</td>
+              <td
+                className={stats.thesisGrade ? '' : 'coverage-low'}
+                title={stats.thesisGrade ? undefined : 'Not thesis-grade: too few paragraphs were fully checked'}
+              >
+                {percent(stats.coverage)}
+              </td>
+              <td>{avgSimilarity === null ? '—' : avgSimilarity.toFixed(2)}</td>
+              <td>{stats.passed} / {stats.failed} / {stats.notFullyChecked}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

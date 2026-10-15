@@ -2,15 +2,15 @@ import { useState, useCallback, useRef } from 'react';
 // Type-only: the run module (and compromise, via NER and the entity check) is
 // loaded on the first run, keeping it out of the main chunk.
 import type { RunCallbacks } from '../../lib/run/simplify';
-import type { ClarityDocument, RunMode } from '../../types';
+import type { ClarityDocument, RunMode, StoredMeaning } from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface LiveNodeState {
   text: string;
   status: 'pending' | 'streaming' | 'done' | 'error';
-  /** Meaning-check score of the kept version, once done (if checked). */
-  similarity?: number;
+  /** Meaning check of the kept version, once done (if checked). */
+  meaning?: StoredMeaning;
   /** Node was already simple; text is the original. */
   skipped?: boolean;
 }
@@ -21,8 +21,8 @@ export interface RunState {
   nodesDone: number;
   nodesTotal: number;
   errorBanner: string | null;
-  /** Non-fatal info banner (e.g. meaning checker not installed). */
-  notice: string | null;
+  /** Non-fatal info banners, deduplicated (e.g. embedding or NLI model missing). */
+  notices: string[];
   liveResults: Record<string, LiveNodeState>;
 }
 
@@ -32,7 +32,7 @@ export interface UseRunStateReturn {
   startRun: (doc: ClarityDocument, mode: RunMode, startIndex?: number) => Promise<void>;
   cancelRun: () => void;
   dismissError: () => void;
-  dismissNotice: () => void;
+  dismissNotice: (message: string) => void;
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ export function useRunState(): UseRunStateReturn {
       nodesDone: 0,
       nodesTotal: 0,
       errorBanner: null,
-      notice: null,
+      notices: [],
       liveResults: {},
     });
 
@@ -91,14 +91,14 @@ export function useRunState(): UseRunStateReturn {
           };
         }),
 
-      onNodeDone: (nodeId, finalText, similarity, skipped) =>
+      onNodeDone: (nodeId, finalText, meaning, skipped) =>
         setRunState(prev => {
           if (!prev) return null;
           return {
             ...prev,
             liveResults: {
               ...prev.liveResults,
-              [nodeId]: { text: finalText, status: 'done', similarity, skipped },
+              [nodeId]: { text: finalText, status: 'done', meaning, skipped },
             },
           };
         }),
@@ -119,7 +119,9 @@ export function useRunState(): UseRunStateReturn {
         setRunState(prev => prev ? { ...prev, errorBanner: message } : null),
 
       onNotice: (message) =>
-        setRunState(prev => prev ? { ...prev, notice: message } : null),
+        setRunState(prev =>
+          prev && !prev.notices.includes(message) ? { ...prev, notices: [...prev.notices, message] } : prev,
+        ),
 
       onComplete: () =>
         setRunState(prev => prev ? { ...prev, active: false } : null),
@@ -140,8 +142,8 @@ export function useRunState(): UseRunStateReturn {
     setRunState(prev => prev ? { ...prev, errorBanner: null } : null);
   }, []);
 
-  const dismissNotice = useCallback(() => {
-    setRunState(prev => prev ? { ...prev, notice: null } : null);
+  const dismissNotice = useCallback((message: string) => {
+    setRunState(prev => prev ? { ...prev, notices: prev.notices.filter(n => n !== message) } : null);
   }, []);
 
   return { runState, startRun, cancelRun, dismissError, dismissNotice };

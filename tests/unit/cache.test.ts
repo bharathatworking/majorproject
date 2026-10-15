@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { installChromeMock, type ChromeMock } from '../mocks/chrome';
 import {
-  cacheKey, getCached, putCached, clearCache, CACHE_MAX_ENTRIES,
+  cacheKey, getCached, putCached, clearCache, CACHE_FORMAT, CACHE_MAX_ENTRIES,
 } from '../../src/lib/storage/cache';
 import { resolveProfile } from '../../src/lib/profile/resolver';
 import { DEFAULT_PROFILE } from '../../src/lib/storage/settings';
@@ -81,15 +81,22 @@ describe('result cache store', () => {
   });
 
   it('round-trips a result and misses unknown keys', async () => {
-    await putCached('k1', { text: 'Plants make food from light.', similarity: 0.9 });
-    expect(await getCached('k1')).toEqual({ text: 'Plants make food from light.', similarity: 0.9 });
+    await putCached('k1', { text: 'Plants make food from light.', meaning: { similarity: 0.9, passed: true } });
+    expect(await getCached('k1')).toEqual({
+      text: 'Plants make food from light.', meaning: { similarity: 0.9, passed: true }, format: CACHE_FORMAT,
+    });
     expect(await getCached('nope')).toBeNull();
   });
 
+  it('treats an entry of an older format (pre-thesis standard) as a miss', async () => {
+    await mock.areas.local.set({ 'cache:old': { text: 'Old.', similarity: 0.81 }, 'cache:index': ['old'] });
+    expect(await getCached('old')).toBeNull();
+  });
+
   it('evicts the least recently used entry past the cap', async () => {
-    await putCached('a', { text: 'A' }, 2);
-    await putCached('b', { text: 'B' }, 2);
-    await putCached('c', { text: 'C' }, 2);
+    await putCached('a', { text: 'A', meaning: null }, 2);
+    await putCached('b', { text: 'B', meaning: null }, 2);
+    await putCached('c', { text: 'C', meaning: null }, 2);
 
     expect(await getCached('a')).toBeNull();
     expect(mock.areas.local.data.has('cache:a')).toBe(false);
@@ -97,31 +104,31 @@ describe('result cache store', () => {
   });
 
   it('a hit refreshes recency, so another entry is evicted instead', async () => {
-    await putCached('a', { text: 'A' }, 2);
-    await putCached('b', { text: 'B' }, 2);
+    await putCached('a', { text: 'A', meaning: null }, 2);
+    await putCached('b', { text: 'B', meaning: null }, 2);
     await getCached('a');
-    await putCached('c', { text: 'C' }, 2);
+    await putCached('c', { text: 'C', meaning: null }, 2);
 
-    expect(await getCached('a')).toEqual({ text: 'A' });
+    expect(await getCached('a')).toEqual({ text: 'A', meaning: null, format: CACHE_FORMAT });
     expect(await getCached('b')).toBeNull();
   });
 
   it('re-putting a key updates it without duplicating the index entry', async () => {
-    await putCached('a', { text: 'old' });
-    await putCached('a', { text: 'new' });
+    await putCached('a', { text: 'old', meaning: null });
+    await putCached('a', { text: 'new', meaning: null });
     expect(index()).toEqual(['a']);
-    expect(await getCached('a')).toEqual({ text: 'new' });
+    expect(await getCached('a')).toEqual({ text: 'new', meaning: null, format: CACHE_FORMAT });
   });
 
   it('serializes concurrent writes', async () => {
-    await Promise.all(['a', 'b', 'c', 'd'].map(k => putCached(k, { text: k }, 3)));
+    await Promise.all(['a', 'b', 'c', 'd'].map(k => putCached(k, { text: k, meaning: null }, 3)));
     expect(index()).toEqual(['b', 'c', 'd']);
   });
 
   it('clearCache removes every entry and the index, nothing else', async () => {
     await mock.areas.local.set({ 'doc:x': { id: 'x' } });
-    await putCached('a', { text: 'A' });
-    await putCached('b', { text: 'B' });
+    await putCached('a', { text: 'A', meaning: null });
+    await putCached('b', { text: 'B', meaning: null });
 
     await clearCache();
 

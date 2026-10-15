@@ -20,8 +20,12 @@ import type { ClarityDocument, RunLog } from '../../types';
 /** Runs kept per document. */
 export const MAX_RUN_LOGS = 5;
 
-/** Format tag of the downloaded JSON, bumped on breaking changes. */
-export const RUN_REPORT_FORMAT = 'clarity-run-report/1';
+/**
+ * Format tag of the downloaded JSON, bumped on breaking changes. 2: the
+ * thesis meaning standard (per-node meaningStatus and meaning, candidate NLI
+ * fields, summary.meaning, meaningThresholds; node.similarity removed).
+ */
+export const RUN_REPORT_FORMAT = 'clarity-run-report/2';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

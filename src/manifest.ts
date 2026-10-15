@@ -40,8 +40,12 @@ export default defineManifest({
   },
   content_security_policy: {
     // script-src 'self': extension pages only load same-origin scripts.
+    // 'wasm-unsafe-eval': lets the NLI worker compile the bundled ONNX Runtime
+    //   WebAssembly (dist/ort/). It allows WebAssembly compilation only, not
+    //   JS eval()/new Function(); this is the only CSP relaxation allowed.
     // connect-src http://localhost:11434: Ollama API.
     // No 'unsafe-eval' — pdf.js v6 has no eval() code path, so none is needed.
-    extension_pages: "script-src 'self'; object-src 'none'; connect-src 'self' http://localhost:11434;",
+    extension_pages:
+      "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; connect-src 'self' http://localhost:11434;",
   },
 });

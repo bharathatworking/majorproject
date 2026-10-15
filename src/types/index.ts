@@ -89,16 +89,37 @@ export interface SimplificationResult {
 }
 
 /**
+ * Meaning-check fields of a stored result (see lib/quality/meaning.ts). All are
+ * absent when the node was not checked (headings, short texts, already simple)
+ * or was stored before the thesis standard existed; `passed` is set exactly
+ * when it was checked under the current standard.
+ */
+export interface StoredMeaning {
+  /** 0–1 embedding cosine vs the original; absent when the embedding model was missing. */
+  similarity?: number;
+  /** Share of the original's entities still present. */
+  entityRecall?: number;
+  /** Lowest NLI entailment over the non-exempt simplified sentences. */
+  minEntailment?: number;
+  /** Highest NLI contradiction over all simplified sentences. */
+  maxContradiction?: number;
+  /** The NLI model scored this version (false: it fell back to SBERT + entities). */
+  nliChecked?: boolean;
+  /** Every check that ran passed. */
+  passed?: boolean;
+  /** Why it failed, most important first; empty when it passed. */
+  reasons?: string[];
+}
+
+/**
  * A SimplificationResult that has been persisted to storage.
  * Carries the node's structural type and heading level so the Reading page
  * can render it correctly (h2/h3 vs p vs blockquote vs li) without needing
  * to re-segment the HTML on every load.
  */
-export interface StoredResult extends SimplificationResult {
+export interface StoredResult extends SimplificationResult, StoredMeaning {
   type: 'heading' | 'paragraph' | 'list-item' | 'blockquote';
   level?: number;
-  /** 0–1 embedding cosine vs the original; absent when not checked (see lib/quality/semantic.ts). */
-  similarity?: number;
   /** Node was already at or below the target grade; simplifiedText is the original. */
   skipped?: boolean;
 }
@@ -106,22 +127,70 @@ export interface StoredResult extends SimplificationResult {
 /** One cached model output for a node (see lib/storage/cache.ts). */
 export interface CachedResult {
   text: string;
-  similarity?: number;
+  /** Meaning check of the cached version; null when the node is not checked. */
+  meaning: StoredMeaning | null;
+  /** Entry format (CACHE_FORMAT, set by putCached); older entries are misses. */
+  format?: number;
 }
 
 /** Result of the embedding meaning check for one simplified node. */
 export interface MeaningCheck {
   similarity: number;
-  passed: boolean;
 }
 
-/** One simplified version of a node, scored by the meaning and entity checks. */
+/** Sentence-level NLI result for one simplified node (see lib/quality/nli.ts). */
+export interface EntailmentCheck {
+  /** Lowest entailment over the non-exempt sentences (0 when there are none). */
+  minEntailment: number;
+  /** Highest contradiction over all sentences, exempt ones included. */
+  maxContradiction: number;
+  /** Non-exempt sentences below ENTAILMENT_MIN, in order. */
+  unsupportedSentences: string[];
+  /** Sentences above CONTRADICTION_MAX, in order. */
+  contradictedSentences: string[];
+  /** Glossary sentences that skipped the entailment requirement. */
+  exemptedSentences: string[];
+  /** exemptedSentences / sentences (0 when there are none). */
+  exemptionRate: number;
+  /** Sentences scored. */
+  sentences: number;
+  /** Pairs answered from the in-memory cache. */
+  cachedPairs: number;
+  ms: number;
+}
+
+/**
+ * Combined meaning assessment of one simplified version (thesis standard,
+ * lib/quality/meaning.ts): SBERT cosine, entity recall and NLI.
+ */
+export interface MeaningAssessment {
+  /** Null when the embedding model was unavailable. */
+  similarity: number | null;
+  entityRecall: number;
+  missingEntities: string[];
+  /** Null when NLI did not run. */
+  minEntailment: number | null;
+  maxContradiction: number | null;
+  nliChecked: boolean;
+  /** SBERT, NLI and entities all ran. */
+  fullyChecked: boolean;
+  /** Every check that ran passed. */
+  passed: boolean;
+  /** Failure reasons, most important first. */
+  reasons: string[];
+  exemptedSentences: string[];
+  /** Null when NLI did not run. */
+  exemptionRate: number | null;
+  /** NLI scoring time for this version; null when NLI did not run. */
+  nliMs: number | null;
+  /** NLI-scored sentences; 0 when NLI did not run. */
+  nliSentences: number;
+}
+
+/** One simplified version of a node; `meaning` is null when the node is not checked. */
 export interface MeaningCandidate {
   text: string;
-  /** Absent when the embedding model is unavailable. */
-  similarity?: number;
-  /** Entity texts from the original that the version dropped. */
-  missingEntities: string[];
+  meaning: MeaningAssessment | null;
 }
 
 // ─── Stage 7: prompt variants, candidate scores and run logs ─────────────────
@@ -139,6 +208,12 @@ export interface CandidateScores {
   entityRecall: number;
   /** Output words divided by original words. */
   lengthRatio: number;
+  /** Lowest NLI entailment; null when NLI did not run or the node is not checked. */
+  minEntailment: number | null;
+  /** Highest NLI contradiction; null when NLI did not run or the node is not checked. */
+  maxContradiction: number | null;
+  /** Passed the meaning checks (true when the node is not checked). */
+  passed: boolean;
   /** Weighted sum of meaning, readability and length, 0–1. */
   total: number;
 }
@@ -153,6 +228,14 @@ export interface CandidateLog {
   ms: number;
   scores: CandidateScores;
   missingEntities: string[];
+  /** Meaning-check failure reasons of this version. */
+  reasons: string[];
+  nliChecked: boolean;
+  /** Glossary sentences that skipped the entailment requirement. */
+  exemptedSentences: string[];
+  /** Null when NLI did not run. */
+  exemptionRate: number | null;
+  nliMs: number | null;
 }
 
 /** How a node got its result in a run. */
@@ -170,8 +253,50 @@ export interface NodeRunLog {
   retries: number;
   ms: number;
   candidates: CandidateLog[];
-  /** Stored similarity of a cache hit. */
-  similarity?: number;
+  /** Thesis category of the kept version (see MeaningSummary). */
+  meaningStatus: MeaningStatus;
+  /** Meaning check of the kept version (model or cache); absent when not checked. */
+  meaning?: NodeMeaningLog;
+}
+
+/** Meaning fields of a kept version in the run log. */
+export interface NodeMeaningLog extends StoredMeaning {
+  /** Glossary exemptions; absent for a cache hit. */
+  exemptedSentences?: string[];
+  exemptionRate?: number | null;
+  nliMs?: number | null;
+}
+
+/**
+ * Thesis category of one node: 'passed'/'failed' when fully checked (SBERT +
+ * NLI + entities), 'not-fully-checked' when a check fell back, 'excluded' for
+ * headings, short texts and already-simple nodes, 'error' when it failed.
+ */
+export type MeaningStatus = 'passed' | 'failed' | 'not-fully-checked' | 'excluded' | 'error';
+
+/** Meaning counts of one run or document; the pass rate is over fully checked nodes. */
+export interface MeaningSummary {
+  passed: number;
+  failed: number;
+  /** Checked, but without NLI or without the embedding model. */
+  notFullyChecked: number;
+  excluded: number;
+  /** passed / (passed + failed); null when nothing was fully checked. */
+  passRate: number | null;
+  /** (passed + failed) / (passed + failed + notFullyChecked); null when nothing was eligible. */
+  coverage: number | null;
+  /** coverage ≥ THESIS_COVERAGE_MIN. */
+  thesisGrade: boolean;
+}
+
+/** MeaningSummary of a run, plus its NLI time and glossary exemptions. */
+export interface RunMeaningSummary extends MeaningSummary {
+  /** Mean NLI ms per NLI-scored version; null when NLI never ran. */
+  avgNliMs: number | null;
+  /** Glossary exemptions over the kept versions. */
+  exemptedSentences: number;
+  /** exemptedSentences / NLI-scored sentences of the kept versions; null when none. */
+  exemptionRate: number | null;
 }
 
 /** Everything one simplification run did, for the downloadable run report. */
@@ -187,6 +312,14 @@ export interface RunLog {
   depthTier: SimplificationSpec['depthTier'];
   qualityThreshold: number;
   weights: { meaning: number; readability: number; length: number };
+  /** The meaning standard this run was judged by (lib/quality/config.ts). */
+  meaningThresholds: {
+    similarity: number;
+    entailmentMin: number;
+    contradictionMax: number;
+    glossaryExemptionMaxRate: number;
+    nliModel: string;
+  };
   summary: {
     nodes: number;
     counts: Record<NodeSource, number>;
@@ -195,6 +328,7 @@ export interface RunLog {
     secondsPerModelNode: number | null;
     /** Seconds from run start to the first finished node; null if none. */
     firstResultSeconds: number | null;
+    meaning: RunMeaningSummary;
   };
   nodes: NodeRunLog[];
 }

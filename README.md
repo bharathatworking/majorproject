@@ -77,10 +77,20 @@ pkill ollama && ollama serve
 
 ```powershell
 npm install
+npm run fetch-models   # once per clone: the local NLI meaning-check model (~114 MB)
 npm run build
 ```
 
 This produces a `dist/` folder. `dist/` is not committed to git, so rebuild it after every clone or pull.
+
+`npm run fetch-models` puts two things in `public/` (git-ignored), which the build copies into `dist/`:
+
+| Path | What | Size | License |
+|---|---|---|---|
+| `public/models/Xenova/nli-deberta-v3-xsmall/` | NLI cross-encoder, 8-bit quantized ONNX (`onnx/model_quantized.onnx`) plus tokenizer and config, downloaded from Hugging Face at a pinned commit and checked against SHA-256 hashes | 96 MB | Apache-2.0 (ONNX conversion of [cross-encoder/nli-deberta-v3-xsmall](https://huggingface.co/cross-encoder/nli-deberta-v3-xsmall); base model microsoft/deberta-v3-xsmall, MIT) |
+| `public/ort/` | ONNX Runtime WebAssembly (`ort-wasm-simd-threaded.asyncify.wasm` + `.mjs`), copied from the installed `onnxruntime-web` so it matches the bundled runtime | 27 MB | MIT |
+
+The extension never downloads a model at runtime. If you skip this step, Clarity still works, but the sentence-level meaning check (NLI) is unavailable: you get a one-time notice, and the meaning results are not thesis-grade. To run the bundled ONNX Runtime, the extension's CSP allows `'wasm-unsafe-eval'`. That permits WebAssembly compilation only, not JavaScript `eval`.
 
 ### 4 — Load in Chrome
 
@@ -101,6 +111,7 @@ This produces a `dist/` folder. `dist/` is not committed to git, so rebuild it a
 ## Development
 
 ```powershell
+npm run fetch-models # NLI model + ONNX Runtime wasm → public/ (once per clone)
 npm run build        # production build → dist/
 npm run dev          # watch mode (hot-reload via crxjs)
 npm test             # unit tests (Vitest)
