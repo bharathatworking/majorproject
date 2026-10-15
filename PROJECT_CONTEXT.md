@@ -1,0 +1,256 @@
+# PROJECT_CONTEXT.md
+
+A self-contained guide to the Clarity codebase for an assistant that cannot see the code. All paths are relative to the repo root. Anything marked **UNSURE:** is inferred, not verified in the code.
+
+Generated from commit `2edaf92` (2026-10-15). If the code and this file disagree, the code wins. Update this file when you change something it describes.
+
+---
+
+## 1. Project goal
+
+**Clarity** is a Chrome MV3 extension that rewrites web pages, pasted text or PDFs at the user's reading level.
+
+- It runs fully on the device. A **local Ollama** server at `http://localhost:11434` does the rewriting, using the chat model chosen in Settings (default `qwen2.5:3b`) and, optionally, the `all-minilm` embedding model for a meaning check.
+- There is no backend, no database and no cloud API. The only network targets are Ollama and the captured page itself.
+- What the user gets: a readability dashboard (eight grade metrics), a streamed paragraph-by-paragraph rewrite with click-to-reveal of the original, reading presets, a dyslexia font, focus mode, a progress chart and a downloadable JSON run report.
+- The research angle (stages 6C and 7): checking that the rewrite keeps the meaning (embedding similarity plus entity preservation), scoring candidate outputs, and A/B-testing prompt variants through the "Extra quality (slower)" toggle.
+- UNSURE: this is an academic major project (inferred from the folder name `majorproject`).
+
+## 2. Tech stack
+
+| Area | Choice |
+|---|---|
+| Platform | Chrome Manifest V3, `minimum_chrome_version: '138'` |
+| UI | React 19 + TypeScript (strict), hash routing, plain CSS |
+| Build | Vite 8 + `@crxjs/vite-plugin` 2.x + `@vitejs/plugin-react`; `build.target: 'esnext'` |
+| Typecheck | `typescript` 7.x via `tsc --noEmit`; `tsconfig.json` has `"types": ["chrome", "vite/client"]` |
+| Tests | Vitest 4 (`environment: 'node'`, `globals: true`), `happy-dom` for one file, `@vitest/coverage-v8` |
+| LLM | Ollama HTTP API: `/api/chat` (streamed NDJSON), `/api/embed`, `/api/tags` |
+| Extraction | `@mozilla/readability`, `dompurify` |
+| NLP | `compromise` + `compromise-dates` + `compromise-numbers` (entity detection) |
+| PDF | `pdfjs-dist` 6.x (worker loaded through a `?url` import) |
+| Charts | `chart.js` 4 |
+| Font | `@fontsource/opendyslexic` (bundled, no CDN) |
+| Word list | `src/lib/metrics/data/common-words.txt`, 4,950 words from OpenSubtitles 2018 (hermitdave/FrequencyWords), **CC BY-SA 4.0** |
+
+There is no lint config.
+
+## 3. Folder structure
+
+```
+CLAUDE.md, README.md, PROJECT_CONTEXT.md
+package.json, tsconfig.json, vite.config.ts, vitest.config.ts
+icons/                       icon16/32/48/128.png
+src/
+  manifest.ts                MV3 manifest (defineManifest); holds the pinned `key`
+  background/index.ts        service worker: toolbar click, inject extractor, store doc, open app tab
+  content-scripts/extractor.ts   thin injected wrapper around lib/extraction/extractor.ts
+  app/
+    index.html, main.tsx, App.tsx, app.css   (app.css is the ONLY stylesheet)
+    pages/        Dashboard.tsx, Reading.tsx, Progress.tsx, Settings.tsx
+    components/   DocumentList.tsx, NewDocDialog.tsx, Sidebar.tsx, Toast.tsx
+    hooks/        useDocuments.ts, useRunState.ts, useDisplayPrefs.ts
+  lib/
+    extraction/   extractor.ts (noise strip -> Readability -> text-density fallback -> DOMPurify -> SHA-256)
+    input/        paste.ts, pdf.ts
+    llm/          ollama-provider.ts, ollama-stream.ts
+    metrics/      engine.ts, syllables.ts, common-words.ts, word-set.ts, node-grade.ts,
+                  difficult-words.ts, data/common-words.txt
+    profile/      resolver.ts, presets.ts
+    prompt-builder/  builder.ts, variants.ts
+    quality/      similarity.ts, semantic.ts, score.ts
+    render/       format-output.ts
+    run/          simplify.ts, run-log.ts, timing.ts
+    segmentation/ segmenter.ts, ner.ts
+    storage/      documents.ts, cache.ts, progress.ts, settings.ts
+    utils/        hash.ts, html.ts, url.ts, restricted-pages.ts, write-queue.ts
+  types/          index.ts (all shared types), compromise-numbers.d.ts, crxjs.d.ts
+tests/
+  mocks/          chrome.ts (installChromeMock), fixtures.ts (makeReport, makeDocInput)
+  unit/           19 *.test.ts files (see section 8)
+```
+
+`dist/`, `node_modules/` and `coverage/` are git-ignored.
+
+## 4. Architecture & data flow
+
+### Three entry points
+
+| Entry | Runs in | Role |
+|---|---|---|
+| `src/background/index.ts` | MV3 service worker | Toolbar click → inject extractor → store captured page → open or focus the single app tab |
+| `src/content-scripts/extractor.ts` | The web page, injected on demand | Calls `extractArticle` and sends `EXTRACTION_RESULT` or `EXTRACTION_FAILED` to the worker |
+| `src/app/main.tsx` → `src/app/App.tsx` | Extension page tab | React UI with routes `#/dashboard`, `#/reading`, `#/progress`, `#/settings` |
+
+- The app page is included in the build through `options_ui: { page: 'src/app/index.html', open_in_tab: true }`, because crxjs has trouble with `rollupOptions.input`.
+- The extractor is built as a standalone IIFE via `contentScripts.standaloneFiles` in `vite.config.ts` and imported in the background as `'../content-scripts/extractor.ts?script'`. Keep the two in sync.
+- **The UI and the background never message each other.** They communicate only through `chrome.storage`; the app listens with `chrome.storage.onChanged`.
+
+### End-to-end flow
+
+1. **Input**
+   - *Toolbar click:* the worker sets session `capture:status = { state: 'extracting' }` and injects the extractor **before any other await** (the `activeTab` grant is tied to the click gesture), then calls `openOrFocusApp()`. Restricted URLs (`isRestrictedUrl`: chrome://, Web Store, other extensions) are not injected; a friendly error goes into `capture:status` and is logged with `console.log`, not `console.error`. Text shorter than 100 characters counts as "No readable article text". On success the worker calls `upsertDocument({ report: null, ... })`.
+   - *Paste or PDF:* `NewDocDialog` calls `createDocumentFromPaste` (`src/lib/input/paste.ts`: one `<p>` per blank-line block) or `createDocumentFromPDF` (`src/lib/input/pdf.ts`: one `<p>` per page, `pdfjs-dist` imported dynamically), then the same `upsertDocument`.
+   - All three paths hash with `sha256` from `src/lib/utils/hash.ts`, so dedup works. Re-capturing identical content refreshes the existing document and keeps its results.
+2. **Storage → UI.** `upsertDocument` sets `docs:active`. `useDocuments` sees it through `onChanged` and loads the document. It also listens for `doc:<id>` changes so `saveDocument` writes reach React state.
+3. **Analysis (in the app, never in the worker).** `Dashboard` sees `report === null`, runs `computeReadabilityReport(textContent, await getCommonWordSet())` and saves the result. "Simplify now" stays disabled until a report exists.
+   - `estimatedGradeLevel` is the mean of Flesch-Kincaid, Gunning Fog, SMOG, Coleman-Liau and ARI.
+   - Jargon density and Dale-Chall count a word as difficult unless `isCommonWord` finds it, or a suffix-stripped base form (-s/-es/-ies, -ed/-ied, -ing, -ly/-ily, doubled consonants), in the custom words or the common-word list.
+4. **Simplify.** `Reading` → `App.handleStartRun(doc, mode, startIndex)` → `useRunState` (which loads `src/lib/run/simplify.ts` with a dynamic `import()`) → `runSimplification`.
+   - `RunMode`: `'remaining'` ("Simplify now" and "Simplify again") runs only nodes without a `done` result (`selectNodesToRun`). `'all'` ("Re-simplify all") runs every node and skips cache reads, but still writes to the cache.
+   1. **Profile.** `getUserProfile`, `getLlmModel` and `getExtraQuality` read sync storage. `resolveProfile(profile, currentGrade)` (`src/lib/profile/resolver.ts`) returns a `SimplificationSpec`:
+      - The target grade is `targetGradeLevel`, or for `'auto'` the age group default (child 4, teen 8, adult 12).
+      - The depth tier comes from current minus target: ≤0 `none`, ≤2 `light`, ≤5 `moderate`, else `aggressive`. The max sentence length per tier is 12, 16, 20 or 25 words.
+      - Reader flags: `avoidIdioms` (purpose `esl`), `oneIdeaPerSentence` (purpose `dyslexia-friendly`), `explainTerms` (purpose `expert-to-lay` or familiarity `novice`) and `keepTerms` (familiarity `expert`, which wins over `explainTerms`).
+      - The `esl` and `dyslexia-friendly` purposes cap sentences at 15 words, except in the `none` tier.
+   2. **Segment.** `segmentHtml(html, title, hash)` (`src/lib/segmentation/segmenter.ts`, uses `DOMParser`) returns flat `ContentNode`s with **deterministic IDs `n0, n1, …`**. `<li>` items are flattened to top-level `list-item` nodes. No NER happens here. `simplifiableNodes` (drops tables and empty nodes) is the shared filter, so a node index means the same node in both Reading and the run.
+   3. **Order.** `rotateFrom(nodes, startIndex)` starts at the first node visible in Reading and wraps around. Each node takes the first path that applies:
+      - **Already simple:** `isAlreadySimple` (`src/lib/metrics/node-grade.ts`) finds the node's grade at or below the target. The original is stored as `done` with `skipped: true`, with no model call.
+      - **Cache hit:** `src/lib/storage/cache.ts` keys on `sha256(node text + sorted spec JSON + model)`, plus a quality tag for Extra-quality runs. Only outputs that passed the stage 6C checks are cached.
+      - **Model:** `detectEntities` (`src/lib/segmentation/ner.ts`, dynamically imported) runs for this node only, then steps 4 to 7 below.
+      - The rolling context is the last sentence of the previous node in **document** order, if that node is done.
+   4. **Prompt.** `buildPrompt` (`src/lib/prompt-builder/builder.ts`) returns a system prompt plus a user prompt. Reader flags become numbered system rules 7+ via `readerRules`. The user prompt carries a node-type hint, the entities to preserve, the rolling context and a lexical hint: `findDifficultWords` lists up to 8 (`MAX_DIFFICULT_WORDS`) uncommon, non-entity words longer than 3 letters. The hint is left out when `keepTerms` is on or the tier is `none`. The last parameter selects a prompt variant (`standard` adds nothing).
+   5. **Call.** `OllamaProvider.simplifyChunk` POSTs `/api/chat` with `stream: true` and `keep_alive: '10m'`. `parseOllamaStream` (`src/lib/llm/ollama-stream.ts`) buffers lines split across chunks, skips malformed lines with a `[Clarity]` warning, throws on `{"error": ...}` lines and stops at `done: true`. Ollama is stateless, so the "session" is just a stored system prompt (`createBaseSession`).
+   6. **Stage 6C: meaning preservation** (`src/lib/quality/semantic.ts`; the compromise-free parts are in `similarity.ts`). It covers every node except headings and texts under 8 words (`shouldCheckNode`, `MIN_WORDS_FOR_CHECK`).
+      - `checkMeaning` embeds the original and the output in one `/api/embed` call; it passes when the cosine is at least `SIMILARITY_THRESHOLD = 0.80`.
+      - `findMissingEntities` checks that each entity survives. The match ignores case, possessive 's and thousands separators, and numbers also match by value.
+      - A failure triggers one retry with `MEANING_RETRY_INSTRUCTION` prepended. `pickBetterVersion` keeps a passing version over a failing one, then the higher similarity, then fewer missing entities; the original version wins ties.
+      - Failures never fail the run. An embed 404 turns the meaning score off for the rest of the run and shows `EMBED_MISSING_NOTICE` once; the entity check still runs.
+   7. **Stage 7: candidate scoring** (`src/lib/quality/score.ts`). `total = 0.5·meaning + 0.3·readability + 0.2·length` (`WEIGHTS`), where meaning is similarity × entity recall.
+      - Extra quality **off** (the default): the 6C retry, at most 2 calls.
+      - Extra quality **on**: if the streamed `standard` output fails 6C or scores below `QUALITY_THRESHOLD = 0.75`, the `stepwise` and `example-guided` variants (`src/lib/prompt-builder/variants.ts`) are generated without streaming, in place of the 6C retry. `pickBestCandidate` prefers passing versions, then the highest total; ties go to `standard`.
+      - Hard cap: `MAX_MODEL_CALLS_PER_NODE = 3`. Headings and texts under 8 words always get one call.
+   8. **Persist.** Each finished node (`done` or `error`) is saved immediately with `saveDocument`. The kept version's score goes into `StoredResult.similarity`. Each node logs `[Clarity] Node nX (model|cache|skipped|error) N.NN s`, and the run logs a summary line (`summarizeRun` in `src/lib/run/timing.ts`).
+   9. **Finish.** The run computes `simplifiedReport`, calls `recordSession(targetGrade)`, then `addRunLog` (also when cancelled). The report and rolling context use `toPlainText`; the stored text keeps the raw output with its bullet markers.
+5. **Display.** `Reading` re-segments the HTML and merges `runState.liveResults` with `doc.results`. `NodeBlock` renders `parseSimplifiedText` blocks as real `<p>`, `<ul>`/`<ol>` and `<li>` elements (never `dangerouslySetInnerHTML`).
+   - Clicking a paragraph reveals the original. Focus mode dims the others. Hovering shows a "meaning NN%" badge, amber below 0.80. Skipped nodes show an "already simple" tag.
+   - "Download run report (JSON)" saves `buildRunReport(doc)` (format `clarity-run-report/1`, the last 5 runs).
+   - `Progress` (a `React.lazy` page with Chart.js) shows the weekly trend, a before/after comparison and "Meaning Kept" (`averageSimilarity`).
+
+### App-level state rules
+- The run lives in `useRunState` at App level, with an `AbortController`, so streaming survives route changes.
+- App keeps `readingDoc` separate from `activeDoc`. A capture during a run shows a toast instead of switching views.
+- Leftover `streaming` results from a crashed run are reset to `pending` when the next run starts.
+- `classifyError` in `simplify.ts` maps a 403 to "set `OLLAMA_ORIGINS`", a 404 to "pull the model", and a fetch `TypeError` to "Ollama not running".
+- The sidebar status chip polls `/api/tags` every 30 s (`AVAILABILITY_POLL_MS`) and on window focus.
+
+### Bundle splitting
+The main app chunk is about 274 kB (93 kB gzip). **Never statically import** `pdfjs-dist`, `chart.js`, `pages/Progress`, `lib/run/simplify`, `lib/segmentation/ner`, `lib/quality/semantic` or `lib/quality/score` from App, Reading, Dashboard, Settings, the segmenter or any hook. Type-only imports are fine. Never import `src/lib/metrics/` from the background or content scripts, because the word list (`?raw` import) would end up in the worker.
+
+## 5. Key files
+
+| File | What it owns |
+|---|---|
+| `src/manifest.ts` | Permissions (`activeTab`, `scripting`, `storage`, `unlimitedStorage`), `host_permissions: ['http://localhost:11434/*']`, CSP, the pinned `key` |
+| `src/background/index.ts` | `chrome.action.onClicked`, injection, `EXTRACTION_RESULT`/`EXTRACTION_FAILED` handling, `openOrFocusApp()` |
+| `src/app/App.tsx` | Routing, the Ollama status poll, `handleStartRun`, `readingDoc` vs `activeDoc`, writes session `appTabId` |
+| `src/app/pages/Reading.tsx` | Renders nodes and results, `NodeBlock`, run buttons, run report download |
+| `src/app/pages/Settings.tsx` | Presets, profile fields, AI model dropdown (from `/api/tags`), Extra quality toggle, custom words, clear data, About (shows the extension ID) |
+| `src/app/hooks/useRunState.ts` | Lazily loads the run module; holds `liveResults`, `notice`, cancel |
+| `src/lib/run/simplify.ts` | `runSimplification`, `selectNodesToRun`, `rotateFrom`, `classifyError`, `STORED_TYPE` |
+| `src/lib/llm/ollama-provider.ts` | `OllamaProvider` (`simplifyChunk`, `embed`, `/api/tags` checks), `DEFAULT_LLM_MODEL`, `EMBED_MODEL`, `OllamaHttpError`, `chatModelsFromTags` |
+| `src/lib/prompt-builder/builder.ts` | `buildPrompt`, `readerRules` |
+| `src/lib/prompt-builder/variants.ts` | `PROMPT_VARIANTS`, `EXTRA_VARIANTS`, `EXAMPLES`, `pickExample`, `stripExampleLabel` |
+| `src/lib/quality/score.ts` | `scoreCandidate`, `pickBestCandidate`, `WEIGHTS`, `QUALITY_THRESHOLD`, `MAX_MODEL_CALLS_PER_NODE`, length and grade constants |
+| `src/lib/quality/semantic.ts` / `similarity.ts` | 6C checks / `cosineSimilarity`, `averageSimilarity`, thresholds |
+| `src/lib/metrics/engine.ts` | `computeReadabilityReport` (eight formulas plus derived stats) |
+| `src/lib/profile/presets.ts` | `PRESETS` (Beginner, Student, Dyslexic-friendly, Non-native English, Elderly reader, Technical learner), `getPreset`, `editProfile` (sets `preset: 'custom'`) |
+| `src/lib/storage/documents.ts` | Document CRUD behind the `enqueue` write queue |
+| `src/lib/render/format-output.ts` | `parseSimplifiedText` (→ `Block[]`), `toPlainText` |
+| `src/types/index.ts` | Every shared type (`ClarityDocument`, `StoredResult`, `SimplificationSpec`, `RunLog`, `NavPage`, `CaptureStatus`, `RunMode`, …) |
+
+## 6. Data
+
+### Storage layout
+
+| Area | Key | Shape / owner |
+|---|---|---|
+| `local` | `doc:<id>` | `ClarityDocument` (`results: StoredResult[]`, optional `similarity`/`skipped`; `runLogs` holds the last 5) — `documents.ts`, max 10 docs, evicts the oldest non-active one |
+| `local` | `docs:index` | `DocumentIndexEntry[]` plus `contentHash` for dedup |
+| `local` | `docs:active` | Active document ID |
+| `local` | `cache:<hash>`, `cache:index` | `{ text, similarity? }`; LRU index, 2,000 entries (`CACHE_MAX_ENTRIES`) — `cache.ts`, cleared by "Clear document history" |
+| `local` | `progress:weekly` | `WeeklyProgressRecord[]` (`weekStart`, `targetGradeSum`, `sessionCount`), 30-day retention, Monday-aligned — `progress.ts`; survives "Clear documents" |
+| `sync` | `userProfile` | `UserProfile` (includes `preset`); default adult / auto / general / novice / plain |
+| `sync` | `llmModel` | Ollama chat model name; falls back to `qwen2.5:3b` |
+| `sync` | `extraQuality` | Boolean; on only when saved as `true` |
+| `sync` | `customWords` | Newline- or comma-separated string |
+| `sync` | `displayPrefs` | `{ dyslexiaFont, textSize: 'normal'|'large'|'xlarge', focusMode }` — `useDisplayPrefs` |
+| `session` | `capture:status`, `appTabId` | `CaptureStatus`; the app tab ID (the worker and App) |
+
+### Core shapes (from `src/types/index.ts`)
+- `ContentNode { id; type: 'heading'|'paragraph'|'list'|'list-item'|'table'|'blockquote'; level?; text; entities? }`
+- `StoredResult { nodeId; originalText; simplifiedText; status: 'pending'|'streaming'|'done'|'error'; type; level?; similarity?; skipped? }`
+- `ReadabilityReport`: Flesch ease, FK grade, Fog, SMOG, Coleman-Liau, ARI, Dale-Chall, average sentence and word length, complex-word %, long-sentence %, type-token ratio, jargon density and `estimatedGradeLevel`.
+- `RunLog`: run metadata (mode, model, extraQuality, target, tier, threshold, weights), a summary (counts by `NodeSource`, timings) and per-node `NodeRunLog` with `CandidateLog[]` scores.
+
+### Write discipline
+Every mutating function in `documents.ts` goes through `enqueue` (from `createWriteQueue` in `src/lib/utils/write-queue.ts`); `cache.ts` has its own queue. `runLogs` is written only by `addRunLog`, and `saveDocument` keeps the stored logs and ignores the caller's copy.
+
+## 7. How to run
+
+```powershell
+npm install
+npm run build          # production build -> dist/
+npm run dev            # crxjs watch / hot reload
+npm test               # vitest run (tests/unit/**/*.test.ts)
+npm run typecheck      # tsc --noEmit, must report 0 errors (vite build does not typecheck)
+npm run test:coverage
+npx vitest run tests/unit/metrics.test.ts      # one file
+npx vitest run -t "counts syllables"           # one test by name
+npx vitest run --coverage --coverage.include="src/lib/**"
+```
+
+Runtime setup for manual testing:
+1. `ollama pull qwen2.5:3b` and, optionally, `ollama pull all-minilm`. Without the second, the meaning check is skipped with a one-time notice.
+2. Set the user env var `OLLAMA_ORIGINS=chrome-extension://emnnfgmpahidhdpdakmblphimmamckon` and fully restart Ollama. Without it, Ollama returns 403.
+3. Open `chrome://extensions`, turn on Developer mode, use "Load unpacked" on `dist/` (Chrome 138+), click the toolbar icon on an article.
+
+No other env vars exist.
+
+Test notes: there is no DOM and no `chrome.*` in tests by default.
+- Pure modules need no mocks.
+- Code that touches storage uses `installChromeMock()` from `tests/mocks/chrome.ts` (an in-memory `local`/`sync`/`session` store via `vi.stubGlobal`).
+- Only `segmenter.test.ts` uses `// @vitest-environment happy-dom` as its first line.
+- `simplify.test.ts` mocks the segmenter with `vi.mock` and `embed` with `vi.spyOn(OllamaProvider.prototype, 'embed')`, and saves a grade-1 target in `beforeEach`.
+
+## 8. Current status
+
+- **Done:** phases 1 to 4 (capture and documents, Reading, Progress and Settings, paste and PDF), reading presets, purpose-aware prompt rules and the lexical hint, the stage 6C semantic check, the performance work (skip easy nodes, result cache, start at the visible node, model setting, lazy loading) and stage 7 (candidate scoring, prompt variants, run report).
+- **Health on 2026-10-15:** `npm test` passes (19 files, 278 tests), and `npm run typecheck` passes with 0 errors. Not re-run for this file: `npm run build`.
+- **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, score, run-log, timing, simplify.
+- **Known issues (not yet fixed):**
+  - Progress records the *target grade setting* per session, not measured reading ability.
+  - Leftovers from the old Chrome built-in AI provider: the unused `_onProgress` parameter of `createBaseSession`, and the `'list'` and `'table'` entries in `STORED_TYPE`. Keep `'downloadable'` and `'downloading'` in `LLMAvailability`; a planned Chrome built-in AI provider will use them.
+  - Cancel doesn't abort the HTTP request: `simplifyChunk` doesn't pass the run's `AbortSignal` to `fetch`, so Ollama finishes generating the current node.
+- The README now states Chrome 138+, matching the manifest.
+- UNSURE: whether any feature beyond stage 7 is planned, apart from the Chrome built-in AI provider mentioned above.
+
+## 9. Conventions
+
+### Hard rules (from CLAUDE.md, mandatory)
+1. Before coding: read the files you will change, state a short plan (files + approach), then implement.
+2. Never change or remove `key` in `src/manifest.ts`. It pins the extension ID `emnnfgmpahidhdpdakmblphimmamckon`, which `OLLAMA_ORIGINS` allows. The ID also appears in the README and in Settings → About.
+3. No `eval`, no remote code, no CSP relaxation. The CSP is `script-src 'self'; object-src 'none'; connect-src 'self' http://localhost:11434;`. Don't re-add pdf.js's removed `isEvalSupported` option. A new network target needs both a CSP change and `host_permissions`.
+4. No `default_popup` (it would stop `chrome.action.onClicked` from firing) and no side panel. The app is a full tab.
+5. No module-level state in `src/background/index.ts`. MV3 kills idle workers, so state goes in `chrome.storage.session` or `chrome.storage.local`.
+6. Node IDs stay deterministic (`n0, n1, …`), because stored results are matched back to nodes by ID.
+7. Every write in `src/lib/storage/documents.ts` goes through `enqueue()`.
+8. The UI and the background talk only via `chrome.storage`.
+9. Never render model output with `dangerouslySetInnerHTML`.
+10. Done means: `npm test` passes, `npm run build` passes, `npm run typecheck` passes, new logic has unit tests, and you list manual test steps for Chrome.
+11. Finish every task with a list of changed files, manual test steps, an update to any outdated part of this file, and a git commit with a clear message.
+
+### Code style
+- Files open with a JSDoc block explaining design decisions; sections are separated by `// ─── Name ───` dividers.
+- Console messages are prefixed with `[Clarity]`. Expected cases (such as restricted pages) use `console.log`, because every `console.error` shows up under chrome://extensions → Errors.
+- Components use named exports; only `App` is a default export.
+- All styling lives in `src/app/app.css`, with plain class names (no CSS modules, no Tailwind).
+- Shared types live in `src/types/index.ts`; ambient module declarations sit next to it as `src/types/*.d.ts`.
+- Shared helpers live in `src/lib/utils/`: `sha256` (`hash.ts`), `escapeHtml` (`html.ts`), `getHostname` (`url.ts`, returns `null` instead of throwing, so use it in render code instead of `new URL()`), `isRestrictedUrl` and `isRestrictedPageError` (`restricted-pages.ts`), and `createWriteQueue` (`write-queue.ts`).
+- "Phase 1–4" in comments means the original build phases; "stage 6C" and "stage 7" are the quality work.
+
+### Typing rules
+- Pass a result type to every `chrome.storage.*.get<T>()` call.
+- Use narrow literal unions or `React.JSX` (never the global `JSX`) for dynamic tags.
+- Type compromise plugins via `nlp<DatesMethods & NumbersMethods>(text)`. The `compromise-numbers` types come from `src/types/compromise-numbers.d.ts`.
+- No `any`, and no `@ts-ignore` without a comment explaining why.
