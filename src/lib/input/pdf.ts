@@ -13,9 +13,18 @@
  * the app's main chunk. The worker ?url import is only a path string, so it
  * stays static.
  *
- * Each page is split at sentence boundaries into paragraphs of at most
- * MAX_NODE_SENTENCES sentences and MAX_NODE_WORDS words (text-blocks.ts), so
- * one page never becomes one huge node.
+ * The HTML keeps pdf.js's line structure (a newline at each `hasEOL`) and
+ * goes through the same block rules as pasted text (text-blocks.ts
+ * pdfPagesToHtml): list-marker lines (1., a., i., •, o) become list items,
+ * wrapped lines join, a short line ending a sentence or label ends its
+ * paragraph, a title line merges into the paragraph after it, and blocks
+ * over MAX_NODE_SENTENCES sentences or MAX_NODE_WORDS words are split at
+ * sentence boundaries. The pages are read as one text, so a sentence that
+ * crosses a page break stays one node.
+ *
+ * `textContent` (and so the dedup hash) is still the whitespace-flattened
+ * text per page, as before, so a PDF added before this change dedups to its
+ * stored document and keeps its old HTML; delete it to get the new split.
  *
  * OCR is NOT supported. This module only works with text-based (not scanned) PDFs.
  */
@@ -23,7 +32,7 @@
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { upsertDocument } from '../storage/documents';
 import { sha256 } from '../utils/hash';
-import { proseToHtml } from './text-blocks';
+import { pdfPagesToHtml } from './text-blocks';
 import type { ClarityDocument } from '../../types';
 
 const MIN_TEXT_LENGTH = 100;
@@ -47,7 +56,8 @@ export async function createDocumentFromPDF(file: File): Promise<ClarityDocument
 
   const pdf = await loadingTask.promise;
 
-  // Extract text page by page. Each page becomes a paragraph block.
+  // Extract text page by page: lines for the HTML, flattened text for the hash
+  const pageLines: string[] = [];
   const pageTexts: string[] = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
@@ -63,8 +73,11 @@ export async function createDocumentFromPDF(file: File): Promise<ClarityDocument
         else pageText += ' ';
       }
     }
-    pageText = pageText.replace(/\s+/g, ' ').trim();
-    if (pageText) pageTexts.push(pageText);
+    const flat = pageText.replace(/\s+/g, ' ').trim();
+    if (flat) {
+      pageTexts.push(flat);
+      pageLines.push(pageText);
+    }
   }
 
   const textContent = pageTexts.join('\n\n');
@@ -79,8 +92,8 @@ export async function createDocumentFromPDF(file: File): Promise<ClarityDocument
   // Title: filename without extension
   const title = file.name.replace(/\.pdf$/i, '').trim() || 'PDF document';
 
-  // HTML: each page split into sentence-bounded paragraphs
-  const html = pageTexts.map(proseToHtml).join('\n');
+  // HTML: the line structure of every page, read as one text
+  const html = pdfPagesToHtml(pageLines);
 
   // SHA-256 hash for dedup
   const contentHash = await sha256(textContent);

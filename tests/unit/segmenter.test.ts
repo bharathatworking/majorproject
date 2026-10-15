@@ -2,8 +2,9 @@
 import { describe, it, expect } from 'vitest';
 import { segmentHtml, simplifiableNodes } from '../../src/lib/segmentation/segmenter';
 import {
-  MAX_NODE_SENTENCES, MAX_NODE_WORDS, blocksToHtml, splitSentences, textToBlocks,
+  MAX_NODE_SENTENCES, MAX_NODE_WORDS, blocksToHtml, pdfPagesToHtml, splitSentences, textToBlocks,
 } from '../../src/lib/input/text-blocks';
+import { TEST_PLAN_PDF_PAGES } from '../mocks/test-plan';
 
 const html = `
   <h2>Mission goals</h2>
@@ -135,5 +136,30 @@ describe('pasted text segmentation', () => {
   it('clamps an out-of-range data-depth', () => {
     const { nodes } = segmentHtml('<ul><li data-depth="9">a</li><li data-depth="x">b</li></ul>', 't', 'h');
     expect(nodes.map(n => n.depth)).toEqual([3, undefined]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The "example user test plan" PDF → HTML → nodes (Chrome run)
+// ---------------------------------------------------------------------------
+describe('example user test plan segmentation', () => {
+  const nodes = () => segmentHtml(pdfPagesToHtml(TEST_PLAN_PDF_PAGES), 'example user test plan', 'hash-tp').nodes;
+
+  it('has no heading node, merges the title and keeps deterministic IDs', () => {
+    const n = nodes();
+    expect(n.some(x => x.type === 'heading')).toBe(false);
+    expect(n[0].text.startsWith('User Test Plan Example. Situating Context:')).toBe(true);
+    expect(n.map(x => x.id)).toEqual(n.map((_, i) => `n${i}`));
+    expect(nodes().map(x => [x.id, x.text])).toEqual(n.map(x => [x.id, x.text]));
+  });
+
+  it('makes the objectives an ordered list of 3 and no node ends in a marker', () => {
+    const n = nodes();
+    const objectives = n.findIndex(x => x.text === 'Objectives:');
+    expect(n.slice(objectives + 1, objectives + 4).map(x => [x.type, x.ordered])).toEqual([
+      ['list-item', true], ['list-item', true], ['list-item', true],
+    ]);
+    expect(n[objectives + 4].type).toBe('paragraph');
+    for (const x of n) expect(x.text).not.toMatch(/(?:^|\s)(?:\d{1,3}|[a-z]|[ivx]{1,4})[.)]$/);
   });
 });
