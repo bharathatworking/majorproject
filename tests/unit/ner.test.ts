@@ -47,6 +47,61 @@ describe('detectEntities', () => {
     for (const e of entities) expect(text.slice(e.start, e.end)).toBe(e.text);
   });
 
+  // Junk entities from the "example user test plan" run report, each of which
+  // the prompt asked the model to keep and the check reported as dropped
+  describe('clean-up of junk entities (user test plan run)', () => {
+    const TEST_PLAN =
+      'Half of the participants will do session 1 tasks using Google Calendar and session 2 tasks with Team Cal. ' +
+      'The other half of the participants will do session 1 tasks with Team Cal and session 2 tasks with Google Calendar. ' +
+      'Find three potential 30-minute meeting slots during PST working hours (she is in PST time zone). Find a time. ' +
+      'Objectives: 1. Formative: identify issues. 2. Summative: compare TeamCal (Google Calendar or TeamCal). ' +
+      'Common Meeting Times: "You want to schedule an hour-long meeting with two of your employees—Jose and Annika—' +
+      'and a potential investor (Ricky)." You have been shorthanded and some employees are scheduled to work ' +
+      'overtime (over 40 hours) this week. She takes over any hours that are filled.';
+    const entities = detectEntities(TEST_PLAN);
+    const texts = entities.map(e => e.text);
+
+    it('slices every entity back to the text', () => {
+      for (const e of entities) expect(TEST_PLAN.slice(e.start, e.end)).toBe(e.text);
+    });
+
+    it('cuts names at a sentence end or an opening bracket, and trims brackets, quotes and dashes', () => {
+      expect(texts).toContain('Team Cal');
+      expect(texts).not.toContain('Team Cal. The other');
+      expect(texts).toContain('TeamCal');
+      expect(texts.some(t => t.includes('('))).toBe(false);
+      expect(texts).toContain('Annika');
+      expect(texts).toContain('Ricky');
+    });
+
+    it('drops numbers and dates without a comparable value', () => {
+      for (const junk of ['an', 'week', 'this week', 'any hours', '(over', 'over']) expect(texts).not.toContain(junk);
+      expect(entities).toContainEqual(expect.objectContaining({ text: '40', type: 'number' }));
+    });
+
+    it('drops inline list markers but keeps real numbers', () => {
+      const markerStart = TEST_PLAN.indexOf('1. Formative');
+      expect(entities.some(e => e.start === markerStart)).toBe(false);
+      expect(entities.some(e => e.start === TEST_PLAN.indexOf('2. Summative'))).toBe(false);
+      expect(entities.some(e => e.start === TEST_PLAN.indexOf('1 tasks'))).toBe(true);
+    });
+
+    it('drops a label followed by ":" and lowercase "names"', () => {
+      expect(texts.some(t => /Meeting Times/.test(t))).toBe(false);
+      expect(texts.some(t => /zone/.test(t))).toBe(false);
+    });
+
+    it('reads "during PST" as the time zone PST', () => {
+      expect(entities).toContainEqual(expect.objectContaining({ text: 'PST', type: 'timezone' }));
+      expect(texts).not.toContain('during PST');
+    });
+  });
+
+  it('keeps a number at the end of a sentence (not a list marker)', () => {
+    const text = 'The war ended in 1945. The treaty followed.';
+    expect(detectEntities(text).map(e => e.text)).toContain('1945');
+  });
+
   it('returns an empty list for empty text', () => {
     expect(detectEntities('')).toEqual([]);
   });

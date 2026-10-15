@@ -83,6 +83,39 @@ describe('findMissingEntities', () => {
     expect(findMissingEntities([entity('on Monday', 'date')], 'Come on Tuesday.')).toEqual(['on Monday']);
   });
 
+  // Chrome false failures: same value, different wording
+  it('keeps "for the next 21 years" as "for 21 years" (dates and durations by value)', () => {
+    const original = 'He then lived in Paris for the next 21 years, writing every day.';
+    const entities = detectEntities(original);
+    expect(entities).toContainEqual(expect.objectContaining({ type: 'date' }));
+    expect(findMissingEntities(entities, 'He lived in Paris for 21 years and wrote every day.')).toEqual([]);
+    expect(findMissingEntities([entity('next 21 years', 'date')], 'He lived there for 21 years.')).toEqual([]);
+  });
+
+  it('keeps "aged 45" as "at age 45"', () => {
+    const original = 'She died in Warsaw, aged 45, after a long illness.';
+    const entities = detectEntities(original);
+    expect(findMissingEntities(entities, 'She died in Warsaw at age 45 after being sick for a long time.')).toEqual([]);
+    expect(findMissingEntities([entity('aged 45', 'number')], 'She died at age 45.')).toEqual([]);
+  });
+
+  it('still fails a real drop: "1893" missing', () => {
+    const original = 'The bridge over the river opened in 1893 after six years of work.';
+    const entities = detectEntities(original);
+    const missing = findMissingEntities(entities, 'The bridge over the river opened after years of work.');
+    expect(missing.some(m => m.includes('1893'))).toBe(true);
+  });
+
+  it('fails a changed unit or number in a duration', () => {
+    expect(findMissingEntities([entity('next 21 years', 'date')], 'for 21 months')).toEqual(['next 21 years']);
+    expect(findMissingEntities([entity('next 21 years', 'date')], 'for 12 years')).toEqual(['next 21 years']);
+  });
+
+  it('never counts "an" as a number', () => {
+    expect(findMissingEntities([entity('an', 'number')], 'Schedule a one-hour meeting.')).toEqual([]);
+    expect(detectEntities('Schedule an hour-long meeting with Jose.').map(e => e.text)).not.toContain('an');
+  });
+
   it('keeps dates as written', () => {
     expect(findMissingEntities([entity('1903', 'date')], 'In 1903, she won.')).toEqual([]);
     expect(findMissingEntities([entity('1903', 'date')], 'Long ago, she won.')).toEqual(['1903']);

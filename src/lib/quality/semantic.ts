@@ -11,25 +11,25 @@
  *  - Pure apart from the injected `embed` function, so tests need no fetch or
  *    provider mocks.
  *  - Entity matching is forgiving about form, not content: case, possessive
- *    's, punctuation and thousands separators are ignored, and number entities
- *    also match by parsed value ("three" = "3", "1,500" = "1500").
- *  - Entities compare on their core tokens: a leading in / on / at / the is
- *    dropped ("in PST" matches "during PST", "on Monday" matches "Monday").
- *    A time-zone entity matches when one of its abbreviations is still a
- *    whole word of the output ("PST time zone" is kept by "during PST").
+ *    's, punctuation and thousands separators are ignored.
+ *  - Names (person, org, place) compare on their core tokens: a leading in /
+ *    on / at / the is dropped ("The Hague" matches "Hague").
+ *  - Numbers, dates and time zones compare by value (lib/quality/values.ts
+ *    valueSignature): every number, number+unit, month, weekday and time
+ *    zone of the entity must be in the output, and modifiers don't count.
+ *    "for the next 21 years" is kept by "for 21 years", "aged 45" by "at age
+ *    45", "three" by "3", "in PST time zone" by "during PST"; "1893" missing
+ *    or "21 years" → "21 months" still fails. An entity without a
+ *    comparable value ("this week") can't be checked and counts as kept.
  *  - Headings and texts under MIN_WORDS_FOR_CHECK words are not checked:
  *    embeddings of a few words are noisy, and a retry there costs more than it
  *    saves.
  */
 
-import nlp from 'compromise';
-import numberPlugin, { type NumbersMethods } from 'compromise-numbers';
-import { TIME_ZONES } from '../segmentation/time-zones';
 import { MIN_WORDS_FOR_CHECK } from './config';
 import { cosineSimilarity } from './similarity';
+import { signatureKept, valueSignature, type ValueSignature } from './values';
 import type { ContentNode, Entity, MeaningCheck } from '../../types';
-
-nlp.plugin(numberPlugin);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -75,11 +75,8 @@ export function coreTokens(text: string): string {
   return ` ${words.slice(i).join(' ')} `;
 }
 
-/** Parsed numeric values in a text ("three apples and 1,500 pears" → [3, 1500]). */
-function numberValues(text: string): number[] {
-  const values = nlp<NumbersMethods>(text).numbers().get();
-  return Array.isArray(values) ? values : [values];
-}
+/** Entity types compared by value rather than by wording. */
+const VALUE_TYPES: ReadonlySet<Entity['type']> = new Set<Entity['type']>(['number', 'date', 'timezone']);
 
 /**
  * Entity texts from the original that the simplified text no longer contains,
@@ -87,23 +84,17 @@ function numberValues(text: string): number[] {
  */
 export function findMissingEntities(entities: readonly Entity[], simplified: string): string[] {
   const haystack = normalize(simplified);
-  let simplifiedNumbers: Set<number> | null = null;
+  let simplifiedValues: ValueSignature | null = null;
   const missing: string[] = [];
 
   for (const entity of entities) {
     const needle = coreTokens(entity.text);
     if (needle.trim() === '' || haystack.includes(needle)) continue;
 
-    if (entity.type === 'timezone') {
-      const zones = needle.trim().split(' ').filter(w => TIME_ZONES.has(w));
-      if (zones.length > 0 && zones.every(z => haystack.includes(` ${z} `))) continue;
-    }
-
-    if (entity.type === 'number') {
-      const values = numberValues(entity.text);
-      simplifiedNumbers ??= new Set(numberValues(simplified));
-      const found = simplifiedNumbers;
-      if (values.length > 0 && values.every(v => found.has(v))) continue;
+    if (VALUE_TYPES.has(entity.type)) {
+      const values = valueSignature(entity.text);
+      simplifiedValues ??= valueSignature(simplified);
+      if (!values.hasValue || signatureKept(values, simplifiedValues)) continue;
     }
 
     if (!missing.includes(entity.text)) missing.push(entity.text);

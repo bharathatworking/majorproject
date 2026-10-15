@@ -7,20 +7,37 @@
  * Overlapping matches are resolved by start position, then longest match,
  * then type priority.
  *
- * Clean-up after detection:
- *  - Trailing punctuation is trimmed from each match (compromise returns
- *    "in PST." for "…in PST."), and a date loses a leading in / on / at /
- *    the ("in PST" → "PST"), with the offsets adjusted so they still slice
- *    back to the text.
+ * Clean-up after detection (offsets are adjusted so every entity still
+ * slices back to the text). Each rule removes a junk entity seen in a real
+ * run, which the prompt asked the model to keep and the entity check then
+ * reported as dropped:
+ *  - Leading opening brackets and quotes and trailing punctuation, closing
+ *    brackets, quotes and dashes are trimmed ("(Ricky)" → "Ricky",
+ *    "Annika—" → "Annika", "30-" → "30").
+ *  - A match is cut at a sentence end or an opening bracket: compromise
+ *    runs names across them ("Team Cal. The other" → "Team Cal",
+ *    "TeamCal (Google" → "TeamCal").
+ *  - A date loses a leading in / on / at / the / during ("during PST" →
+ *    "PST").
  *  - A date whose core is only a time-zone abbreviation ("in PST", "UTC",
  *    "PST time zone") is a `timezone`, not a date, so a dropped one is
  *    reported as a time zone. "9am EST" stays a date.
+ *  - Numbers and dates without a comparable value (lib/quality/values.ts:
+ *    no number, month, weekday or time zone) are dropped: "an" read as a
+ *    number, "week", "any hours", "(over".
+ *  - A list marker is not a number: digits followed by "." or ")" and a
+ *    capital, at the start of the text, a line or a sentence, or after ":"
+ *    ("Objectives: 1. Formative").
+ *  - Names (person, org, place) need a capital letter after clean-up
+ *    ("zone). Find" → "zone" is dropped), and a name directly followed by
+ *    ":" is a label, not a name ("Common Meeting Times: …").
  */
 
 import nlp from 'compromise';
 import datePlugin, { type DatesMethods } from 'compromise-dates';
 import numberPlugin, { type NumbersMethods } from 'compromise-numbers';
 import { isTimeZoneText } from './time-zones';
+import { valueSignature } from '../quality/values';
 import type { Entity } from '../../types';
 
 nlp.plugin(datePlugin);
@@ -28,8 +45,55 @@ nlp.plugin(numberPlugin);
 
 // ─── Clean-up ─────────────────────────────────────────────────────────────────
 
-const TRAILING_PUNCTUATION = /[\s.,;:!?]+$/;
-const LEADING_FILLER = /^(?:(?:in|on|at|the)\s+)+/i;
+const LEADING_OPENERS = /^[\s(["'“‘]+/;
+const TRAILING_PUNCTUATION = /[\s.,;:!?)\]"'”’—–-]+$/;
+const LEADING_FILLER = /^(?:(?:in|on|at|the|during)\s+)+/i;
+/** A sentence end inside a match, or an opening bracket: the match is cut there. */
+const BOUNDARY = /[.!?]["'”’)\]]*\s+|\s+[([]/;
+/** Digits then "." or ")" then a capital: a list marker when it starts a line, a sentence or follows ":". */
+const LIST_MARKER_AFTER = /^[.)]\s+["'“‘(]?[A-Z]/;
+const LIST_MARKER_BEFORE = /(?:^|[\n:.!?]["'”’)]*)\s*$/;
+
+type NameType = 'person' | 'org' | 'place';
+const NAME_TYPES: ReadonlySet<Entity['type']> = new Set<NameType>(['person', 'org', 'place']);
+
+/**
+ * One cleaned match (rules in the file header), or null when it is junk.
+ * `source` is the whole text, for the context checks.
+ */
+function cleanMatch(
+  source: string,
+  matchText: string,
+  matchStart: number,
+  type: Entity['type'],
+): { text: string; start: number } | null {
+  let text = matchText.replace(LEADING_OPENERS, '');
+  const cut = BOUNDARY.exec(text);
+  if (cut) text = text.slice(0, cut.index);
+  text = text.replace(TRAILING_PUNCTUATION, '');
+  if (type === 'date') {
+    const lead = LEADING_FILLER.exec(text)?.[0] ?? '';
+    if (lead.length < text.length) text = text.slice(lead.length);
+  }
+  if (!text) return null;
+  // compromise's offset can skip leading punctuation its text includes, so
+  // find the cleaned text in the source near the match
+  const start = source.indexOf(text, Math.max(0, matchStart - 2));
+  if (start < 0 || start > matchStart + matchText.length) return null;
+
+  if (NAME_TYPES.has(type)) {
+    if (!/[A-Z]/.test(text)) return null;
+    if (/^\s*:/.test(source.slice(start + text.length))) return null;
+    return { text, start };
+  }
+  if ((type === 'number' || type === 'date') && !valueSignature(text).hasValue) return null;
+  if (type === 'number' && /^\d{1,3}$/.test(text)
+    && LIST_MARKER_AFTER.test(source.slice(start + text.length))
+    && LIST_MARKER_BEFORE.test(source.slice(0, start))) {
+    return null;
+  }
+  return { text, start };
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -48,16 +112,9 @@ export function detectEntities(text: string): Entity[] {
 
     const collect = (matches: OffsetMatch[], type: Entity['type']) => {
       for (const m of matches) {
-        let found = m.text.replace(TRAILING_PUNCTUATION, '');
-        let start = m.offset.start;
-        if (type === 'date') {
-          const lead = LEADING_FILLER.exec(found)?.[0] ?? '';
-          if (lead.length < found.length) {
-            found = found.slice(lead.length);
-            start += lead.length;
-          }
-        }
-        if (!found) continue;
+        const cleaned = cleanMatch(text, m.text, m.offset.start, type);
+        if (!cleaned) continue;
+        const { text: found, start } = cleaned;
         const kind = type === 'date' && isTimeZoneText(found) ? 'timezone' : type;
         entities.push({ text: found, type: kind, start, end: start + found.length });
       }
