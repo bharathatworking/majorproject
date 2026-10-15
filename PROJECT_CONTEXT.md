@@ -51,6 +51,8 @@ scripts/calibrate-nli.mjs    npm run calibrate-nli: ENTAILMENT_MIN table on the 
 scripts/meaning-breakdown.mjs npm run meaning-breakdown -- <report.json>: why paragraphs failed, per run
 scripts/calibrate-meaning.mjs npm run calibrate-meaning: SIM_MIN / ENTAILMENT_MIN / paragraph rule on paragraph-items.jsonl (dev choice, test report)
 scripts/make-paragraph-items.mjs  fills missing qwen2.5:3b simplifications and hintedWords in paragraphs.jsonl (app prompt, Ollama)
+scripts/add-paragraph-items.mjs   adds the missing #real items (balanced dev/test per source), strips proposed labels, auto-labels injected copies
+scripts/labels.mjs           npm run export-labels / import-labels: blind labels.csv (real outputs, random order) ↔ paragraph-items.jsonl
 scripts/replay-meaning.mjs   node scripts/replay-meaning.mjs <pdf|txt>: a run without Chrome (app split, prompt, qwen2.5:3b, meaning check + retry) and its failure breakdown
 scripts/lib/nli-node.mjs     shared by the Node scripts: NLI model on onnxruntime-node, all-minilm via Ollama, Vite module loader, Wilson interval
 eval/nli-calibration/        paragraphs.jsonl (15 originals), pairs.jsonl (60 labelled sentences), SOURCES.md, README.md
@@ -244,7 +246,9 @@ npm install
 npm run fetch-models   # once per clone: NLI model + ORT wasm into public/ (~114 MB, git-ignored)
 npm run calibrate-nli  # ENTAILMENT_MIN calibration table (needs fetch-models; Ollama all-minilm for ranking)
 npm run meaning-breakdown -- <report.json>  # failure kinds per run of a downloaded run report
-npm run calibrate-meaning  # paragraph-level threshold choice (dev) and test report; -- --reviewed-only, --entity-recall, --verbose
+npm run export-labels      # eval/nli-calibration/labels.csv for blind labelling (never overwrites labels without --force)
+npm run import-labels      # labels.csv → paragraph-items.jsonl (-- --dry-run)
+npm run calibrate-meaning  # paragraph-level threshold choice (dev) and test report; -- --reviewed-only, --verbose
 npm run build          # production build -> dist/
 npm run dev            # crxjs watch / hot reload
 npm test               # vitest run (tests/unit/**/*.test.ts)
@@ -314,6 +318,12 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
   - **Before** (Chrome report, old split into 10 nodes, old checker): passed 1/10. Failures: similarity 4, entities 5, unsupported 5, contradiction 0, of 9 failed. Most of the entity failures were junk entities.
   - **After** (`scripts/replay-meaning.mjs`, new split into 38 nodes, new entity rules, same thresholds, fresh qwen2.5:3b outputs, CPU NLI): passed 15/26 (12 excluded as short or already simple). Failures: similarity 8, entities 1, unsupported 4, contradiction 1, of 11 failed.
   - Similarity at the uncalibrated 0.87 is now the main cause.
+- **Calibration, round 2 (2026-10-15).** The author decided the standard:
+  - A paragraph is unfaithful when it changes, contradicts or adds a fact, or drops a **key** fact (one needed to answer who / what / when / where / how many about its main point). Minor names may drop.
+  - This is implemented as the entity rule (minimum share kept + main-claim numbers and dates) and as hypothesis context for short and referring sentences.
+  - **The set:** 67 originals (47 added: 35 Wikipedia leads at pinned revisions and 12 Ready.gov / NWS texts). Each has 1 real qwen2.5:3b output; 20 have a copy with one injected error. Dev has 34 real items and test 33.
+  - **Labels:** the real outputs are labelled blind through `eval/nli-calibration/labels.csv` (random order, no proposed labels), and the injected copies are auto-labelled unfaithful.
+  - **Next:** import the labels, then `npm run calibrate-meaning -- --reviewed-only`. That chooses `SIM_MIN`, `ENTAILMENT_MIN`, the rule and `ENTITY_RECALL_MIN` on dev, then reports test. All four stay at today's values until then.
 - **fp16 vs q8** (`npm run calibrate-nli -- --compare-fp16`, CPU): sentence decisions agree on 59/60 items (only `kit-f2` flips, contradiction 0.086 → 0.210) and paragraph decisions on 15/15. WebGPU ms per paragraph comes from `clarityNliExperiment()` in Chrome.
 - **Entity rules found on the dev half** (names by capitalised words, surname or acronym; diacritics; weekday redundancy; unit conversions) are fixes to wrongly reported drops, not thresholds. The test half was not used to design them.
 - **Calibration rules:**

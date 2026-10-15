@@ -12,7 +12,9 @@
     "fetch-models": "node scripts/fetch-models.mjs",
     "calibrate-nli": "node scripts/calibrate-nli.mjs",
     "meaning-breakdown": "node scripts/meaning-breakdown.mjs",
-    "calibrate-meaning": "node scripts/calibrate-meaning.mjs"
+    "calibrate-meaning": "node scripts/calibrate-meaning.mjs",
+    "export-labels": "node scripts/labels.mjs export",
+    "import-labels": "node scripts/labels.mjs import"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.1",
