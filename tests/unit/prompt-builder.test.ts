@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { buildPrompt, readerRules } from '../../src/lib/prompt-builder/builder';
+import {
+  EXAMPLES, EXTRA_VARIANTS, PROMPT_VARIANTS, pickExample, stripExampleLabel,
+} from '../../src/lib/prompt-builder/variants';
 import { resolveProfile } from '../../src/lib/profile/resolver';
-import type { ContentNode, SimplificationSpec, UserProfile } from '../../src/types';
+import type { ContentNode, PromptVariantId, SimplificationSpec, UserProfile } from '../../src/types';
 import { makeReport } from '../mocks/fixtures';
 
 function spec(overrides: Partial<SimplificationSpec> = {}): SimplificationSpec {
@@ -188,5 +191,62 @@ describe('buildPrompt difficult-word hint', () => {
 
   it("omits the hint in the 'none' tier", () => {
     expect(buildPrompt(node, spec({ depthTier: 'none' }), report, '', ['mission']).user).not.toContain(HINT);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prompt variants (stage 7) — data in lib/prompt-builder/variants.ts
+// ---------------------------------------------------------------------------
+describe('buildPrompt variants', () => {
+  const user = (variant: PromptVariantId, s = spec()) =>
+    buildPrompt(node, s, report, 'Earlier.', ['mission'], variant).user;
+
+  it('registers standard, stepwise and example-guided', () => {
+    expect(Object.keys(PROMPT_VARIANTS).sort()).toEqual(['example-guided', 'standard', 'stepwise']);
+    for (const [id, v] of Object.entries(PROMPT_VARIANTS)) expect(v.id).toBe(id);
+    expect(EXTRA_VARIANTS).toEqual(['stepwise', 'example-guided']);
+  });
+
+  it("'standard' is the default and adds nothing", () => {
+    expect(user('standard')).toBe(buildPrompt(node, spec(), report, 'Earlier.', ['mission']).user);
+  });
+
+  it('keeps the system prompt the same for every variant', () => {
+    const system = buildPrompt(node, spec(), report).system;
+    for (const id of EXTRA_VARIANTS) {
+      expect(buildPrompt(node, spec(), report, '', [], id).system).toBe(system);
+    }
+  });
+
+  it('puts the variant block just before the text, which stays last', () => {
+    for (const id of EXTRA_VARIANTS) {
+      const u = user(id);
+      const block = PROMPT_VARIANTS[id].instruction(spec());
+      expect(block).not.toBe('');
+      expect(u.endsWith(`${block}TEXT TO REWRITE:\n${node.text}`)).toBe(true);
+    }
+  });
+
+  it("'stepwise' asks for silent planning with the sentence limit and only the result", () => {
+    const u = user('stepwise', spec({ maxSentenceLength: 12 }));
+    expect(u).toContain('longer than 12 words');
+    expect(u).toContain('Output ONLY the result of step 2');
+  });
+
+  it("'example-guided' picks the example that matches the profile", () => {
+    expect(pickExample(spec({ keepTerms: true, explainTerms: true }))).toBe(EXAMPLES[0]);
+    expect(pickExample(spec({ explainTerms: true }))).toBe(EXAMPLES[1]);
+    expect(pickExample(spec({ avoidIdioms: true }))).toBe(EXAMPLES[2]);
+    expect(pickExample(spec({ oneIdeaPerSentence: true }))).toBe(EXAMPLES[3]);
+    expect(pickExample(spec())).toBe(EXAMPLES[EXAMPLES.length - 1]);
+
+    const u = user('example-guided', spec({ explainTerms: true }));
+    expect(u).toContain(`Before: ${EXAMPLES[1].before}\nAfter: ${EXAMPLES[1].after}`);
+    expect(u).toContain('do not copy it');
+  });
+
+  it('strips a copied "After:" label from model output', () => {
+    expect(stripExampleLabel('After: The plan failed.')).toBe('The plan failed.');
+    expect(stripExampleLabel('The plan failed after: a while.')).toBe('The plan failed after: a while.');
   });
 });

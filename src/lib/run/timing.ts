@@ -7,10 +7,12 @@
  * cache hits and skipped nodes take milliseconds.
  */
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+import type { NodeSource } from '../../types';
 
-/** How a node got its result in this run. */
-export type NodeSource = 'model' | 'cache' | 'skipped' | 'error';
+// NodeSource lives in types (the run log uses it); re-exported for callers
+export type { NodeSource };
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface NodeTiming {
   nodeId: string;

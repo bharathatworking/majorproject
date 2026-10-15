@@ -64,6 +64,12 @@ describe('cacheKey', () => {
   it('keeps text and spec apart (no ambiguous concatenation)', async () => {
     expect(await cacheKey('a', SPEC, 'b')).not.toBe(await cacheKey('', SPEC, 'ab'));
   });
+
+  it("separates 'extra' quality results and leaves 'standard' keys unchanged", async () => {
+    const plain = await cacheKey(TEXT, SPEC, MODEL);
+    expect(await cacheKey(TEXT, SPEC, MODEL, 'standard')).toBe(plain);
+    expect(await cacheKey(TEXT, SPEC, MODEL, 'extra')).not.toBe(plain);
+  });
 });
 
 // ---------------------------------------------------------------------------

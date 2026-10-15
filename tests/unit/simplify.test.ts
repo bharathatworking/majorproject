@@ -40,6 +40,7 @@ const { DEFAULT_PROFILE } = await import('../../src/lib/storage/settings');
 const { getDocument, upsertDocument, saveDocument } = await import('../../src/lib/storage/documents');
 const { OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
 const { MEANING_RETRY_INSTRUCTION } = await import('../../src/lib/quality/semantic');
+const { MAX_MODEL_CALLS_PER_NODE, QUALITY_THRESHOLD } = await import('../../src/lib/quality/score');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -513,5 +514,230 @@ describe('runSimplification speed paths', () => {
     expect(lines).toContainEqual(expect.stringMatching(
       /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 1 skipped, 0 errors; .*model qwen2\.5:3b$/,
     ));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runSimplification — stage 7: extra quality (prompt variants) and run log
+// ---------------------------------------------------------------------------
+describe('runSimplification extra quality', () => {
+  /** Passes 6C, short and plain: scores above the quality threshold. */
+  const GOOD = 'Marie Curie won a big prize in 1903.';
+  /** Passes 6C (similarity 0.85, entity kept) but reads far above the target. */
+  const HARD =
+    'Marie Curie received the prestigious Nobel Prize in Physics in 1903, recognizing ' +
+    'extraordinary investigations concerning radioactivity.';
+  const STEP_MARK = 'Work in two steps, silently.';
+  const EXAMPLE_MARK = 'Here is an example of the kind of rewrite wanted';
+
+  const enableExtraQuality = () => chrome.storage.sync.set({ extraQuality: true });
+  const lastLog = async (docId: string) => (await getDocument(docId))?.runLogs?.at(-1);
+
+  beforeEach(async () => {
+    nodes = [CURIE];
+    await setTargetGrade(4);
+  });
+
+  it('keeps a standard version above the threshold with one call', async () => {
+    await enableExtraQuality();
+    replies = { n0: [GOOD] };
+    scores = { [GOOD]: 0.95 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const node = (await lastLog(doc.id))?.nodes[0];
+    expect(node).toMatchObject({ source: 'model', variantUsed: 'standard', modelCalls: 1, retries: 0 });
+    expect(node?.candidates[0].scores.total).toBeGreaterThanOrEqual(QUALITY_THRESHOLD);
+  });
+
+  it('tries both other variants when standard scores low, and keeps the best', async () => {
+    await enableExtraQuality();
+    replies = { n0: [HARD, 'Marie Curie liked science.', GOOD] };
+    scores = { [HARD]: 0.85, 'Marie Curie liked science.': 0.82, [GOOD]: 0.93 };
+    const doc = await storedDoc();
+    const cb = callbacks();
+
+    await runSimplification(doc, cb, 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(prompts[0]).not.toContain(STEP_MARK);
+    expect(prompts[1]).toContain(STEP_MARK);
+    expect(prompts[2]).toContain(EXAMPLE_MARK);
+    // Standard passed 6C, so the variants carry no meaning-retry instruction
+    expect(prompts.slice(1).some(p => p.startsWith(MEANING_RETRY_INSTRUCTION))).toBe(false);
+    // Only the standard version is streamed
+    expect(cb.onNodeChunk.mock.calls.map(c => c[1])).toEqual([HARD]);
+
+    const saved = (await getDocument(doc.id))?.results[0];
+    expect(saved?.simplifiedText).toBe(GOOD);
+    expect(saved?.similarity).toBeCloseTo(0.93);
+    const node = (await lastLog(doc.id))?.nodes[0];
+    expect(node).toMatchObject({ variantUsed: 'example-guided', modelCalls: 3, retries: 2 });
+    expect(node?.candidates.map(c => [c.variant, c.chosen])).toEqual([
+      ['standard', false], ['stepwise', false], ['example-guided', true],
+    ]);
+    expect(node?.candidates[0].scores.total).toBeLessThan(QUALITY_THRESHOLD);
+  });
+
+  it('adds the meaning-retry instruction to the variants when standard fails 6C', async () => {
+    await enableExtraQuality();
+    replies = { n0: ['She liked science.', 'Marie Curie liked rays.', 'Marie Curie won in 1903.'] };
+    scores = { 'She liked science.': 0.5, 'Marie Curie liked rays.': 0.6, 'Marie Curie won in 1903.': 0.84 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(prompts[0].startsWith(MEANING_RETRY_INSTRUCTION)).toBe(false);
+    expect(prompts[1].startsWith(`${MEANING_RETRY_INSTRUCTION}\n\n`)).toBe(true);
+    expect(prompts[2].startsWith(`${MEANING_RETRY_INSTRUCTION}\n\n`)).toBe(true);
+    expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe('Marie Curie won in 1903.');
+    const node = (await lastLog(doc.id))?.nodes[0];
+    expect(node?.candidates.map(c => c.retryInstruction)).toEqual([false, true, true]);
+    expect(node?.candidates[0].missingEntities).toEqual(['Marie Curie']);
+  });
+
+  it('never makes more than 3 calls, even when every candidate is poor', async () => {
+    await enableExtraQuality();
+    // All keep the entity but fail the meaning threshold; a 4th reply is never asked for
+    const [a, b, c, d] = ['was bad', 'was sad', 'was mad', 'was glad'].map(w => `Marie Curie ${w}.`);
+    replies = { n0: [a, b, c, d] };
+    scores = { [a]: 0.3, [b]: 0.4, [c]: 0.35, [d]: 0.9 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_MODEL_CALLS_PER_NODE);
+    const saved = (await getDocument(doc.id))?.results[0];
+    expect(saved?.status).toBe('done');
+    expect(saved?.simplifiedText).toBe(b);
+  });
+
+  it('keeps going when a variant request fails', async () => {
+    await enableExtraQuality();
+    replies = { n0: [HARD, FAIL, GOOD] };
+    scores = { [HARD]: 0.85, [GOOD]: 0.93 };
+    const doc = await storedDoc();
+    const cb = callbacks();
+
+    await runSimplification(doc, cb, 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(cb.onNodeError).not.toHaveBeenCalled();
+    expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe(GOOD);
+    const node = (await lastLog(doc.id))?.nodes[0];
+    expect(node?.modelCalls).toBe(3);
+    expect(node?.candidates.map(c => c.variant)).toEqual(['standard', 'example-guided']);
+  });
+
+  it('gives headings one call', async () => {
+    await enableExtraQuality();
+    nodes = [{ id: 'n0', type: 'heading', level: 2, text: CURIE.text, entities: [] }];
+    replies = { n0: [HARD] };
+
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('off: still logs the scored 6C retry, at most 2 calls', async () => {
+    replies = { n0: ['Marie Curie liked science.', GOOD] };
+    scores = { 'Marie Curie liked science.': 0.6, [GOOD]: 0.9 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const log = await lastLog(doc.id);
+    expect(log?.extraQuality).toBe(false);
+    expect(log?.nodes[0]).toMatchObject({ variantUsed: 'standard', modelCalls: 2, retries: 1 });
+    expect(log?.nodes[0].candidates.map(c => [c.retryInstruction, c.chosen])).toEqual([
+      [false, false], [true, true],
+    ]);
+  });
+
+  it('off: a low score alone does not trigger extra calls', async () => {
+    replies = { n0: [HARD] };
+    scores = { [HARD]: 0.85 };
+
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('caches extra-quality results separately', async () => {
+    replies = { n0: [GOOD, GOOD] };
+    scores = { [GOOD]: 0.95 };
+    await runSimplification(await storedDoc('hash-a'), callbacks(), 'remaining');
+    await enableExtraQuality();
+    fetchMock.mockClear();
+
+    await runSimplification(await storedDoc('hash-b'), callbacks(), 'remaining');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cacheKeys()).toHaveLength(2);
+  });
+});
+
+describe('runSimplification run log', () => {
+  it('records every node with its source, time and the run settings', async () => {
+    nodes = [EASY, NODES[1]];
+    await setTargetGrade(4);
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const logs = (await getDocument(doc.id))?.runLogs;
+    expect(logs).toHaveLength(1);
+    const log = logs![0];
+    expect(log).toMatchObject({
+      cancelled: false, mode: 'all', model: 'qwen2.5:3b', extraQuality: false,
+      targetGrade: 4, qualityThreshold: QUALITY_THRESHOLD,
+      weights: { meaning: 0.5, readability: 0.3, length: 0.2 },
+    });
+    expect(log.summary.counts).toEqual({ model: 1, cache: 0, skipped: 1, error: 0 });
+    expect(log.nodes.map(n => [n.nodeId, n.source, n.modelCalls])).toEqual([
+      ['n0', 'skipped', 0], ['n1', 'model', 1],
+    ]);
+    expect(log.nodes[1].candidates).toHaveLength(1);
+    expect(typeof log.nodes[1].ms).toBe('number');
+  });
+
+  it('logs cache hits and errors', async () => {
+    await runSimplification(await storedDoc('hash-a'), callbacks(), 'remaining');
+    failing = new Set([NODES[2].text]);
+    const keys = cacheKeys();
+    const second = await storedDoc('hash-b');
+    // Drop n2's cache entry (the last one written) so it goes to the failing model
+    await chrome.storage.local.remove(keys[keys.length - 1]);
+
+    await runSimplification(second, callbacks(), 'remaining');
+
+    const log = (await getDocument(second.id))?.runLogs?.[0];
+    expect(log?.nodes.map(n => n.source)).toEqual(['cache', 'cache', 'error']);
+    expect(log?.nodes[2]).toMatchObject({ modelCalls: 1, variantUsed: null, candidates: [] });
+  });
+
+  it('keeps the last 5 runs', async () => {
+    const doc = await storedDoc();
+    for (let i = 0; i < 6; i++) await runSimplification((await getDocument(doc.id))!, callbacks(), 'all');
+    expect((await getDocument(doc.id))?.runLogs).toHaveLength(5);
+  });
+
+  it('saves a log marked cancelled when the run is cancelled', async () => {
+    const doc = await storedDoc();
+    const controller = new AbortController();
+    const cb = { ...callbacks(), signal: controller.signal, onNodeDone: vi.fn(() => controller.abort()) };
+
+    await runSimplification(doc, cb, 'all');
+
+    // Cancelled while n0 finished: n0 is logged, n1 and n2 never start
+    const log = (await getDocument(doc.id))?.runLogs?.[0];
+    expect(log?.cancelled).toBe(true);
+    expect(log?.nodes.map(n => n.nodeId)).toEqual(['n0']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cb.onComplete).toHaveBeenCalledTimes(1);
   });
 });

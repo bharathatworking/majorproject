@@ -17,10 +17,10 @@
  *   1. Already simple: the node's estimated grade (lib/metrics/node-grade.ts)
  *      is at or below the target, so the original is stored as `done` with
  *      `skipped: true`. No model call, NER or meaning check.
- *   2. Cache hit (lib/storage/cache.ts), keyed by node text + spec + model.
- *      'all' mode ("Re-simplify all") skips cache reads, since the user is
- *      asking for new text, but still writes. Only versions that pass the
- *      meaning and entity checks are cached.
+ *   2. Cache hit (lib/storage/cache.ts), keyed by node text + spec + model
+ *      (+ the quality mode). 'all' mode ("Re-simplify all") skips cache
+ *      reads, since the user is asking for new text, but still writes. Only
+ *      versions that pass the meaning and entity checks are cached.
  *   3. The model.
  * The run starts at `startIndex` (the first node visible in Reading) and wraps
  * around to the earlier nodes. Rolling context is always the previous node in
@@ -36,6 +36,24 @@
  * the rest of the run, other embed errors skip it for that node, and a failed
  * retry keeps the first version.
  *
+ * Prompt optimization (stage 7, lib/quality/score.ts and
+ * lib/prompt-builder/variants.ts): every model output is scored with
+ * scoreCandidate (meaning 0.5, readability 0.3, length 0.2).
+ *   - "Extra quality (slower)" off: the stage 6C retry above, unchanged.
+ *   - On: the streamed 'standard' version is kept when it passes 6C and its
+ *     total is at least QUALITY_THRESHOLD. Otherwise 'stepwise' and
+ *     'example-guided' are both generated (not streamed; with the meaning
+ *     retry instruction if 'standard' failed 6C) in place of the 6C retry, and
+ *     pickBestCandidate keeps the best of the three. A failed variant request
+ *     is skipped, not fatal.
+ *   - Never more than MAX_MODEL_CALLS_PER_NODE calls per node. Headings and
+ *     short texts (no 6C check) always get one call. Extra-quality results
+ *     are cached under their own key.
+ *
+ * Run log: every node, and every candidate's variant, scores and time, goes
+ * into a RunLog that addRunLog appends to the document at the end of the run
+ * (also when cancelled), for the run report download in Reading.
+ *
  * Error handling:
  *   HTTP 403 → OLLAMA_ORIGINS not set
  *   HTTP 404 → model not pulled
@@ -46,13 +64,14 @@
 import { EMBED_MODEL, OllamaHttpError, OllamaProvider } from '../llm/ollama-provider';
 import { resolveProfile } from '../profile/resolver';
 import { buildPrompt } from '../prompt-builder/builder';
+import { EXTRA_VARIANTS, stripExampleLabel } from '../prompt-builder/variants';
 import { segmentHtml, simplifiableNodes } from '../segmentation/segmenter';
-import { getLlmModel, getUserProfile } from '../storage/settings';
+import { getExtraQuality, getLlmModel, getUserProfile } from '../storage/settings';
 import { getCommonWordSet } from '../metrics/word-set';
 import { computeReadabilityReport } from '../metrics/engine';
 import { findDifficultWords } from '../metrics/difficult-words';
 import { isAlreadySimple } from '../metrics/node-grade';
-import { saveDocument } from '../storage/documents';
+import { addRunLog, saveDocument } from '../storage/documents';
 import { cacheKey, getCached, putCached } from '../storage/cache';
 import { recordSession } from '../storage/progress';
 import { toPlainText } from '../render/format-output';
@@ -60,9 +79,14 @@ import {
   checkMeaning, findMissingEntities, MEANING_RETRY_INSTRUCTION, passesChecks,
   pickBetterVersion, shouldCheckNode,
 } from '../quality/semantic';
-import { formatSeconds, summarizeRun, type NodeSource, type NodeTiming } from './timing';
+import {
+  MAX_MODEL_CALLS_PER_NODE, pickBestCandidate, QUALITY_THRESHOLD, scoreCandidate, WEIGHTS,
+  type ScoredCandidate,
+} from '../quality/score';
+import { formatSeconds, summarizeRun, type NodeTiming } from './timing';
 import type {
-  CachedResult, ClarityDocument, ContentNode, MeaningCandidate, RunMode, StoredResult,
+  CachedResult, CandidateLog, CandidateScores, ClarityDocument, ContentNode, MeaningCandidate,
+  NodeRunLog, NodeSource, PromptVariantId, RunLog, RunMode, StoredResult,
 } from '../../types';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -95,6 +119,19 @@ function stripThinkingArtifacts(text: string): string {
 function lastSentence(plainText: string): string {
   const sentences = plainText.split(/(?<=[.!?])\s+/);
   return sentences[sentences.length - 1] ?? '';
+}
+
+/** Rounds to 4 decimals so the run report stays readable. */
+const round4 = (x: number) => Math.round(x * 10_000) / 10_000;
+
+function roundScores(s: CandidateScores): CandidateScores {
+  return {
+    gradeGap: round4(s.gradeGap),
+    similarity: s.similarity === null ? null : round4(s.similarity),
+    entityRecall: round4(s.entityRecall),
+    lengthRatio: round4(s.lengthRatio),
+    total: round4(s.total),
+  };
 }
 
 /**
@@ -152,6 +189,18 @@ const STORED_TYPE: Record<ContentNode['type'], StoredResult['type']> = {
   table:      'paragraph',  // skipped anyway
 };
 
+/** One scored model output, with what the run log needs about it. */
+interface Attempt extends ScoredCandidate {
+  retryInstruction: boolean;
+  ms: number;
+}
+
+/** The version a node keeps, plus every candidate for the run log. */
+interface Generated {
+  chosen: Attempt;
+  candidates: CandidateLog[];
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export async function runSimplification(
@@ -162,6 +211,7 @@ export async function runSimplification(
 ): Promise<void> {
   const { signal } = callbacks;
   const runStart = performance.now();
+  const startedAt = Date.now();
 
   // 1. Normalize any 'streaming' results left over from a previous crashed run.
   if (doc.results.some(r => r.status === 'streaming')) {
@@ -173,9 +223,9 @@ export async function runSimplification(
   }
   if (signal.aborted) return;
 
-  // 2. Profile + word set + model (parallel fetch)
-  const [profile, wordSet, model] = await Promise.all([
-    getUserProfile(), getCommonWordSet(), getLlmModel(),
+  // 2. Profile + word set + model + quality mode (parallel fetch)
+  const [profile, wordSet, model, extraQuality] = await Promise.all([
+    getUserProfile(), getCommonWordSet(), getLlmModel(), getExtraQuality(),
   ]);
   if (signal.aborted) return;
 
@@ -245,15 +295,35 @@ export async function runSimplification(
   // Meaning check: per-run flag, turned off after the first 404 from /api/embed
   let embedAvailable = true;
 
-  // Timing: logged per node, summarized after the loop
+  // Timing and run log: recorded per node, summarized after the loop
   const timings: NodeTiming[] = [];
+  const nodeLogs: NodeRunLog[] = [];
   let firstResultMs: number | null = null;
+  // Model calls made for the current node (reset per node; read on errors too)
+  let nodeCalls = 0;
 
-  function recordTiming(nodeId: string, source: NodeSource, startedAt: number) {
+  function finishNode(
+    node: ContentNode,
+    source: NodeSource,
+    nodeStartedAt: number,
+    details: Partial<Pick<NodeRunLog, 'variantUsed' | 'candidates' | 'similarity'>> = {},
+  ) {
     const now = performance.now();
-    timings.push({ nodeId, source, ms: now - startedAt });
+    const ms = now - nodeStartedAt;
+    timings.push({ nodeId: node.id, source, ms });
+    nodeLogs.push({
+      nodeId: node.id,
+      type: STORED_TYPE[node.type] ?? 'paragraph',
+      source,
+      variantUsed: details.variantUsed ?? null,
+      modelCalls: nodeCalls,
+      retries: Math.max(0, nodeCalls - 1),
+      ms: Math.round(ms),
+      candidates: details.candidates ?? [],
+      ...(details.similarity !== undefined && { similarity: round4(details.similarity) }),
+    });
     if (firstResultMs === null && source !== 'error') firstResultMs = now - runStart;
-    console.log(`[Clarity] Node ${nodeId} (${source}) ${formatSeconds(now - startedAt)}`);
+    console.log(`[Clarity] Node ${node.id} (${source}) ${formatSeconds(ms)}`);
   }
 
   /** Last sentence of the previous node in document order, if it is done. */
@@ -263,15 +333,22 @@ export async function runSimplification(
     return previous ? lastSentence(previous) : '';
   }
 
-  /** Streams one model reply, forwarding chunks to the UI; null if aborted. */
-  async function streamText(nodeId: string, userPrompt: string): Promise<string | null> {
-    const stream = await llm.simplifyChunk(userPrompt);
+  /**
+   * One model reply; `stream` forwards chunks to the UI. Null if aborted.
+   * Counts the call against MAX_MODEL_CALLS_PER_NODE.
+   */
+  async function completeText(nodeId: string, userPrompt: string, stream: boolean): Promise<string | null> {
+    if (nodeCalls >= MAX_MODEL_CALLS_PER_NODE) {
+      throw new Error(`[Clarity] Model call limit (${MAX_MODEL_CALLS_PER_NODE}) reached for node ${nodeId}`);
+    }
+    nodeCalls++;
+    const chunks = await llm.simplifyChunk(userPrompt);
     if (signal.aborted) return null;
     let fullText = '';
-    for await (const chunk of stream) {
+    for await (const chunk of chunks) {
       if (signal.aborted) return null;
       fullText += chunk;
-      callbacks.onNodeChunk(nodeId, fullText);
+      if (stream) callbacks.onNodeChunk(nodeId, fullText);
     }
     if (signal.aborted) return null;
     return stripThinkingArtifacts(fullText);
@@ -301,48 +378,97 @@ export async function runSimplification(
   }
 
   /**
-   * Generates one node with the model: first attempt, stage 6C check, one
-   * retry on failure. Null if aborted; throws if the first request fails.
+   * Generates one node with the model: 'standard' first, then either the
+   * stage 6C retry or (extra quality) the other variants — see file header.
+   * Null if aborted; throws if the first request fails.
    */
-  async function generate(segmentedNode: ContentNode): Promise<MeaningCandidate | null> {
+  async function generate(segmentedNode: ContentNode): Promise<Generated | null> {
     // NER only for nodes that reach the model (the segmenter doesn't run it).
     // Loaded on first use: compromise-dates would push this chunk past 500 kB.
     const entities = segmentedNode.entities
       ?? (await import('../segmentation/ner')).detectEntities(segmentedNode.text);
     const node: ContentNode = { ...segmentedNode, entities };
+    const checked = shouldCheckNode(node);
+    const difficultWords = doc.report ? findDifficultWords(node.text, entities, wordSet) : [];
 
-    // Use the report for grade context; fall back to empty report-like object if missing
-    const promptObj = doc.report
-      ? buildPrompt(
-          node, spec, doc.report, contextFor(node),
-          findDifficultWords(node.text, entities, wordSet),
-        )
-      : { system: firstPromptObj?.system ?? '', user: node.text };
+    /** User prompt for a variant; falls back to the bare text without a report. */
+    const promptFor = (variant: PromptVariantId): string =>
+      doc.report
+        ? buildPrompt(node, spec, doc.report, contextFor(node), difficultWords, variant).user
+        : node.text;
 
-    const firstText = await streamText(node.id, promptObj.user);
-    if (firstText === null) return null;
-
-    // Stage 6C: meaning + entity check, one retry on failure
-    if (!shouldCheckNode(node)) return { text: firstText, missingEntities: [] };
-
-    const first = await assess(node, firstText);
-    if (signal.aborted) return null;
-    if (passesChecks(first)) return first;
-
-    try {
-      const retryText = await streamText(
-        node.id, `${MEANING_RETRY_INSTRUCTION}\n\n${promptObj.user}`,
+    /** Generates, checks (6C) and scores one candidate. Null if aborted. */
+    async function attempt(
+      variant: PromptVariantId,
+      retryInstruction: boolean,
+      stream: boolean,
+    ): Promise<Attempt | null> {
+      const started = performance.now();
+      const prompt = promptFor(variant);
+      const raw = await completeText(
+        node.id, retryInstruction ? `${MEANING_RETRY_INSTRUCTION}\n\n${prompt}` : prompt, stream,
       );
-      if (retryText === null) return null;
-      const retry = await assess(node, retryText);
+      if (raw === null) return null;
+      const text = variant === 'example-guided' ? stripExampleLabel(raw) : raw;
+      const meaning: MeaningCandidate = checked
+        ? await assess(node, text)
+        : { text, missingEntities: [] };
       if (signal.aborted) return null;
-      return pickBetterVersion(first, retry);
-    } catch (err) {
-      if (signal.aborted) return null;
-      // The first version is still usable; don't fail the node over the retry
-      console.warn('[Clarity] Meaning retry failed for node', node.id, err);
-      return first;
+      const scores = scoreCandidate({
+        original: node.text,
+        simplified: text,
+        spec,
+        wordSet,
+        similarity: meaning.similarity,
+        entityCount: checked ? entities.length : 0,
+        missingEntityCount: meaning.missingEntities.length,
+      });
+      return { ...meaning, variant, scores, retryInstruction, ms: performance.now() - started };
     }
+
+    const first = await attempt('standard', false, true);
+    if (first === null) return null;
+    const tried: Attempt[] = [first];
+    let chosen = first;
+
+    if (checked) {
+      const firstPasses = passesChecks(first);
+      if (extraQuality && (!firstPasses || first.scores.total < QUALITY_THRESHOLD)) {
+        for (const variant of EXTRA_VARIANTS.slice(0, MAX_MODEL_CALLS_PER_NODE - 1)) {
+          try {
+            const next = await attempt(variant, !firstPasses, false);
+            if (next === null) return null;
+            tried.push(next);
+          } catch (err) {
+            if (signal.aborted) return null;
+            // The other candidates are still usable; don't fail the node
+            console.warn(`[Clarity] Variant ${variant} failed for node`, node.id, err);
+          }
+        }
+        chosen = pickBestCandidate(tried);
+      } else if (!extraQuality && !firstPasses) {
+        try {
+          const retry = await attempt('standard', true, true);
+          if (retry === null) return null;
+          tried.push(retry);
+          chosen = pickBetterVersion(first, retry) === retry ? retry : first;
+        } catch (err) {
+          if (signal.aborted) return null;
+          // The first version is still usable; don't fail the node over the retry
+          console.warn('[Clarity] Meaning retry failed for node', node.id, err);
+        }
+      }
+    }
+
+    const candidates: CandidateLog[] = tried.map(t => ({
+      variant: t.variant,
+      retryInstruction: t.retryInstruction,
+      chosen: t === chosen,
+      ms: Math.round(t.ms),
+      scores: roundScores(t.scores),
+      missingEntities: t.missingEntities,
+    }));
+    return { chosen, candidates };
   }
 
   /** Cache lookup that never fails the node: a storage error counts as a miss. */
@@ -360,7 +486,8 @@ export async function runSimplification(
     if (signal.aborted) break;
     if (!runIds.has(node.id)) continue;  // already done ('remaining' mode)
 
-    const startedAt = performance.now();
+    const nodeStartedAt = performance.now();
+    nodeCalls = 0;
     const base = {
       nodeId: node.id,
       originalText: node.text,
@@ -376,24 +503,27 @@ export async function runSimplification(
         plainById.set(node.id, toPlainText(node.text));
         await persist({ ...base, simplifiedText: node.text, status: 'done', skipped: true });
         callbacks.onProgress(doneCount, toRun.length);
-        recordTiming(node.id, 'skipped', startedAt);
+        finishNode(node, 'skipped', nodeStartedAt);
         continue;
       }
 
       // b. Cache, then c. the model
-      const key = await cacheKey(node.text, spec, model);
+      const key = await cacheKey(node.text, spec, model, extraQuality ? 'extra' : 'standard');
       const cached = await lookupCache(key);
       let chosen: MeaningCandidate;
       let source: NodeSource;
+      let details: Parameters<typeof finishNode>[3];
       if (cached) {
         chosen = { text: cached.text, similarity: cached.similarity, missingEntities: [] };
         source = 'cache';
+        details = { similarity: cached.similarity };
       } else {
         callbacks.onNodeStart(node.id);
         const generated = await generate(node);
         if (generated === null) break;
-        chosen = generated;
+        chosen = generated.chosen;
         source = 'model';
+        details = { variantUsed: generated.chosen.variant, candidates: generated.candidates };
         // Unchecked versions pass too (no similarity, no missing entities)
         if (passesChecks(chosen)) {
           await putCached(key, {
@@ -419,7 +549,7 @@ export async function runSimplification(
       });
 
       callbacks.onProgress(doneCount, toRun.length);
-      recordTiming(node.id, source, startedAt);
+      finishNode(node, source, nodeStartedAt, details);
 
     } catch (err) {
       if (signal.aborted) break;
@@ -429,7 +559,7 @@ export async function runSimplification(
 
       // Persist now: a failure after the last success would otherwise be lost
       await persist({ ...base, simplifiedText: '', status: 'error' });
-      recordTiming(node.id, 'error', startedAt);
+      finishNode(node, 'error', nodeStartedAt);
     }
   }
 
@@ -439,10 +569,42 @@ export async function runSimplification(
   const firstResult = firstResultMs === null ? 'n/a' : formatSeconds(firstResultMs);
   console.log(
     `[Clarity] Run${signal.aborted ? ' (cancelled)' : ''}: ${summary.line}; ` +
-    `first result after ${firstResult}; model ${model}`,
+    `first result after ${firstResult}; model ${model}` +
+    `${extraQuality ? '; extra quality' : ''}`,
   );
 
-  if (signal.aborted) { callbacks.onComplete(); return; }
+  const runLog: RunLog = {
+    id: crypto.randomUUID(),
+    startedAt,
+    finishedAt: Date.now(),
+    cancelled: signal.aborted,
+    mode,
+    model,
+    extraQuality,
+    targetGrade: spec.targetGrade,
+    depthTier: spec.depthTier,
+    qualityThreshold: QUALITY_THRESHOLD,
+    weights: { ...WEIGHTS },
+    summary: {
+      nodes: summary.nodes,
+      counts: summary.counts,
+      totalSeconds: round4(summary.totalSeconds),
+      secondsPerNode: summary.secondsPerNode === null ? null : round4(summary.secondsPerNode),
+      secondsPerModelNode: summary.secondsPerModelNode === null ? null : round4(summary.secondsPerModelNode),
+      firstResultSeconds: firstResultMs === null ? null : round4(firstResultMs / 1000),
+    },
+    nodes: nodeLogs,
+  };
+
+  /** Appends the run log last, after any other save, through the doc queue. */
+  const saveRunLog = () =>
+    addRunLog(doc.id, runLog).catch(err => console.warn('[Clarity] Run log save failed', err));
+
+  if (signal.aborted) {
+    await saveRunLog();
+    callbacks.onComplete();
+    return;
+  }
 
   // Show error banner for the first failure (if any)
   if (firstError) callbacks.onBannerError(firstError);
@@ -460,5 +622,6 @@ export async function runSimplification(
     await recordSession(spec.targetGrade);
   }
 
+  await saveRunLog();
   callbacks.onComplete();
 }

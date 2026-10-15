@@ -1,4 +1,5 @@
-import type { ContentNode, SimplificationSpec, ReadabilityReport } from '../../types';
+import { PROMPT_VARIANTS } from './variants';
+import type { ContentNode, PromptVariantId, SimplificationSpec, ReadabilityReport } from '../../types';
 
 // ─── Reader rules ─────────────────────────────────────────────────────────────
 
@@ -68,6 +69,8 @@ function gradeLevelDescription(spec: SimplificationSpec): string {
  *  - An optional lexical hint listing words the common-word list flags as
  *    hard (findDifficultWords). It is left out when the reader keeps terms or
  *    the tier is 'none', where it would contradict the system prompt.
+ *  - The prompt variant's block (lib/prompt-builder/variants.ts), just before
+ *    the text. 'standard', the default, adds nothing.
  */
 export function buildPrompt(
   node: ContentNode,
@@ -75,6 +78,7 @@ export function buildPrompt(
   report: ReadabilityReport,
   previousContext: string = '',
   difficultWords: string[] = [],
+  variant: PromptVariantId = 'standard',
 ): { system: string; user: string } {
 
   const extraRules = readerRules(spec)
@@ -137,6 +141,9 @@ ${extraRules}`;
       'These words may be hard for the reader. Replace them with simpler words ' +
       `or briefly explain them: ${difficultWords.join(', ')}\n\n`;
   }
+
+  // Stage 7 prompt variant ('standard' adds nothing)
+  user += PROMPT_VARIANTS[variant].instruction(spec);
 
   user += `TEXT TO REWRITE:\n${node.text}`;
 

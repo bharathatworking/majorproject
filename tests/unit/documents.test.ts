@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  getActiveId, getDocument, listDocuments, saveDocument, setActiveId, upsertDocument,
+  addRunLog, getActiveId, getDocument, listDocuments, saveDocument, setActiveId, upsertDocument,
 } from '../../src/lib/storage/documents';
+import { MAX_RUN_LOGS } from '../../src/lib/run/run-log';
+import type { RunLog } from '../../src/types';
 import { installChromeMock, type ChromeMock } from '../mocks/chrome';
 import { makeDocInput } from '../mocks/fixtures';
 
@@ -123,5 +125,42 @@ describe('upsertDocument cap', () => {
   it('lists documents newest first', async () => {
     const docs = await insertMany(3);
     expect((await listDocuments()).map(e => e.id)).toEqual([docs[2].id, docs[1].id, docs[0].id]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// addRunLog — run logs are owned by addRunLog, not saveDocument
+// ---------------------------------------------------------------------------
+describe('addRunLog', () => {
+  const runLog = (id: string) => ({ id }) as unknown as RunLog;
+
+  it('appends to the stored document, keeping the newest MAX_RUN_LOGS', async () => {
+    const doc = await upsertDocument(makeDocInput('h-log'));
+    for (let i = 0; i < MAX_RUN_LOGS + 2; i++) await addRunLog(doc.id, runLog(`r${i}`));
+
+    const ids = (await getDocument(doc.id))?.runLogs?.map(l => l.id);
+    expect(ids).toEqual(['r2', 'r3', 'r4', 'r5', 'r6']);
+  });
+
+  it('survives a saveDocument with an older copy of the document', async () => {
+    const stale = await upsertDocument(makeDocInput('h-stale'));
+    await addRunLog(stale.id, runLog('kept'));
+
+    await saveDocument({ ...stale, title: 'Renamed', runLogs: [runLog('stale')] });
+
+    const saved = await getDocument(stale.id);
+    expect(saved?.title).toBe('Renamed');
+    expect(saved?.runLogs?.map(l => l.id)).toEqual(['kept']);
+  });
+
+  it('does not let saveDocument add logs', async () => {
+    const doc = await upsertDocument(makeDocInput('h-none'));
+    await saveDocument({ ...doc, runLogs: [runLog('ignored')] });
+    expect((await getDocument(doc.id))?.runLogs).toBeUndefined();
+  });
+
+  it('leaves a deleted document deleted', async () => {
+    await addRunLog('missing-id', runLog('x'));
+    expect(await getDocument('missing-id')).toBeNull();
   });
 });

@@ -740,9 +740,11 @@ a:focus-visible,
 /* Run controls */
 .run-controls {
   display: flex;
+  flex-wrap: wrap;   /* room for the run report button on narrow windows */
   align-items: center;
   gap: 0.6rem;
   flex-shrink: 0;
+  max-width: 100%;
 }
 
 .run-progress {

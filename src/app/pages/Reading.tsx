@@ -2,6 +2,8 @@ import React, { useMemo, useState, useCallback } from 'react';
 import { segmentHtml, simplifiableNodes } from '../../lib/segmentation/segmenter';
 import { parseSimplifiedText } from '../../lib/render/format-output';
 import { getHostname } from '../../lib/utils/url';
+// run-log.ts has type-only imports; never import lib/quality/score.ts here
+import { buildRunReport, runReportFileName } from '../../lib/run/run-log';
 // similarity.ts, not semantic.ts: the latter pulls compromise into this chunk
 import { SIMILARITY_THRESHOLD } from '../../lib/quality/similarity';
 import type { Block, ClarityDocument, ContentNode, StoredResult, DisplayPrefs, RunMode } from '../../types';
@@ -74,6 +76,18 @@ function firstVisibleIndex(nodes: ContentNode[]): number {
     if (rect.bottom > 0 && rect.top < viewportHeight) return i;
   }
   return 0;
+}
+
+/** Saves the document's run logs as a JSON file (stage 7 A/B evidence). */
+function downloadRunReport(doc: ClarityDocument) {
+  const json = JSON.stringify(buildRunReport(doc), null, 2);
+  const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = runReportFileName(doc);
+  link.click();
+  // Revoke after the click has been handled, or the download can be cancelled
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 // ─── Reading page ─────────────────────────────────────────────────────────────
@@ -244,6 +258,15 @@ export function Reading({
                   title="Simplify every paragraph again, replacing current results"
                 >
                   Re-simplify all
+                </button>
+              )}
+              {(activeDoc.runLogs?.length ?? 0) > 0 && (
+                <button
+                  className="btn-secondary"
+                  onClick={() => downloadRunReport(activeDoc)}
+                  title="Per paragraph: prompt variant, quality scores, retries and time for the last runs"
+                >
+                  Download run report (JSON)
                 </button>
               )}
             </>

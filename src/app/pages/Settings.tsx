@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   getUserProfile, saveUserProfile, DEFAULT_PROFILE, getLlmModel, saveLlmModel,
+  getExtraQuality, saveExtraQuality,
 } from '../../lib/storage/settings';
 import { clearAllDocuments } from '../../lib/storage/documents';
 import { clearCache } from '../../lib/storage/cache';
@@ -27,6 +28,7 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
   const [progressStatus, setProgressStatus] = useState<SaveStatus>('idle');
   const [llmModel, setLlmModel]             = useState(DEFAULT_LLM_MODEL);
   const [installed, setInstalled]           = useState<ModelList>('loading');
+  const [extraQuality, setExtraQuality]     = useState(false);
 
   // ── Load on mount ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -35,6 +37,7 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
       if (typeof data.customWords === 'string') setCustomWords(data.customWords);
     });
     getLlmModel().then(setLlmModel);
+    getExtraQuality().then(setExtraQuality);
     new OllamaProvider().listModels().then(setInstalled).catch(err => {
       console.log('[Clarity] Could not list Ollama models:', err);
       setInstalled('error');
@@ -45,6 +48,12 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
   const handleModelChange = (model: string) => {
     setLlmModel(model);
     saveLlmModel(model);   // fire-and-forget, like the profile fields
+  };
+
+  const toggleExtraQuality = () => {
+    const next = !extraQuality;
+    setExtraQuality(next);
+    saveExtraQuality(next);   // fire-and-forget, as above
   };
 
   // The saved model stays selectable even when Ollama doesn't list it
@@ -246,6 +255,25 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
             This model isn't installed. Run <code>ollama pull {llmModel}</code> or pick another.
           </p>
         )}
+
+        <div className="form-group form-group-inline">
+          <label htmlFor="extra-quality-toggle">
+            Extra quality (slower)
+            <span className="form-hint">
+              {' '}— if a paragraph scores low, tries two other prompt styles and keeps the best
+              (up to 3× slower for those paragraphs)
+            </span>
+          </label>
+          <button
+            id="extra-quality-toggle"
+            className={`toggle-switch ${extraQuality ? 'on' : ''}`}
+            onClick={toggleExtraQuality}
+            role="switch"
+            aria-checked={extraQuality}
+          >
+            <span className="toggle-thumb" />
+          </button>
+        </div>
       </section>
 
       {/* ── 3. Display Preferences ─────────────────────────────────────────── */}

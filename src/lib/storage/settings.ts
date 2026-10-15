@@ -1,6 +1,7 @@
 /**
- * User settings in chrome.storage.sync: the reading profile (`userProfile`)
- * and the chat model (`llmModel`). Both fall back to defaults when unset.
+ * User settings in chrome.storage.sync: the reading profile (`userProfile`),
+ * the chat model (`llmModel`) and the "Extra quality" toggle (`extraQuality`).
+ * All fall back to defaults when unset.
  */
 
 import { DEFAULT_LLM_MODEL } from '../llm/ollama-provider';
@@ -35,4 +36,19 @@ export async function getLlmModel(): Promise<string> {
 
 export async function saveLlmModel(model: string): Promise<void> {
   await chrome.storage.sync.set({ llmModel: model });
+}
+
+// ─── Extra quality ────────────────────────────────────────────────────────────
+
+/**
+ * "Extra quality (slower)": low-scoring nodes also try the other prompt
+ * variants (see lib/run/simplify.ts). Off unless saved as true.
+ */
+export async function getExtraQuality(): Promise<boolean> {
+  const { extraQuality } = await chrome.storage.sync.get<{ extraQuality?: unknown }>('extraQuality');
+  return extraQuality === true;
+}
+
+export async function saveExtraQuality(on: boolean): Promise<void> {
+  await chrome.storage.sync.set({ extraQuality: on });
 }

@@ -8,7 +8,8 @@
  * Design decisions:
  *  - The key is sha256(node text + spec JSON + model name), so a profile or
  *    model change misses naturally. The spec JSON has sorted keys, so property
- *    order can't change the key. The rolling context is not part of the key:
+ *    order can't change the key. "Extra quality" runs add a quality tag, so
+ *    A/B runs never share outputs. The rolling context is not part of the key:
  *    it only nudges wording, and including it would make a node's key depend
  *    on its neighbours.
  *  - LRU with CACHE_MAX_ENTRIES entries. A hit moves the key to the end of the
@@ -38,9 +39,19 @@ function stableJson(spec: SimplificationSpec): string {
   return JSON.stringify(spec, Object.keys(spec).sort());
 }
 
-/** Cache key for one node under one spec and model (hex SHA-256). */
-export function cacheKey(nodeText: string, spec: SimplificationSpec, model: string): Promise<string> {
-  return sha256(`${nodeText}\u0000${stableJson(spec)}\u0000${model}`);
+/**
+ * Cache key for one node under one spec, model and quality mode (hex
+ * SHA-256). 'standard' adds nothing, so keys from before the quality mode
+ * existed stay valid.
+ */
+export function cacheKey(
+  nodeText: string,
+  spec: SimplificationSpec,
+  model: string,
+  quality: 'standard' | 'extra' = 'standard',
+): Promise<string> {
+  const suffix = quality === 'extra' ? '\u0000extra' : '';
+  return sha256(`${nodeText}\u0000${stableJson(spec)}\u0000${model}${suffix}`);
 }
 
 // ─── Read / write ─────────────────────────────────────────────────────────────

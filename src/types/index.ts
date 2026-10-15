@@ -124,6 +124,81 @@ export interface MeaningCandidate {
   missingEntities: string[];
 }
 
+// ─── Stage 7: prompt variants, candidate scores and run logs ─────────────────
+
+/** Prompt variants of lib/prompt-builder/variants.ts; add a member there too. */
+export type PromptVariantId = 'standard' | 'stepwise' | 'example-guided';
+
+/** Quality score of one simplified version (see lib/quality/score.ts). */
+export interface CandidateScores {
+  /** Output grade minus the target grade; positive means still too hard. */
+  gradeGap: number;
+  /** Embedding cosine vs the original; null when not measured. */
+  similarity: number | null;
+  /** Share of the original's entities still present (1 when it has none). */
+  entityRecall: number;
+  /** Output words divided by original words. */
+  lengthRatio: number;
+  /** Weighted sum of meaning, readability and length, 0–1. */
+  total: number;
+}
+
+/** One model output for a node, as recorded in the run log. */
+export interface CandidateLog {
+  variant: PromptVariantId;
+  /** The prompt carried the meaning-retry instruction. */
+  retryInstruction: boolean;
+  /** This version was kept. */
+  chosen: boolean;
+  ms: number;
+  scores: CandidateScores;
+  missingEntities: string[];
+}
+
+/** How a node got its result in a run. */
+export type NodeSource = 'model' | 'cache' | 'skipped' | 'error';
+
+/** Per-node entry of a run log. */
+export interface NodeRunLog {
+  nodeId: string;
+  type: StoredResult['type'];
+  source: NodeSource;
+  /** Variant of the kept version; null when the model did not produce it. */
+  variantUsed: PromptVariantId | null;
+  modelCalls: number;
+  /** Model calls after the first one. */
+  retries: number;
+  ms: number;
+  candidates: CandidateLog[];
+  /** Stored similarity of a cache hit. */
+  similarity?: number;
+}
+
+/** Everything one simplification run did, for the downloadable run report. */
+export interface RunLog {
+  id: string;
+  startedAt: number;
+  finishedAt: number;
+  cancelled: boolean;
+  mode: RunMode;
+  model: string;
+  extraQuality: boolean;
+  targetGrade: number;
+  depthTier: SimplificationSpec['depthTier'];
+  qualityThreshold: number;
+  weights: { meaning: number; readability: number; length: number };
+  summary: {
+    nodes: number;
+    counts: Record<NodeSource, number>;
+    totalSeconds: number;
+    secondsPerNode: number | null;
+    secondsPerModelNode: number | null;
+    /** Seconds from run start to the first finished node; null if none. */
+    firstResultSeconds: number | null;
+  };
+  nodes: NodeRunLog[];
+}
+
 /** One rendered block of simplified model output (see lib/render/format-output.ts). */
 export type Block =
   | { kind: 'paragraph'; text: string }
@@ -151,6 +226,8 @@ export interface ClarityDocument {
   results: StoredResult[];              // empty until first Simplify run
   simplifiedReport: ReadabilityReport | null;
   lastRunAt?: number;
+  /** The last MAX_RUN_LOGS runs, oldest first (see lib/run/run-log.ts). */
+  runLogs?: RunLog[];
 }
 
 /** Lightweight entry kept in docs:index for the sidebar list. */

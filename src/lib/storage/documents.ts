@@ -8,10 +8,14 @@
  *
  * All mutating operations are serialized through a promise queue to prevent
  * read-modify-write races when multiple events fire in quick succession.
+ *
+ * A document's `runLogs` (stage 7 run reports) are written only by addRunLog;
+ * saveDocument keeps whatever is stored.
  */
 
 import { createWriteQueue } from '../utils/write-queue';
-import type { ClarityDocument, DocumentIndexEntry } from '../../types';
+import { appendRunLog } from '../run/run-log';
+import type { ClarityDocument, DocumentIndexEntry, RunLog } from '../../types';
 
 const MAX_DOCS = 10;
 const DOC_PREFIX = 'doc:';
@@ -155,12 +159,23 @@ export function upsertDocument(
 /**
  * Persist a full document after the app updates it (e.g. adds a computed report
  * or saves per-node simplification results).
+ *
+ * `runLogs` is owned by addRunLog: the stored logs are kept and the caller's
+ * copy is ignored, so a run holding an older copy of the document can't drop
+ * a log another run added meanwhile.
  */
 export function saveDocument(doc: ClarityDocument): Promise<void> {
   return enqueue(async () => {
     const now = Date.now();
-    const updated: ClarityDocument = { ...doc, updatedAt: now };
-    await chrome.storage.local.set({ [`${DOC_PREFIX}${doc.id}`]: updated });
+    const key = `${DOC_PREFIX}${doc.id}`;
+    const { [key]: stored } = await chrome.storage.local.get<DocEntry>(key);
+    const { runLogs: _callerLogs, ...rest } = doc;
+    const updated: ClarityDocument = {
+      ...rest,
+      updatedAt: now,
+      ...(stored?.runLogs && { runLogs: stored.runLogs }),
+    };
+    await chrome.storage.local.set({ [key]: updated });
 
     const { [INDEX_KEY]: rawIndex } = await chrome.storage.local.get<DocsLocalArea>(INDEX_KEY);
     let index: InternalIndexEntry[] = rawIndex ?? [];
@@ -176,6 +191,21 @@ export function saveDocument(doc: ClarityDocument): Promise<void> {
     );
     index.sort((a, b) => b.updatedAt - a.updatedAt);
     await chrome.storage.local.set({ [INDEX_KEY]: index });
+  });
+}
+
+/**
+ * Appends a run log to the stored document (keeping the newest MAX_RUN_LOGS).
+ * Reads the latest stored copy inside the queue, so it is safe after a
+ * cancelled run whose own copy of the document is out of date. A deleted
+ * document is left deleted.
+ */
+export function addRunLog(id: string, log: RunLog): Promise<void> {
+  return enqueue(async () => {
+    const key = `${DOC_PREFIX}${id}`;
+    const { [key]: stored } = await chrome.storage.local.get<DocEntry>(key);
+    if (!stored) return;
+    await chrome.storage.local.set({ [key]: { ...stored, runLogs: appendRunLog(stored.runLogs, log) } });
   });
 }
 
