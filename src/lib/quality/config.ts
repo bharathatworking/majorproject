@@ -35,6 +35,16 @@ export const ENTAILMENT_MIN = 0.5;
 /** No simplified sentence (exempt or not) may exceed this contradiction probability. */
 export const CONTRADICTION_MAX = 0.2;
 
+/**
+ * Paragraph rule of the NLI check (lib/quality/verdict.ts): 'A' every
+ * non-exempt sentence entailed; 'B' tolerates one neutral sentence when the
+ * output has NLI_NEUTRAL_MIN_SENTENCES or more. Contradictions never pass.
+ */
+export const NLI_PARAGRAPH_RULE: 'A' | 'B' = 'A';
+
+/** Rule B tolerates one neutral sentence only in outputs this long or longer. */
+export const NLI_NEUTRAL_MIN_SENTENCES = 6;
+
 /** Nodes with fewer words than this skip all meaning checks. */
 export const MIN_WORDS_FOR_CHECK = 8;
 

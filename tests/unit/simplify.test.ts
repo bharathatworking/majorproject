@@ -74,7 +74,7 @@ const { getDocument, upsertDocument, saveDocument } = await import('../../src/li
 const { OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
 const { MEANING_RETRY_INSTRUCTION, driftReason, unsupportedReason } = await import('../../src/lib/quality/meaning');
 const {
-  ENTAILMENT_MIN, MAX_MODEL_CALLS_PER_NODE, NLI_CONTRADICTION_AGG, QUALITY_THRESHOLD,
+  ENTAILMENT_MIN, MAX_MODEL_CALLS_PER_NODE, NLI_CONTRADICTION_AGG, NLI_PARAGRAPH_RULE, QUALITY_THRESHOLD,
 } = await import('../../src/lib/quality/config');
 const nli = await import('../../src/lib/quality/nli');
 const checkEntailmentMock = vi.mocked(nli.checkEntailment);
@@ -582,6 +582,30 @@ describe('runSimplification thesis meaning standard', () => {
     expect(log?.summary.meaning.coverage).toBe(1);
     expect(log?.summary.meaning.thesisGrade).toBe(true);
     expect(log?.summary.meaning.avgNliMs).toBe(100);
+    expect(log?.summary.meaning.failureBreakdown).toEqual({
+      similarity: 0, entities: 0, unsupported: 1, contradiction: 0, failedParagraphs: 1,
+    });
+    expect(log?.nodes[2].meaning?.failures).toEqual(['unsupported']);
+    expect(vi.mocked(console.log).mock.calls.map(c => String(c[0])))
+      .toContainEqual('[Clarity] Meaning failures: similarity 0, entities 0, unsupported 1, contradiction 0 (of 1 failed)');
+  });
+
+  it('logs each candidate with its text, failure kinds and NLI time split, and each node with its original', async () => {
+    const bad = 'Curie won a prize.';
+    nodes = [CURIE];
+    replies = { n0: [bad, GOOD_CURIE] };
+    scores = { [bad]: 0.8 };
+    nliResults = { [bad]: makeEntailment({ minEntailment: 0.1, unsupportedSentences: [bad], rankMs: 30, scoreMs: 70 }) };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const node = (await lastLog(doc.id))?.nodes[0];
+    expect(node?.originalText).toBe(CURIE.text);
+    expect(node?.candidates[0]).toMatchObject({
+      text: bad, failures: ['similarity', 'entities', 'unsupported'], nliRankMs: 30, nliScoreMs: 70,
+    });
+    expect(node?.candidates[1]).toMatchObject({ text: GOOD_CURIE, failures: [] });
   });
 
   it('records glossary exemptions in the run log', async () => {
@@ -1111,6 +1135,7 @@ describe('runSimplification run log', () => {
       similarity: 0.87, entailmentMin: ENTAILMENT_MIN, contradictionMax: 0.2, glossaryExemptionMaxRate: 0.3,
       nliModel: 'Xenova/nli-deberta-v3-xsmall',
       premiseStrategy: 'summac-sentences+pairs/top3', contradictionAggregation: NLI_CONTRADICTION_AGG,
+      paragraphRule: NLI_PARAGRAPH_RULE,
     });
   });
 

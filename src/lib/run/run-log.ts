@@ -24,8 +24,12 @@ export const MAX_RUN_LOGS = 5;
  * Format tag of the downloaded JSON, bumped on breaking changes. 2: the
  * thesis meaning standard (per-node meaningStatus and meaning, candidate NLI
  * fields, summary.meaning, meaningThresholds; node.similarity removed).
+ * 3: failure kinds (`failures` per candidate and kept version,
+ * summary.meaning.failureBreakdown) and replay data (candidate `text`, node
+ * `originalText`, NLI rank/score ms), so a report can be re-judged offline
+ * (scripts/meaning-breakdown.mjs).
  */
-export const RUN_REPORT_FORMAT = 'clarity-run-report/2';
+export const RUN_REPORT_FORMAT = 'clarity-run-report/3';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

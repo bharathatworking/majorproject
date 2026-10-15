@@ -17,9 +17,11 @@
  *    sentences and 2-sentence windows, pruned to the NLI_TOP_PREMISES most
  *    similar (all-minilm cosine via the injected `embed`, word overlap when
  *    it is missing). Entailment is the max over those premises,
- *    contradiction per NLI_CONTRADICTION_AGG. A sentence fails when
- *    entailment < ENTAILMENT_MIN (unsupported) or contradiction >
- *    CONTRADICTION_MAX (contradicted).
+ *    contradiction per NLI_CONTRADICTION_AGG. A sentence is unsupported when
+ *    entailment < ENTAILMENT_MIN and contradicted when contradiction >
+ *    CONTRADICTION_MAX; whether the paragraph passes is the paragraph rule
+ *    (NLI_PARAGRAPH_RULE, lib/quality/verdict.ts nliVerdict). Every
+ *    sentence's scores are returned, so a run report can be re-judged.
  *  - Glossary sentences that define one of the node's hinted words skip the
  *    entailment requirement but not the contradiction one, and parenthetical
  *    definitions are removed first (lib/quality/glossary.ts).
@@ -46,15 +48,16 @@ import { toPlainText } from '../render/format-output';
 import { sha256 } from '../utils/hash';
 import { getNliBench, getNliDevice, saveNliBench } from '../storage/nli-bench';
 import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_BATCH_SIZE, NLI_CACHE_MAX, NLI_CONTRADICTION_AGG,
+  NLI_BATCH_SIZE, NLI_CACHE_MAX, NLI_CONTRADICTION_AGG,
   NLI_LOAD_TIMEOUT_MS, NLI_MODEL_ID, NLI_SCORE_TIMEOUT_MS, NLI_TOP_PREMISES,
 } from './config';
 import { selectExemptions, stripParentheticalDefinitions } from './glossary';
 import { isBenchStale, predictParagraphMs, type BenchContext } from './mode';
 import { aggregate, buildPremises, lexicalRank, rankPremises } from './premises';
+import { nliVerdict } from './verdict';
 import type { EmbedFn } from './semantic';
 import type {
-  EntailmentCheck, NliBackendName, NliBenchRecord, NliDevice, PremiseRanking,
+  EntailmentCheck, NliBackendName, NliBenchRecord, NliDevice, PremiseRanking, SentenceScore,
 } from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -499,6 +502,7 @@ export async function checkEntailment(
 
   if (sentences.length === 0) {
     return {
+      passed: false, sentenceScores: [], toleratedSentences: [],
       minEntailment: 0, maxContradiction: 0, unsupportedSentences: [], contradictedSentences: [],
       exemptedSentences: [], exemptionRate: 0, sentences: 0, cachedPairs: 0, pairs: 0, truncatedPairs: 0,
       ranking: 'all', rankMs: 0, scoreMs: 0, ms: performance.now() - started,
@@ -516,36 +520,31 @@ export async function checkEntailment(
   const scoreMs = performance.now() - ranked;
   const exempt = new Set(selectExemptions(sentences, hintedWords));
 
-  let minEntailment = 1;
-  let maxContradiction = 0;
-  const unsupportedSentences: string[] = [];
-  const contradictedSentences: string[] = [];
-  const exemptedSentences: string[] = [];
-
   let offset = 0;
-  sentences.forEach((sentence, i) => {
+  const sentenceScores: SentenceScore[] = sentences.map((sentence, i) => {
     const own = probs.slice(offset, offset + top[i].length);
     offset += top[i].length;
     const p = aggregate(own, NLI_CONTRADICTION_AGG);
-    maxContradiction = Math.max(maxContradiction, p.contradiction);
-    if (p.contradiction > CONTRADICTION_MAX) contradictedSentences.push(sentence);
     if (exempt.has(i)) {
-      exemptedSentences.push(sentence);
       console.log(
         `[Clarity] NLI ${label} glossary exemption ` +
         `(entailment ${p.entailment.toFixed(2)}, contradiction ${p.contradiction.toFixed(2)}): "${sentence}"`,
       );
-      return;
     }
-    minEntailment = Math.min(minEntailment, p.entailment);
-    if (p.entailment < ENTAILMENT_MIN) unsupportedSentences.push(sentence);
+    return { sentence, entailment: p.entailment, contradiction: p.contradiction, exempt: exempt.has(i) };
   });
+  const verdict = nliVerdict(sentenceScores);
+  const scored = sentenceScores.filter(s => !s.exempt);
+  const exemptedSentences = sentenceScores.filter(s => s.exempt).map(s => s.sentence);
 
   return {
-    minEntailment,
-    maxContradiction,
-    unsupportedSentences,
-    contradictedSentences,
+    passed: verdict.passed,
+    sentenceScores,
+    toleratedSentences: verdict.tolerated,
+    minEntailment: scored.length > 0 ? Math.min(...scored.map(s => s.entailment)) : 1,
+    maxContradiction: Math.max(0, ...sentenceScores.map(s => s.contradiction)),
+    unsupportedSentences: verdict.unsupported,
+    contradictedSentences: verdict.contradicted,
     exemptedSentences,
     exemptionRate: exemptedSentences.length / sentences.length,
     sentences: sentences.length,

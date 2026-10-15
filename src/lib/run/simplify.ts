@@ -46,7 +46,9 @@
  *     that node.
  *   - A failed retry keeps the first version.
  * The run log counts every node as passed / failed / not fully checked /
- * excluded; when coverage (fully checked / eligible) is below
+ * excluded, and the failed ones by failure kind (similarity, entities,
+ * unsupported, contradiction; one node can fail several), logged as one
+ * "[Clarity] Meaning failures" line; when coverage (fully checked / eligible) is below
  * THESIS_COVERAGE_MIN it warns that the pass rate is not thesis-grade.
  *
  * Prompt optimization (stage 7, lib/quality/score.ts and
@@ -110,9 +112,10 @@ import {
   chooseQualityMode, evidenceOf, hasWebGpuAdapter, isBenchStale, type BenchContext, type QualityDecision,
 } from '../quality/mode';
 import { PREMISE_STRATEGY } from '../quality/premises';
+import { failureBreakdown, failuresFromReasons, formatFailureBreakdown } from '../quality/verdict';
 import {
   CONTRADICTION_MAX, ENTAILMENT_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
-  NLI_CONTRADICTION_AGG, NLI_MODEL_ID, NLI_SLOW_MS, QUALITY_THRESHOLD, SIMILARITY_THRESHOLD,
+  NLI_CONTRADICTION_AGG, NLI_MODEL_ID, NLI_PARAGRAPH_RULE, NLI_SLOW_MS, QUALITY_THRESHOLD, SIMILARITY_THRESHOLD,
   THESIS_COVERAGE_MIN, WEIGHTS,
 } from '../quality/config';
 import { isFullyChecked, meaningStatusOf, summarizeMeaning } from '../quality/similarity';
@@ -163,6 +166,8 @@ const round4 = (x: number) => Math.round(x * 10_000) / 10_000;
 
 const round4OrNull = (x: number | null) => (x === null ? null : round4(x));
 
+const roundMs = (x: number | null) => (x === null ? null : Math.round(x));
+
 function roundScores(s: CandidateScores): CandidateScores {
   return {
     gradeGap: round4(s.gradeGap),
@@ -198,7 +203,7 @@ function meaningLog(a: MeaningAssessment, lite: boolean): NodeMeaningLog {
     ...roundMeaning(storedMeaningOf(a, lite)),
     exemptedSentences: a.exemptedSentences,
     exemptionRate: round4OrNull(a.exemptionRate),
-    nliMs: a.nliMs === null ? null : Math.round(a.nliMs),
+    nliMs: roundMs(a.nliMs),
   };
 }
 
@@ -409,6 +414,7 @@ export async function runSimplification(
     nodeLogs.push({
       nodeId: node.id,
       type: STORED_TYPE[node.type] ?? 'paragraph',
+      originalText: node.text,
       source,
       variantUsed: details.variantUsed ?? null,
       modelCalls: nodeCalls,
@@ -691,13 +697,17 @@ export async function runSimplification(
       retryInstruction: t.retryInstruction,
       chosen: t === chosen,
       ms: Math.round(t.ms),
+      text: t.text,
       scores: roundScores(t.scores),
       missingEntities: t.meaning?.missingEntities ?? [],
       reasons: t.meaning?.reasons ?? [],
+      failures: t.meaning?.failures ?? [],
       nliChecked: t.meaning?.nliChecked ?? false,
       exemptedSentences: t.meaning?.exemptedSentences ?? [],
       exemptionRate: round4OrNull(t.meaning?.exemptionRate ?? null),
-      nliMs: t.meaning?.nliMs == null ? null : Math.round(t.meaning.nliMs),
+      nliMs: roundMs(t.meaning?.nliMs ?? null),
+      nliRankMs: roundMs(t.meaning?.nliRankMs ?? null),
+      nliScoreMs: roundMs(t.meaning?.nliScoreMs ?? null),
     }));
     return { chosen, candidates };
   }
@@ -826,6 +836,11 @@ export async function runSimplification(
     exemptionRate: keptNliSentences > 0 ? keptExempted / keptNliSentences : null,
     nliPairs,
     truncatedPairs,
+    failureBreakdown: failureBreakdown(
+      nodeLogs
+        .filter(n => n.meaningStatus === 'failed')
+        .map(n => n.meaning?.failures ?? failuresFromReasons(n.meaning?.reasons ?? [])),
+    ),
   };
   const pct = (x: number | null) => (x === null ? 'n/a' : `${Math.round(x * 100)}%`);
   console.log(
@@ -838,6 +853,9 @@ export async function runSimplification(
     (bench ? ` (backend ${bench.backend}${bench.adapterVendor ? ` ${bench.adapterVendor}` : ''})` : '') +
     `, truncated pairs ${truncatedPairs}/${nliPairs}`,
   );
+  if (meaning.failureBreakdown.failedParagraphs > 0) {
+    console.log(`[Clarity] Meaning failures: ${formatFailureBreakdown(meaning.failureBreakdown)}`);
+  }
   if (meaning.coverage !== null && !meaning.thesisGrade) {
     console.warn(
       `[Clarity] Meaning coverage ${pct(meaning.coverage)} is below ${pct(THESIS_COVERAGE_MIN)}: ` +
@@ -880,6 +898,7 @@ export async function runSimplification(
       nliModel: NLI_MODEL_ID,
       premiseStrategy: PREMISE_STRATEGY,
       contradictionAggregation: NLI_CONTRADICTION_AGG,
+      paragraphRule: NLI_PARAGRAPH_RULE,
     },
     summary: {
       nodes: summary.nodes,

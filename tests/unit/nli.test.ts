@@ -219,6 +219,12 @@ describe('checkEntailment', () => {
     expect(r.contradictedSentences).toEqual(['It was signed in 1945.']);
     expect(r.unsupportedSentences).toEqual(['It was signed in 1945.', 'France was happy.']);
     expect(r.sentences).toBe(3);
+    expect(r.passed).toBe(false);
+    expect(r.sentenceScores.map(x => [x.sentence, x.exempt])).toEqual([
+      ['It was signed in 1945.', false], ['It ended the war.', false], ['France was happy.', false],
+    ]);
+    expect(r.sentenceScores[2].entailment).toBeCloseTo(0.1);
+    expect(r.sentenceScores[0].contradiction).toBeCloseTo(0.97);
   });
 
   it('passes the thresholds for supported sentences', async () => {
@@ -226,6 +232,8 @@ describe('checkEntailment', () => {
     expect(r.minEntailment).toBeGreaterThanOrEqual(ENTAILMENT_MIN);
     expect(r.maxContradiction).toBeLessThanOrEqual(CONTRADICTION_MAX);
     expect(r.unsupportedSentences).toEqual([]);
+    expect(r.passed).toBe(true);
+    expect(r.toleratedSentences).toEqual([]);
   });
 
   it('exempts a glossary sentence from entailment but not from contradiction', async () => {

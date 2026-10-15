@@ -10,7 +10,8 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "fetch-models": "node scripts/fetch-models.mjs",
-    "calibrate-nli": "node scripts/calibrate-nli.mjs"
+    "calibrate-nli": "node scripts/calibrate-nli.mjs",
+    "meaning-breakdown": "node scripts/meaning-breakdown.mjs"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.1",

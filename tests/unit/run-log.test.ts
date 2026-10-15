@@ -71,6 +71,10 @@ describe('buildRunReport', () => {
     });
   });
 
+  it('is format 3 (failure kinds and replay data)', () => {
+    expect(RUN_REPORT_FORMAT).toBe('clarity-run-report/3');
+  });
+
   it('has an empty run list for a document without logs', () => {
     expect(buildRunReport(doc(), now).runs).toEqual([]);
   });

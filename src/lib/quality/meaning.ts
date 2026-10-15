@@ -3,8 +3,9 @@
  * simplified paragraph keeps its meaning only if
  *   SBERT cosine ≥ SIMILARITY_THRESHOLD
  *   AND every entity of the original is kept
- *   AND no simplified sentence is contradicted (> CONTRADICTION_MAX) or
- *       unsupported (entailment < ENTAILMENT_MIN) by the original (NLI).
+ *   AND no simplified sentence is contradicted (> CONTRADICTION_MAX), and
+ *       none is unsupported (entailment < ENTAILMENT_MIN) beyond what the
+ *       paragraph rule tolerates (NLI).
  *
  * Design decisions:
  *  - The checks are injected (`deps`), each returning null when unavailable
@@ -13,6 +14,9 @@
  *    check that ran passed; `fullyChecked` says whether all three ran, which
  *    the thesis pass rate requires (lib/quality/similarity.ts meaningStats).
  *  - SBERT and NLI run in parallel (Ollama vs the NLI worker).
+ *  - The NLI part passes when the paragraph rule passes (EntailmentCheck
+ *    .passed, lib/quality/verdict.ts). `failures` names every check that
+ *    failed, for the run report's failure breakdown.
  *  - Reasons are specific and ordered by how badly they change the meaning:
  *    dropped entities, contradictions, unsupported sentences, then drift. The
  *    retry prompt names the first MAX_RETRY_REASONS of them, so the model
@@ -23,12 +27,11 @@
  */
 
 import { toPlainText } from '../render/format-output';
-import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, MAX_RETRY_REASONS, SIMILARITY_THRESHOLD,
-} from './config';
+import { CONTRADICTION_MAX, MAX_RETRY_REASONS, SIMILARITY_THRESHOLD } from './config';
 import { findMissingEntities } from './semantic';
+import { MEANING_FAILURES } from './verdict';
 import type {
-  EntailmentCheck, Entity, MeaningAssessment, MeaningCandidate, StoredMeaning,
+  EntailmentCheck, Entity, MeaningAssessment, MeaningCandidate, MeaningFailure, StoredMeaning,
 } from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -87,6 +90,32 @@ export function buildRetryInstruction(reasons: readonly string[]): string {
 
 // ─── Assessment ───────────────────────────────────────────────────────────────
 
+/**
+ * Which checks failed: a dropped entity, similarity below SIMILARITY_THRESHOLD,
+ * and the NLI paragraph rule (nli.passed) split into contradiction and
+ * unsupported. Empty exactly when the version passes; checks that did not
+ * run (null) never fail.
+ */
+export function failureKinds(
+  entitiesMissing: boolean,
+  similarity: number | null,
+  nli: EntailmentCheck | null,
+): MeaningFailure[] {
+  const kinds = new Set<MeaningFailure>();
+  if (entitiesMissing) kinds.add('entities');
+  if (similarity !== null && similarity < SIMILARITY_THRESHOLD) kinds.add('similarity');
+  if (nli && !nli.passed) {
+    const contradicted = new Set(nli.contradictedSentences);
+    if (contradicted.size > 0) kinds.add('contradiction');
+    if (nli.sentences === 0 || nli.unsupportedSentences.some(s => !contradicted.has(s))) kinds.add('unsupported');
+    // A failed verdict always names a kind, even from a sparse (test) result
+    if (contradicted.size === 0 && !kinds.has('unsupported')) {
+      kinds.add(nli.maxContradiction > CONTRADICTION_MAX ? 'contradiction' : 'unsupported');
+    }
+  }
+  return MEANING_FAILURES.filter(k => kinds.has(k));
+}
+
 /** Combines SBERT, entity recall and NLI into one verdict (rules in the file header). */
 export async function assessMeaning(
   original: string,
@@ -115,10 +144,8 @@ export async function assessMeaning(
   }
   if (similarity !== null && similarity < SIMILARITY_THRESHOLD) reasons.push(driftReason(similarity));
 
-  const passed =
-    missingEntities.length === 0 &&
-    (similarity === null || similarity >= SIMILARITY_THRESHOLD) &&
-    (nli === null || (nli.minEntailment >= ENTAILMENT_MIN && nli.maxContradiction <= CONTRADICTION_MAX));
+  const failures = failureKinds(missingEntities.length > 0, similarity, nli);
+  const passed = failures.length === 0;
 
   return {
     similarity,
@@ -130,9 +157,12 @@ export async function assessMeaning(
     fullyChecked: nli !== null && similarity !== null,
     passed,
     reasons,
+    failures,
     exemptedSentences: nli?.exemptedSentences ?? [],
     exemptionRate: nli?.exemptionRate ?? null,
     nliMs: nli?.ms ?? null,
+    nliRankMs: nli?.rankMs ?? null,
+    nliScoreMs: nli?.scoreMs ?? null,
     nliSentences: nli?.sentences ?? 0,
   };
 }
@@ -178,5 +208,6 @@ export function toStoredMeaning(a: MeaningAssessment): StoredMeaning {
     nliChecked: a.nliChecked,
     passed: a.passed,
     reasons: a.reasons,
+    failures: a.failures,
   };
 }

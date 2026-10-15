@@ -51,6 +51,11 @@ describe('assessMeaning: all three checks', () => {
       deps(c.sbert ? 0.92 : 0.8, c.nli ? makeEntailment() : UNSUPPORTED),
     );
     expect(a.passed).toBe(c.passed);
+    expect(a.failures).toEqual([
+      ...(c.sbert ? [] : ['similarity']),
+      ...(c.entities ? [] : ['entities']),
+      ...(c.nli ? [] : ['unsupported']),
+    ]);
     expect(a.fullyChecked).toBe(true);
     expect(a.nliChecked).toBe(true);
     expect(a.reasons.length > 0).toBe(!c.passed);
@@ -67,6 +72,35 @@ describe('assessMeaning: all three checks', () => {
     const a = await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.92, nli));
     expect(a.passed).toBe(false);
     expect(a.reasons).toEqual([contradictionReason('The war ended in 1945.')]);
+  });
+
+  it('names contradiction and unsupported separately when one version has both', async () => {
+    const nli = makeEntailment({
+      minEntailment: 0.1, maxContradiction: 0.9,
+      contradictedSentences: ['The war ended in 1946.'],
+      unsupportedSentences: ['The war ended in 1946.', 'Berlin is big.'],
+    });
+    const a = await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.8, nli));
+    expect(a.failures).toEqual(['similarity', 'unsupported', 'contradiction']);
+  });
+
+  it('counts a sentence that is only contradicted as contradiction, not unsupported', async () => {
+    const nli = makeEntailment({
+      minEntailment: 0.1, maxContradiction: 0.9,
+      contradictedSentences: ['The war ended in 1946.'], unsupportedSentences: ['The war ended in 1946.'],
+    });
+    expect((await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.92, nli))).failures).toEqual(['contradiction']);
+  });
+
+  it('follows the NLI verdict: a tolerated neutral sentence (rule B) passes', async () => {
+    const nli = makeEntailment({ minEntailment: 0.1, passed: true, toleratedSentences: ['Berlin is big.'] });
+    const a = await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(0.92, nli));
+    expect(a).toMatchObject({ passed: true, failures: [], reasons: [] });
+  });
+
+  it('checks that did not run never fail', async () => {
+    const a = await assessMeaning(ORIGINAL, KEEPS, ENTITIES, [], deps(null, null));
+    expect(a).toMatchObject({ passed: true, failures: [] });
   });
 
   it('passes entailment and contradiction exactly at their limits', async () => {
@@ -250,10 +284,10 @@ describe('pickBetterVersion', () => {
 describe('toStoredMeaning', () => {
   it('stores the verdict fields and leaves unmeasured ones out', () => {
     expect(toStoredMeaning(makeAssessment({ similarity: null, minEntailment: null, maxContradiction: null, nliChecked: false })))
-      .toEqual({ entityRecall: 1, nliChecked: false, passed: true, reasons: [] });
+      .toEqual({ entityRecall: 1, nliChecked: false, passed: true, reasons: [], failures: [] });
     expect(toStoredMeaning(makeAssessment())).toEqual({
       similarity: 0.92, entityRecall: 1, minEntailment: 0.95, maxContradiction: 0.02,
-      nliChecked: true, passed: true, reasons: [],
+      nliChecked: true, passed: true, reasons: [], failures: [],
     });
   });
 });

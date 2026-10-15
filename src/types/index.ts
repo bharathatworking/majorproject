@@ -115,7 +115,19 @@ export interface StoredMeaning {
   reasons?: string[];
   /** Checked in Lite quality mode (SBERT + entities only, NLI skipped on purpose). */
   lite?: boolean;
+  /** Which checks failed (empty when it passed; absent in results stored before it existed). */
+  failures?: MeaningFailure[];
 }
+
+/**
+ * Why a version failed the meaning standard; one version can fail several:
+ * SBERT cosine below the cutoff, a dropped entity, an NLI-unsupported
+ * sentence (or no sentences), an NLI-contradicted sentence.
+ */
+export type MeaningFailure = 'similarity' | 'entities' | 'unsupported' | 'contradiction';
+
+/** Failed versions per failure kind (one can count under several), and how many failed. */
+export type FailureBreakdown = Record<MeaningFailure, number> & { failedParagraphs: number };
 
 /**
  * A SimplificationResult that has been persisted to storage.
@@ -144,13 +156,38 @@ export interface MeaningCheck {
   similarity: number;
 }
 
+/** NLI scores of one simplified sentence over its premises (lib/quality/nli.ts). */
+export interface SentenceScore {
+  sentence: string;
+  /** Max entailment over the sentence's premises. */
+  entailment: number;
+  /** Contradiction per NLI_CONTRADICTION_AGG. */
+  contradiction: number;
+  /** Glossary sentence: skips the entailment requirement, not the contradiction one. */
+  exempt: boolean;
+}
+
+/**
+ * Paragraph rule of the NLI check (lib/quality/verdict.ts): 'A' every
+ * non-exempt sentence entailed; 'B' as A, but one neutral (unsupported, not
+ * contradicted) sentence is tolerated when the output has
+ * NLI_NEUTRAL_MIN_SENTENCES or more sentences. Contradictions never pass.
+ */
+export type NliParagraphRule = 'A' | 'B';
+
 /** Sentence-level NLI result for one simplified node (see lib/quality/nli.ts). */
 export interface EntailmentCheck {
+  /** The paragraph passed the NLI rule (lib/quality/verdict.ts nliVerdict). */
+  passed: boolean;
+  /** Every sentence's scores, in order. */
+  sentenceScores: SentenceScore[];
+  /** Unsupported sentences the paragraph rule tolerated (rule B); not failures. */
+  toleratedSentences: string[];
   /** Lowest entailment over the non-exempt sentences (0 when there are none). */
   minEntailment: number;
   /** Highest contradiction over all sentences, exempt ones included. */
   maxContradiction: number;
-  /** Non-exempt sentences below ENTAILMENT_MIN, in order. */
+  /** Non-exempt sentences below ENTAILMENT_MIN that the rule did not tolerate, in order. */
   unsupportedSentences: string[];
   /** Sentences above CONTRADICTION_MAX, in order. */
   contradictedSentences: string[];
@@ -233,11 +270,16 @@ export interface MeaningAssessment {
   passed: boolean;
   /** Failure reasons, most important first. */
   reasons: string[];
+  /** Which checks failed; empty exactly when `passed`. */
+  failures: MeaningFailure[];
   exemptedSentences: string[];
   /** Null when NLI did not run. */
   exemptionRate: number | null;
   /** NLI scoring time for this version; null when NLI did not run. */
   nliMs: number | null;
+  /** Of nliMs: premise ranking (embedding call) and pair scoring; null when NLI did not run. */
+  nliRankMs: number | null;
+  nliScoreMs: number | null;
   /** NLI-scored sentences; 0 when NLI did not run. */
   nliSentences: number;
 }
@@ -283,14 +325,21 @@ export interface CandidateLog {
   ms: number;
   scores: CandidateScores;
   missingEntities: string[];
+  /** The model output (after example-label stripping), for offline replay. */
+  text?: string;
   /** Meaning-check failure reasons of this version. */
   reasons: string[];
+  /** Which checks failed (absent in logs before clarity-run-report/3). */
+  failures?: MeaningFailure[];
   nliChecked: boolean;
   /** Glossary sentences that skipped the entailment requirement. */
   exemptedSentences: string[];
   /** Null when NLI did not run. */
   exemptionRate: number | null;
   nliMs: number | null;
+  /** Of nliMs: premise ranking and pair scoring (absent in older logs). */
+  nliRankMs?: number | null;
+  nliScoreMs?: number | null;
 }
 
 /** How a node got its result in a run. */
@@ -300,6 +349,8 @@ export type NodeSource = 'model' | 'cache' | 'skipped' | 'error';
 export interface NodeRunLog {
   nodeId: string;
   type: StoredResult['type'];
+  /** The node's original text, for offline replay (absent in older logs). */
+  originalText?: string;
   source: NodeSource;
   /** Variant of the kept version; null when the model did not produce it. */
   variantUsed: PromptVariantId | null;
@@ -355,6 +406,8 @@ export interface RunMeaningSummary extends MeaningSummary {
   /** NLI pairs scored and how many of them were truncated (absent in older logs). */
   nliPairs?: number;
   truncatedPairs?: number;
+  /** Failure kinds of the failed kept versions (absent in logs before clarity-run-report/3). */
+  failureBreakdown?: FailureBreakdown;
 }
 
 /** Everything one simplification run did, for the downloadable run report. */
@@ -386,6 +439,8 @@ export interface RunLog {
     /** Premise strategy, e.g. 'summac-sentences+pairs/top3' (absent in older logs). */
     premiseStrategy?: string;
     contradictionAggregation?: 'max' | 'best-entailing';
+    /** NLI paragraph rule (absent in logs before clarity-run-report/3, which used 'A'). */
+    paragraphRule?: NliParagraphRule;
   };
   summary: {
     nodes: number;
