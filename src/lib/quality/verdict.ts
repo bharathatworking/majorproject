@@ -17,7 +17,7 @@
  */
 
 import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_NEUTRAL_MIN_SENTENCES, NLI_PARAGRAPH_RULE,
+  CONTRADICTION_MAX, ENTAILMENT_MIN, ENTITY_RECALL_MIN, NLI_NEUTRAL_MIN_SENTENCES, NLI_PARAGRAPH_RULE,
 } from './config';
 import type { FailureBreakdown, MeaningFailure, NliParagraphRule, SentenceScore } from '../../types';
 
@@ -73,6 +73,39 @@ export function nliVerdict(
     contradicted,
     tolerated,
   };
+}
+
+// ─── Entity rule ──────────────────────────────────────────────────────────────
+
+export interface EntityVerdict {
+  passed: boolean;
+  /** Share of the original's distinct entity texts still present (1 when it has none). */
+  recall: number;
+  /** Dropped key entities (numbers, dates, time zones of the main claim), in order. */
+  missingKey: string[];
+  /** Dropped other entities, in order. */
+  missingMinor: string[];
+}
+
+/**
+ * The entity rule: passes when no key entity is missing and the share of
+ * entities kept is at least `recallMin` (ENTITY_RECALL_MIN). Key entities are
+ * the numbers, dates and time zones of the original's main claim (meaning.ts
+ * keyEntityTexts); names and the other numbers may drop within the share.
+ */
+export function entityVerdict(args: {
+  entityTexts: readonly string[];
+  missing: readonly string[];
+  keyTexts: readonly string[];
+  recallMin?: number;
+}): EntityVerdict {
+  const recallMin = args.recallMin ?? ENTITY_RECALL_MIN;
+  const distinct = new Set(args.entityTexts).size;
+  const recall = distinct > 0 ? (distinct - new Set(args.missing).size) / distinct : 1;
+  const key = new Set(args.keyTexts);
+  const missingKey = args.missing.filter(t => key.has(t));
+  const missingMinor = args.missing.filter(t => !key.has(t));
+  return { passed: missingKey.length === 0 && recall >= recallMin - 1e-9, recall, missingKey, missingMinor };
 }
 
 // ─── Failure breakdown ────────────────────────────────────────────────────────

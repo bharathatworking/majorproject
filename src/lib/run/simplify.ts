@@ -111,10 +111,10 @@ import { pickBestCandidate, scoreCandidate, type ScoredCandidate } from '../qual
 import {
   chooseQualityMode, evidenceOf, hasWebGpuAdapter, isBenchStale, type BenchContext, type QualityDecision,
 } from '../quality/mode';
-import { PREMISE_STRATEGY } from '../quality/premises';
+import { mainClaimIndexes, PREMISE_STRATEGY } from '../quality/premises';
 import { failureBreakdown, failuresFromReasons, formatFailureBreakdown } from '../quality/verdict';
 import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
+  CONTRADICTION_MAX, ENTAILMENT_MIN, ENTITY_RECALL_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
   NLI_BUDGET_MS, NLI_CONTRADICTION_AGG, NLI_HYPOTHESIS_CONTEXT, NLI_MODEL_ID, NLI_PARAGRAPH_RULE,
   QUALITY_THRESHOLD, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN, WEIGHTS,
 } from '../quality/config';
@@ -592,6 +592,28 @@ export async function runSimplification(
     }
   }
 
+  /**
+   * The original's main-claim sentences: all of a list item, else the one
+   * closest to the whole paragraph by all-minilm (the vectors are in the
+   * node's memo already: the original for SBERT, its sentences as premises).
+   * Null without embeddings (assessMeaning then takes the first sentence).
+   */
+  async function mainClaimOf(
+    node: ContentNode,
+    original: string,
+    sentences: readonly string[],
+    memo: Map<string, number[]>,
+  ): Promise<number[] | null> {
+    if (node.type === 'list-item') return sentences.map((_, i) => i);
+    if (sentences.length <= 2 || !embedAvailable) return null;
+    try {
+      const [paragraph, ...vecs] = await embedWith(memo, [original, ...sentences]);
+      return mainClaimIndexes(sentences.length, { sentences: vecs, paragraph });
+    } catch {
+      return null;
+    }
+  }
+
   /** Thesis meaning assessment of one version of a checked node. */
   function assess(
     node: ContentNode,
@@ -602,6 +624,7 @@ export async function runSimplification(
     return assessMeaning(node.text, text, node.entities ?? [], hinted, {
       similarity: (original, plain) => similarityOf(node.id, original, plain, memo),
       entail: (original, simplified, words) => entailmentOf(node.id, original, simplified, words, memo),
+      mainClaim: (original, sentences) => mainClaimOf(node, original, sentences, memo),
     });
   }
 
@@ -700,6 +723,7 @@ export async function runSimplification(
       text: t.text,
       scores: roundScores(t.scores),
       missingEntities: t.meaning?.missingEntities ?? [],
+      missingKeyEntities: t.meaning?.missingKeyEntities ?? [],
       reasons: t.meaning?.reasons ?? [],
       failures: t.meaning?.failures ?? [],
       nliChecked: t.meaning?.nliChecked ?? false,
@@ -906,6 +930,7 @@ export async function runSimplification(
       contradictionAggregation: NLI_CONTRADICTION_AGG,
       paragraphRule: NLI_PARAGRAPH_RULE,
       hypothesisContext: NLI_HYPOTHESIS_CONTEXT,
+      entityRecallMin: ENTITY_RECALL_MIN,
     },
     summary: {
       nodes: summary.nodes,

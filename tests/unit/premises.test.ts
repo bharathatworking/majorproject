@@ -1,7 +1,32 @@
 import { describe, it, expect } from 'vitest';
 import {
-  aggregate, buildPremises, lexicalRank, PREMISE_STRATEGY, rankPremises,
+  aggregate, buildPremises, lexicalRank, mainClaimIndexes, PREMISE_STRATEGY, rankPremises, splitSentences,
 } from '../../src/lib/quality/premises';
+
+// ---------------------------------------------------------------------------
+// Main claim
+// ---------------------------------------------------------------------------
+describe('mainClaimIndexes', () => {
+  it('is every sentence of a 1–2 sentence original', () => {
+    expect(mainClaimIndexes(1)).toEqual([0]);
+    expect(mainClaimIndexes(2, { sentences: [[1, 0], [0, 1]], paragraph: [0, 1] })).toEqual([0, 1]);
+  });
+
+  it('is the sentence closest to the whole paragraph, ties to the first', () => {
+    const sentences = [[1, 0], [0.6, 0.8], [0, 1]];
+    expect(mainClaimIndexes(3, { sentences, paragraph: [0.5, 0.86] })).toEqual([1]);
+    expect(mainClaimIndexes(3, { sentences: [[1, 0], [1, 0], [0, 1]], paragraph: [1, 0] })).toEqual([0]);
+  });
+
+  it('is the first sentence without vectors', () => {
+    expect(mainClaimIndexes(4)).toEqual([0]);
+    expect(mainClaimIndexes(4, { sentences: [[1, 0]], paragraph: [1, 0] })).toEqual([0]);
+  });
+
+  it('splits sentences of an original the same way as hypotheses', () => {
+    expect(splitSentences('One here. Two here!\n- Item')).toEqual(['One here.', 'Two here!', 'Item.']);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // buildPremises

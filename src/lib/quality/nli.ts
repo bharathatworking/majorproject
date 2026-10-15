@@ -54,7 +54,6 @@
  *    stays in the worker chunk and this module out of the main chunk.
  */
 
-import { toPlainText } from '../render/format-output';
 import { sha256 } from '../utils/hash';
 import { getNliBench, getNliDevice, saveNliBench } from '../storage/nli-bench';
 import {
@@ -64,7 +63,7 @@ import {
 } from './config';
 import { selectExemptions, stripParentheticalDefinitions } from './glossary';
 import { isBenchStale, predictParagraphMs, type BenchContext } from './mode';
-import { aggregate, buildPremises, lexicalRank, rankPremises } from './premises';
+import { aggregate, buildPremises, lexicalRank, rankPremises, splitSentences } from './premises';
 import { nliVerdict } from './verdict';
 import type { EmbedFn } from './semantic';
 import type {
@@ -149,18 +148,8 @@ export class NliUnavailableError extends Error {
 
 // ─── Sentences ────────────────────────────────────────────────────────────────
 
-/**
- * Sentences of a (possibly bulleted) model output: marker-free text split
- * after . ! or ? followed by whitespace, and at line breaks. Trimmed, empty
- * pieces dropped.
- */
-export function splitSentences(text: string): string[] {
-  return toPlainText(text)
-    .split(/\n+/)
-    .flatMap(line => line.split(/(?<=[.!?])\s+/))
-    .map(s => s.trim())
-    .filter(s => s !== '');
-}
+// splitSentences lives in premises.ts (pure, also used by meaning.ts); re-exported here
+export { splitSentences };
 
 /** A short ("Flashlight.") or referring ("That's called inflation.") sentence. */
 export function needsContext(sentence: string): boolean {

@@ -9,8 +9,10 @@
  *    copy of it with one injected error) judged against its original. It
  *    PASSES at a setting when, exactly as in the extension:
  *      SBERT cosine (all-minilm via Ollama, original vs plain output) ≥ SIM_MIN
- *      AND no entity of the original is missing (detectEntities +
- *          findMissingEntities, value-based for numbers and dates)
+ *      AND the entity rule passes (detectEntities + findMissingEntities,
+ *          value-based for numbers and dates; entityVerdict: share kept ≥
+ *          ENTITY_RECALL_MIN and every number, date and time zone of the main
+ *          claim kept, the main claim chosen by all-minilm as in a run)
  *      AND the NLI paragraph rule passes (nliVerdict over the sentence scores
  *          of the app's own checkEntailment: SummaC premises, top-3 by
  *          all-minilm, 'best-entailing', the frozen glossary hinted words).
@@ -19,9 +21,11 @@
  *    `unfaithful`. False-fail = failed faithful / faithful; catch = failed
  *    unfaithful / unfaithful.
  *  - Choice on DEV only: every SIM_MIN 0.60–0.95 (step 0.01) × ENTAILMENT_MIN
- *    0.05–0.95 (step 0.05) × rule {A, B}; keep the settings with false-fail
- *    ≤ 10% and catch ≥ 90%; tie-breaks: lowest false-fail, highest catch,
- *    rule A, then the setting nearest the centre of the remaining plateau
+ *    0.05–0.95 (step 0.05) × rule {A, B} × ENTITY_RECALL_MIN {1, 0.9, 0.8,
+ *    0.75, 0.67, 0.5}; keep the settings with false-fail ≤ 10% and catch
+ *    ≥ 90%; tie-breaks: lowest false-fail, highest catch, rule A, the
+ *    strictest entity minimum, then the setting nearest the centre of the
+ *    remaining plateau
  *    (robust to small-sample noise). The TEST half is only reported, with
  *    Wilson 95% intervals. When no setting qualifies, nothing is
  *    recommended and the nearest settings are shown.
@@ -31,10 +35,9 @@
  *  - CONTRADICTION_MAX, NLI_CONTRADICTION_AGG, the premise strategy and the
  *    glossary rules are fixed (calibrated or decided elsewhere).
  *  - Flags: --reviewed-only (items with reviewed: true), --verbose (every
- *    item's checks), --json <path> (all item scores and the grid result),
- *    --entity-recall (also sweeps a minimum entity recall from 1, today's
- *    "every entity kept", down to 0.5: an alternative rule, reported for the
- *    author's decision, never applied by this script).
+ *    item's checks), --json <path> (all item scores and the grid result).
+ *    Items without any label (new real outputs before labelling) are
+ *    skipped and counted.
  */
 
 import { writeFile } from 'node:fs/promises';
@@ -51,14 +54,13 @@ const range = (from, to, step) =>
 const SIM_GRID = range(0.6, 0.95, 0.01);
 const ENT_GRID = range(0.05, 0.95, 0.05);
 const RULES = ['A', 'B'];
-/** --entity-recall: also sweep a minimum entity recall (1 = every entity kept, the current rule). */
+/** Minimum share of entities kept (1 = every entity, the rule before calibration). */
 const RECALL_GRID = [1, 0.9, 0.8, 0.75, 0.67, 0.5];
 
 const argv = process.argv.slice(2);
 const reviewedOnly = argv.includes('--reviewed-only');
 const verbose = argv.includes('--verbose');
 const jsonOut = argv.includes('--json') ? argv[argv.indexOf('--json') + 1] : null;
-const sweepRecall = argv.includes('--entity-recall');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -77,7 +79,9 @@ try {
   const load = path => vite.ssrLoadModule(path);
   const config = await load('/src/lib/quality/config.ts');
   const { checkEntailment, NliClient } = await load('/src/lib/quality/nli.ts');
-  const { nliVerdict } = await load('/src/lib/quality/verdict.ts');
+  const { entityVerdict, nliVerdict } = await load('/src/lib/quality/verdict.ts');
+  const { keyEntityTexts } = await load('/src/lib/quality/meaning.ts');
+  const { mainClaimIndexes, splitSentences } = await load('/src/lib/quality/premises.ts');
   const { findMissingEntities } = await load('/src/lib/quality/semantic.ts');
   const { cosineSimilarity } = await load('/src/lib/quality/similarity.ts');
   const { detectEntities } = await load('/src/lib/segmentation/ner.ts');
@@ -86,6 +90,9 @@ try {
   const paragraphs = new Map((await readJsonl(join(DATA_DIR, 'paragraphs.jsonl'))).map(p => [p.id, p]));
   let items = await readJsonl(join(DATA_DIR, 'paragraph-items.jsonl'));
   if (reviewedOnly) items = items.filter(i => i.reviewed === true);
+  const unlabelled = items.filter(i => !label(i)).length;
+  items = items.filter(i => label(i));
+  if (unlabelled > 0) console.log(`[Clarity] ${unlabelled} items without a label skipped (run npm run import-labels)`);
   for (const item of items) {
     if (!paragraphs.has(item.paragraphId)) throw new Error(`${item.id}: unknown paragraph ${item.paragraphId}`);
     if (!['faithful', 'unfaithful'].includes(label(item))) throw new Error(`${item.id}: label must be faithful or unfaithful`);
@@ -114,14 +121,22 @@ try {
     const [a, b] = await embedOrThrow([original, plain]);
     const entities = detectEntities(original);
     const missing = findMissingEntities(entities, plain);
-    const distinct = new Set(entities.map(e => e.text)).size;
+    // Main claim as in a run: the sentence closest to the paragraph (all-minilm)
+    const sentences = splitSentences(original);
+    let claim = mainClaimIndexes(sentences.length);
+    if (sentences.length > 2) {
+      const [paragraph, ...vecs] = await embedOrThrow([original, ...sentences]);
+      claim = mainClaimIndexes(sentences.length, { sentences: vecs, paragraph });
+    }
+    const keyTexts = keyEntityTexts(original, entities, claim, sentences);
     const nli = await checkEntailment(original, item.simplified, hinted, client, { embed: embedOrThrow });
     results.push({
       item,
       label: label(item),
       similarity: cosineSimilarity(a, b),
       missingEntities: missing,
-      entityRecall: distinct > 0 ? (distinct - missing.length) / distinct : 1,
+      entityTexts: entities.map(e => e.text),
+      keyTexts,
       sentenceScores: nli.sentenceScores,
       truncatedPairs: nli.truncatedPairs,
     });
@@ -131,7 +146,9 @@ try {
   const failuresAt = (r, s) => {
     const f = [];
     if (r.similarity < s.sim) f.push('similarity');
-    if (r.entityRecall < (s.recall ?? 1) - 1e-9) f.push('entities');
+    if (!entityVerdict({ entityTexts: r.entityTexts, missing: r.missingEntities, keyTexts: r.keyTexts, recallMin: s.recall ?? 1 }).passed) {
+      f.push('entities');
+    }
     const v = nliVerdict(r.sentenceScores, { entailmentMin: s.ent, rule: s.rule });
     if (v.contradicted.length > 0) f.push('contradiction');
     if (!v.passed && v.contradicted.length === 0) f.push('unsupported');
@@ -153,7 +170,7 @@ try {
 
   // ── Grid on dev
   const grid = [];
-  for (const recall of sweepRecall ? RECALL_GRID : [1]) {
+  for (const recall of RECALL_GRID) {
     for (const rule of RULES) for (const sim of SIM_GRID) for (const ent of ENT_GRID) {
       grid.push({ sim, ent, rule, recall, ...rates('dev', { sim, ent, rule, recall }) });
     }
@@ -184,13 +201,16 @@ try {
     const byFf = grid.filter(g => g.catchRate >= MIN_CATCH).sort((a, b) => a.falseFail - b.falseFail || b.catchRate - a.catchRate)[0];
     const byCatch = grid.filter(g => g.falseFail <= MAX_FALSE_FAIL).sort((a, b) => b.catchRate - a.catchRate || a.falseFail - b.falseFail)[0];
     for (const [name, g] of [['lowest false-fail with catch ≥ 90%', byFf], ['highest catch with false-fail ≤ 10%', byCatch]]) {
-      if (g) console.log(`  ${name}: SIM_MIN ${g.sim}, ENTAILMENT_MIN ${g.ent}, rule ${g.rule}${sweepRecall ? `, entity recall ≥ ${g.recall}` : ''} → false-fail ${pct(g.falseFail)} (${g.ff}/${g.nFaithful}), catch ${pct(g.catchRate)} (${g.caught}/${g.nUnfaithful})`);
+      if (g) console.log(`  ${name}: SIM_MIN ${g.sim}, ENTAILMENT_MIN ${g.ent}, rule ${g.rule}, entity recall ≥ ${g.recall} → false-fail ${pct(g.falseFail)} (${g.ff}/${g.nFaithful}), catch ${pct(g.catchRate)} (${g.caught}/${g.nUnfaithful})`);
       else console.log(`  ${name}: none`);
     }
   }
 
   // ── Report: the current config and the chosen setting, on dev and test
-  const current = { sim: config.SIMILARITY_THRESHOLD ?? config.SIM_MIN, ent: config.ENTAILMENT_MIN, rule: config.NLI_PARAGRAPH_RULE, recall: 1 };
+  const current = {
+    sim: config.SIMILARITY_THRESHOLD ?? config.SIM_MIN, ent: config.ENTAILMENT_MIN,
+    rule: config.NLI_PARAGRAPH_RULE, recall: config.ENTITY_RECALL_MIN,
+  };
   const show = (name, s) => {
     console.log(`\n${name}: SIM_MIN ${s.sim}, ENTAILMENT_MIN ${s.ent}, rule ${s.rule}${s.recall < 1 ? `, entity recall ≥ ${s.recall}` : ''}`);
     for (const split of ['dev', 'test']) {
@@ -211,7 +231,13 @@ try {
     }).join(', ')}`);
     for (const r of results) {
       const f = failuresAt(r, s);
-      if (r.label === 'faithful' && f.length > 0) console.log(`  false fail ${r.item.id} [${r.item.split}]: ${f.join(' + ')} (sim ${r.similarity.toFixed(3)}${r.missingEntities.length ? `, missing ${r.missingEntities.join(', ')}` : ''})`);
+      if (r.label === 'faithful' && f.length > 0) {
+        const key = r.missingEntities.filter(t => r.keyTexts.includes(t));
+        console.log(
+          `  false fail ${r.item.id} [${r.item.split}]: ${f.join(' + ')} (sim ${r.similarity.toFixed(3)}` +
+          `${r.missingEntities.length ? `, missing ${r.missingEntities.join(', ')}` : ''}${key.length ? `; key ${key.join(', ')}` : ''})`,
+        );
+      }
       if (r.label === 'unfaithful' && f.length === 0) console.log(`  missed     ${r.item.id} [${r.item.split}] (sim ${r.similarity.toFixed(3)}, min entailment ${Math.min(...r.sentenceScores.filter(x => !x.exempt).map(x => x.entailment)).toFixed(3)})`);
     }
   };

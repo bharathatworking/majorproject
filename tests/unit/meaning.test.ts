@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   assessMeaning, buildRetryInstruction, candidatePasses, contradictionReason, driftReason,
-  droppedEntityReason, meaningScore, MEANING_RETRY_INSTRUCTION, NO_SENTENCES_REASON,
+  droppedEntityReason, keyEntityTexts, meaningScore, MEANING_RETRY_INSTRUCTION, NO_SENTENCES_REASON,
   pickBetterVersion, toStoredMeaning, unsupportedReason, type MeaningDeps,
 } from '../../src/lib/quality/meaning';
 import { MAX_RETRY_REASONS, SIMILARITY_THRESHOLD } from '../../src/lib/quality/config';
@@ -289,5 +289,71 @@ describe('toStoredMeaning', () => {
       similarity: 0.92, entityRecall: 1, minEntailment: 0.95, maxContradiction: 0.02,
       nliChecked: true, passed: true, reasons: [], failures: [],
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Entity rule: minimum share kept, key facts (main-claim numbers and dates) always
+// ---------------------------------------------------------------------------
+describe('entity rule', () => {
+  const at = (text: string, needle: string, type: Entity['type']): Entity => {
+    const start = text.indexOf(needle);
+    return { text: needle, type, start, end: start + needle.length };
+  };
+  const PARIS =
+    'The Eiffel Tower was finished in 1889 for the World Fair in Paris. ' +
+    'Maurice Koechlin\'s team designed and built it over two years. ' +
+    'It was the tallest structure in the world until 1930.';
+  const ENTS = [
+    at(PARIS, 'Eiffel Tower', 'place'), at(PARIS, '1889', 'date'), at(PARIS, 'Paris', 'place'),
+    at(PARIS, 'Maurice Koechlin', 'person'), at(PARIS, 'two years', 'date'), at(PARIS, '1930', 'date'),
+  ];
+  const ok = () => deps(0.92, makeEntailment());
+  /** Main claim = the first sentence. */
+  const firstSentence: MeaningDeps['mainClaim'] = async () => [0];
+
+  it('key entities are the numbers and dates of the main-claim sentence only', () => {
+    expect(keyEntityTexts(PARIS, ENTS, [0])).toEqual(['1889']);
+    expect(keyEntityTexts(PARIS, ENTS, [2])).toEqual(['1930']);
+    expect(keyEntityTexts(PARIS, ENTS, [0, 1, 2])).toEqual(['1889', 'two years', '1930']);
+  });
+
+  it('every number and date is key when the main claim cannot be located', () => {
+    expect(keyEntityTexts(PARIS, ENTS, [7])).toEqual(['1889', 'two years', '1930']);
+  });
+
+  it('at a minimum of 0.8, a dropped minor name passes', async () => {
+    const simplified = 'The Eiffel Tower in Paris was done in 1889 for a World Fair. It took two years. It was the tallest until 1930.';
+    const a = await assessMeaning(PARIS, simplified, ENTS, [], { ...ok(), mainClaim: firstSentence }, { entityRecallMin: 0.8 });
+    expect(a.missingEntities).toEqual(['Maurice Koechlin']);
+    expect(a).toMatchObject({ passed: true, failures: [], reasons: [], missingKeyEntities: [] });
+  });
+
+  it('a dropped key number fails at any minimum, named first', async () => {
+    const simplified = 'The Eiffel Tower in Paris was built for a World Fair by Maurice Koechlin over two years. It was the tallest until 1930.';
+    const a = await assessMeaning(PARIS, simplified, ENTS, [], { ...ok(), mainClaim: firstSentence }, { entityRecallMin: 0.5 });
+    expect(a).toMatchObject({ passed: false, failures: ['entities'], missingKeyEntities: ['1889'] });
+    expect(a.reasons).toEqual([droppedEntityReason('1889', 'date')]);
+  });
+
+  it('a dropped number outside the main claim is minor', async () => {
+    const simplified = 'The Eiffel Tower in Paris was done in 1889 for a World Fair by Maurice Koechlin over two years.';
+    const a = await assessMeaning(PARIS, simplified, ENTS, [], { ...ok(), mainClaim: firstSentence }, { entityRecallMin: 0.8 });
+    expect(a).toMatchObject({ passed: true, missingKeyEntities: [] });
+    expect(a.missingEntities).toEqual(['1930']);
+  });
+
+  it('without a main-claim dependency, a 1–2 sentence original is all main claim', async () => {
+    const two = 'The bridge opened in 1893. It cost 4 million dollars to build.';
+    const ents = [at(two, '1893', 'date'), at(two, '4 million', 'number')];
+    const a = await assessMeaning(two, 'The bridge opened in 1893.', ents, [], ok(), { entityRecallMin: 0.5 });
+    expect(a).toMatchObject({ passed: false, missingKeyEntities: ['4 million'] });
+  });
+
+  it('below the minimum, minor drops are named after key ones', async () => {
+    const simplified = 'A tower was built for a fair.';
+    const a = await assessMeaning(PARIS, simplified, ENTS, [], { ...ok(), mainClaim: firstSentence }, { entityRecallMin: 0.8 });
+    expect(a.reasons[0]).toBe(droppedEntityReason('1889', 'date'));
+    expect(a.reasons).toContain(droppedEntityReason('Maurice Koechlin', 'person'));
   });
 });

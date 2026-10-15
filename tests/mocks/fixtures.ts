@@ -15,6 +15,7 @@ export function makeAssessment(overrides: Partial<MeaningAssessment> = {}): Mean
     similarity: 0.92,
     entityRecall: 1,
     missingEntities: [],
+    missingKeyEntities: [],
     minEntailment: 0.95,
     maxContradiction: 0.02,
     nliChecked: true,

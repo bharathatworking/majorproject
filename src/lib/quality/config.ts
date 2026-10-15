@@ -59,6 +59,15 @@ export const NLI_REFERRING_START = /^["'“‘(]?(?:this|that|it|these|they)\b/i
 /** Recorded in every run log: how a hypothesis is formed. */
 export const NLI_HYPOTHESIS_CONTEXT = 'prev-sentence-if-<7-words-or-referring';
 
+/**
+ * Entity rule (lib/quality/verdict.ts entityVerdict): at least this share of
+ * the original's entities must be kept, and every number, date and time zone
+ * of its main claim must be kept. 1 = every entity (the rule before
+ * calibration). NOT calibrated yet: set from npm run calibrate-meaning once
+ * the labels are reviewed.
+ */
+export const ENTITY_RECALL_MIN = 1;
+
 /** Nodes with fewer words than this skip all meaning checks. */
 export const MIN_WORDS_FOR_CHECK = 8;
 

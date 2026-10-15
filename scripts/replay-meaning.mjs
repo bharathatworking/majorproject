@@ -70,6 +70,7 @@ try {
   const { checkMeaning, shouldCheckNode } = await load('/src/lib/quality/semantic.ts');
   const { checkEntailment, NliClient } = await load('/src/lib/quality/nli.ts');
   const { failureBreakdown, formatFailureBreakdown } = await load('/src/lib/quality/verdict.ts');
+  const { mainClaimIndexes } = await load('/src/lib/quality/premises.ts');
   const { toPlainText } = await load('/src/lib/render/format-output.ts');
 
   const raw = file.toLowerCase().endsWith('.pdf') ? (await pdfPages(file)).join('\n') : await readFile(file, 'utf8');
@@ -111,6 +112,12 @@ try {
     const assess = text => assessMeaning(node.text, text, node.entities, hinted, {
       similarity: async (original, plain) => (await checkMeaning(original, plain, embedOrThrow)).similarity,
       entail: (original, simplified, words) => checkEntailment(original, simplified, words, client, { embed: embedOrThrow }),
+      mainClaim: async (original, sentences) => {
+        if (node.type === 'list-item') return sentences.map((_, i) => i);
+        if (sentences.length <= 2) return null;
+        const [paragraph, ...vecs] = await embedOrThrow([original, ...sentences]);
+        return mainClaimIndexes(sentences.length, { sentences: vecs, paragraph });
+      },
     });
 
     const firstText = await complete(prompt);

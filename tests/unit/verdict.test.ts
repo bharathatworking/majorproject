@@ -1,7 +1,35 @@
 import { describe, it, expect } from 'vitest';
 import {
-  failureBreakdown, failuresFromReasons, formatFailureBreakdown, nliVerdict, MEANING_FAILURES,
+  entityVerdict, failureBreakdown, failuresFromReasons, formatFailureBreakdown, nliVerdict, MEANING_FAILURES,
 } from '../../src/lib/quality/verdict';
+
+// ---------------------------------------------------------------------------
+// entityVerdict — minimum share kept, key facts always
+// ---------------------------------------------------------------------------
+describe('entityVerdict', () => {
+  const entityTexts = ['1893', 'Paris', 'Eiffel', 'Gustave', 'France'];
+
+  it('passes at exactly the minimum share and fails just below', () => {
+    expect(entityVerdict({ entityTexts, missing: ['Gustave'], keyTexts: ['1893'], recallMin: 0.8 }))
+      .toEqual({ passed: true, recall: 0.8, missingKey: [], missingMinor: ['Gustave'] });
+    expect(entityVerdict({ entityTexts, missing: ['Gustave', 'France'], keyTexts: ['1893'], recallMin: 0.8 }).passed)
+      .toBe(false);
+  });
+
+  it('fails on a missing key entity whatever the share', () => {
+    expect(entityVerdict({ entityTexts, missing: ['1893'], keyTexts: ['1893'], recallMin: 0.5 }))
+      .toMatchObject({ passed: false, missingKey: ['1893'], missingMinor: [] });
+  });
+
+  it('counts repeated texts once and passes without entities', () => {
+    expect(entityVerdict({ entityTexts: ['Paris', 'Paris', 'Rome'], missing: ['Rome'], keyTexts: [], recallMin: 0.5 }).recall).toBe(0.5);
+    expect(entityVerdict({ entityTexts: [], missing: [], keyTexts: [], recallMin: 1 })).toMatchObject({ passed: true, recall: 1 });
+  });
+
+  it('defaults to the config minimum (1 until calibrated)', () => {
+    expect(entityVerdict({ entityTexts, missing: ['Gustave'], keyTexts: [] }).passed).toBe(false);
+  });
+});
 import { contradictionReason, driftReason, droppedEntityReason, NO_SENTENCES_REASON, unsupportedReason } from '../../src/lib/quality/meaning';
 import type { SentenceScore } from '../../src/types';
 

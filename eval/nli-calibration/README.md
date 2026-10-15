@@ -13,7 +13,6 @@ ollama pull all-minilm                                # similarity is part of th
 npm run calibrate-meaning                             # proposed labels where not reviewed
 npm run calibrate-meaning -- --reviewed-only          # only items with "reviewed": true
 npm run calibrate-meaning -- --verbose                # every item's scores
-npm run calibrate-meaning -- --entity-recall          # also sweep a minimum entity recall (alternative rule, report only)
 npm run calibrate-meaning -- --json scores.json       # write every item's scores
 ```
 
@@ -55,7 +54,7 @@ Since 2026-10-15 (round 2), a simplified sentence of fewer than 7 words, or one 
 An item **passes** at a setting when all of these hold:
 
 - SBERT cosine (all-minilm, original vs the plain output) ≥ `SIM_MIN`.
-- No entity of the original is missing (`detectEntities` + `findMissingEntities`, value-based for numbers and dates). With `--entity-recall`, the share kept must instead be ≥ the swept minimum.
+- The entity rule passes (`entityVerdict`): the share of the original's entities kept is ≥ `ENTITY_RECALL_MIN`, and every number, date and time zone of the main claim is kept. The main claim is the original sentence closest to the whole paragraph by all-minilm, or every sentence of a 1–2 sentence original. Matching is `detectEntities` + `findMissingEntities`, value-based for numbers and dates.
 - The NLI paragraph rule passes (`nliVerdict` over the sentence scores of the app's own `checkEntailment`):
   - Rule A: every non-exempt sentence has entailment ≥ `ENTAILMENT_MIN`.
   - Rule B: the same, except that one neutral sentence is tolerated when there are 6 or more.
@@ -63,7 +62,7 @@ An item **passes** at a setting when all of these hold:
 
 False-fail = failed faithful / faithful. Catch = failed unfaithful / unfaithful. Paired catch is the injected copies that fail while their real output passes, which is a cleaner view of whether the injected error itself was noticed.
 
-The grid on dev covers `SIM_MIN` 0.60–0.95 (step 0.01) × `ENTAILMENT_MIN` 0.05–0.95 (step 0.05) × rule {A, B}. It keeps the settings with false-fail ≤ 10% and catch ≥ 90%. Ties are broken by, in order:
+The grid on dev covers `SIM_MIN` 0.60–0.95 (step 0.01) × `ENTAILMENT_MIN` 0.05–0.95 (step 0.05) × rule {A, B} × `ENTITY_RECALL_MIN` {1, 0.9, 0.8, 0.75, 0.67, 0.5}. It keeps the settings with false-fail ≤ 10% and catch ≥ 90%. Ties are broken by, in order:
 
 1. lowest false-fail;
 2. highest catch;

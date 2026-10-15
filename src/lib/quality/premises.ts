@@ -24,6 +24,7 @@
  *    same code as the extension.
  */
 
+import { toPlainText } from '../render/format-output';
 import { cosineSimilarity } from './similarity';
 import { NLI_TOP_PREMISES } from './config';
 
@@ -47,6 +48,39 @@ export interface SentenceVerdict {
 
 /** Recorded with every run: how premises are built and pruned. */
 export const PREMISE_STRATEGY = `summac-sentences+pairs/top${NLI_TOP_PREMISES}`;
+
+// ─── Sentences ────────────────────────────────────────────────────────────────
+
+/**
+ * Sentences of a (possibly bulleted) text: marker-free text split after . !
+ * or ? followed by whitespace, and at line breaks. Trimmed, empty pieces
+ * dropped. Used for the hypotheses (model output) and the premises and main
+ * claim (original).
+ */
+export function splitSentences(text: string): string[] {
+  return toPlainText(text)
+    .split(/\n+/)
+    .flatMap(line => line.split(/(?<=[.!?])\s+/))
+    .map(s => s.trim())
+    .filter(s => s !== '');
+}
+
+/**
+ * The main claim of an original (indexes into its sentences): every sentence
+ * when there are at most 2, else the one whose embedding is closest to the
+ * whole paragraph's (ties: the first). Without vectors, the first sentence.
+ */
+export function mainClaimIndexes(
+  sentenceCount: number,
+  vectors: { sentences: readonly number[][]; paragraph: readonly number[] } | null = null,
+): number[] {
+  if (sentenceCount <= 2) return Array.from({ length: sentenceCount }, (_, i) => i);
+  if (!vectors || vectors.sentences.length !== sentenceCount) return [0];
+  const scores = vectors.sentences.map(v => cosineSimilarity([...v], [...vectors.paragraph]));
+  let best = 0;
+  scores.forEach((s, i) => { if (s > scores[best]) best = i; });
+  return [best];
+}
 
 // ─── Premises ─────────────────────────────────────────────────────────────────
 

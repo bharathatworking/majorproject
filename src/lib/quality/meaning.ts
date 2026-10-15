@@ -27,9 +27,10 @@
  */
 
 import { toPlainText } from '../render/format-output';
-import { CONTRADICTION_MAX, MAX_RETRY_REASONS, SIMILARITY_THRESHOLD } from './config';
+import { CONTRADICTION_MAX, ENTITY_RECALL_MIN, MAX_RETRY_REASONS, SIMILARITY_THRESHOLD } from './config';
+import { mainClaimIndexes, splitSentences } from './premises';
 import { findMissingEntities } from './semantic';
-import { MEANING_FAILURES } from './verdict';
+import { entityVerdict, MEANING_FAILURES } from './verdict';
 import type {
   EntailmentCheck, Entity, MeaningAssessment, MeaningCandidate, MeaningFailure, StoredMeaning,
 } from '../../types';
@@ -41,7 +42,16 @@ export interface MeaningDeps {
   similarity: (original: string, simplifiedPlain: string) => Promise<number | null>;
   /** Sentence-level NLI; null when not available. */
   entail: (original: string, simplified: string, hintedWords: readonly string[]) => Promise<EntailmentCheck | null>;
+  /**
+   * Indexes of the original's main-claim sentences (premises.ts
+   * mainClaimIndexes with embeddings); null or absent = without embeddings
+   * (every sentence of a 1–2 sentence original, else the first).
+   */
+  mainClaim?: (original: string, sentences: readonly string[]) => Promise<number[] | null>;
 }
+
+/** Entity types that are key facts when they sit in the main claim. */
+const KEY_TYPES: ReadonlySet<Entity['type']> = new Set<Entity['type']>(['number', 'date', 'timezone']);
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -116,6 +126,42 @@ export function failureKinds(
   return MEANING_FAILURES.filter(k => kinds.has(k));
 }
 
+/**
+ * Where each sentence of `original` starts and ends, or null when it can't be
+ * found (toPlainText rewrote it). Sentences are searched in order; a trailing
+ * period added to a bullet item is ignored.
+ */
+function sentenceSpans(original: string, sentences: readonly string[]): ({ start: number; end: number } | null)[] {
+  let cursor = 0;
+  return sentences.map(s => {
+    const core = s.replace(/[.!?]+$/, '');
+    const start = original.indexOf(core, cursor);
+    if (start < 0 || core === '') return null;
+    cursor = start + core.length;
+    return { start, end: cursor };
+  });
+}
+
+/**
+ * Key entities of an original: the numbers, dates and time zones inside its
+ * main-claim sentences (by the entities' offsets). When a main-claim sentence
+ * can't be located, every number, date and time zone is key.
+ */
+export function keyEntityTexts(
+  original: string,
+  entities: readonly Entity[],
+  mainClaim: readonly number[],
+  sentences: readonly string[] = splitSentences(original),
+): string[] {
+  const spans = sentenceSpans(original, sentences);
+  const claim = mainClaim.map(i => spans[i] ?? null);
+  const all = claim.length === 0 || claim.some(s => s === null);
+  return [...new Set(entities
+    .filter(e => KEY_TYPES.has(e.type))
+    .filter(e => all || claim.some(s => s !== null && e.start >= s.start && e.start < s.end))
+    .map(e => e.text))];
+}
+
 /** Combines SBERT, entity recall and NLI into one verdict (rules in the file header). */
 export async function assessMeaning(
   original: string,
@@ -123,19 +169,25 @@ export async function assessMeaning(
   entities: readonly Entity[],
   hintedWords: readonly string[],
   deps: MeaningDeps,
+  options: { entityRecallMin?: number } = {},
 ): Promise<MeaningAssessment> {
+  const recallMin = options.entityRecallMin ?? ENTITY_RECALL_MIN;
   const plain = toPlainText(simplified);
-  const [similarity, nli] = await Promise.all([
+  const sentences = splitSentences(original);
+  const [similarity, nli, claimed] = await Promise.all([
     deps.similarity(original, plain),
     deps.entail(original, simplified, hintedWords),
+    deps.mainClaim ? deps.mainClaim(original, sentences).catch(() => null) : Promise.resolve(null),
   ]);
 
   const missingEntities = findMissingEntities([...entities], plain);
-  const distinct = new Set(entities.map(e => e.text)).size;
-  const entityRecall = distinct > 0 ? (distinct - missingEntities.length) / distinct : 1;
+  const keyTexts = keyEntityTexts(original, entities, claimed ?? mainClaimIndexes(sentences.length), sentences);
+  const entity = entityVerdict({ entityTexts: entities.map(e => e.text), missing: missingEntities, keyTexts, recallMin });
   const typeOf = new Map(entities.map(e => [e.text, e.type]));
 
-  const reasons: string[] = missingEntities.map(t => droppedEntityReason(t, typeOf.get(t) ?? 'other'));
+  // Key drops first; other drops only when they push the share below the minimum
+  const named = [...entity.missingKey, ...(entity.recall < recallMin - 1e-9 ? entity.missingMinor : [])];
+  const reasons: string[] = named.map(t => droppedEntityReason(t, typeOf.get(t) ?? 'other'));
   if (nli) {
     reasons.push(...nli.contradictedSentences.map(contradictionReason));
     const contradicted = new Set(nli.contradictedSentences);
@@ -144,13 +196,14 @@ export async function assessMeaning(
   }
   if (similarity !== null && similarity < SIMILARITY_THRESHOLD) reasons.push(driftReason(similarity));
 
-  const failures = failureKinds(missingEntities.length > 0, similarity, nli);
+  const failures = failureKinds(!entity.passed, similarity, nli);
   const passed = failures.length === 0;
 
   return {
     similarity,
-    entityRecall,
+    entityRecall: entity.recall,
     missingEntities,
+    missingKeyEntities: entity.missingKey,
     minEntailment: nli?.minEntailment ?? null,
     maxContradiction: nli?.maxContradiction ?? null,
     nliChecked: nli !== null,

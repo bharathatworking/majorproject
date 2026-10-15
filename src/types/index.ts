@@ -273,6 +273,8 @@ export interface MeaningAssessment {
   similarity: number | null;
   entityRecall: number;
   missingEntities: string[];
+  /** Dropped key entities (numbers, dates, time zones of the original's main claim). */
+  missingKeyEntities: string[];
   /** Null when NLI did not run. */
   minEntailment: number | null;
   maxContradiction: number | null;
@@ -338,6 +340,8 @@ export interface CandidateLog {
   ms: number;
   scores: CandidateScores;
   missingEntities: string[];
+  /** Of missingEntities, the key ones (absent in older logs). */
+  missingKeyEntities?: string[];
   /** The model output (after example-label stripping), for offline replay. */
   text?: string;
   /** Meaning-check failure reasons of this version. */
@@ -463,6 +467,8 @@ export interface RunLog {
     paragraphRule?: NliParagraphRule;
     /** How hypotheses are formed (config NLI_HYPOTHESIS_CONTEXT; absent: each sentence alone). */
     hypothesisContext?: string;
+    /** Minimum share of entities kept (config ENTITY_RECALL_MIN; absent: 1, every entity). */
+    entityRecallMin?: number;
   };
   summary: {
     nodes: number;

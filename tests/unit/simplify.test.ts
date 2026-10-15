@@ -1176,6 +1176,7 @@ describe('runSimplification run log', () => {
       premiseStrategy: 'summac-sentences+pairs/top3', contradictionAggregation: NLI_CONTRADICTION_AGG,
       paragraphRule: NLI_PARAGRAPH_RULE,
       hypothesisContext: 'prev-sentence-if-<7-words-or-referring',
+      entityRecallMin: 1,
     });
   });
 
