@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  checkEntailment, createWorkerBackend, NLI_BENCH_PAIRS, NliClient, NliUnavailableError, prepareNli,
+  checkEntailment, createWorkerBackend, hypothesisFor, needsContext, NLI_BENCH_PAIRS, NliClient,
+  NliUnavailableError, prepareNli,
   splitSentences, type BenchStore, type NliBackend, type NliPair, type NliProbs, type NliRequest,
   type NliResponse, type WorkerLike,
 } from '../../src/lib/quality/nli';
@@ -15,13 +16,19 @@ const SUPPORTED: NliProbs = { entailment: 0.95, contradiction: 0.01, neutral: 0.
 const NEUTRAL: NliProbs = { entailment: 0.1, contradiction: 0.05, neutral: 0.85 };
 const CONTRADICTED: NliProbs = { entailment: 0.01, contradiction: 0.97, neutral: 0.02 };
 
-/** Fake backend: probabilities per hypothesis (default SUPPORTED), recording every batch. */
+/**
+ * Fake backend: probabilities per sentence (default SUPPORTED), recording
+ * every batch. A hypothesis with context ("<previous> <sentence>") is looked
+ * up by the sentence it ends with.
+ */
 function fakeBackend(table: Record<string, NliProbs> = {}) {
   const batches: NliPair[][] = [];
+  const lookup = (hypothesis: string) =>
+    table[hypothesis] ?? Object.entries(table).find(([k]) => hypothesis.endsWith(` ${k}`))?.[1] ?? SUPPORTED;
   const backend: NliBackend = {
     score: vi.fn(async (pairs: NliPair[]) => {
       batches.push(pairs);
-      return pairs.map(p => table[p.hypothesis] ?? SUPPORTED);
+      return pairs.map(p => lookup(p.hypothesis));
     }),
   };
   return { backend, batches };
@@ -144,15 +151,17 @@ describe('checkEntailment', () => {
 
   it('scores each sentence against the original sentences and their 2-sentence window, in one call', async () => {
     const { backend, batches } = fakeBackend();
-    const r = await checkEntailment(ORIGINAL, 'It was signed in 1919. It ended the war.', [], new NliClient(backend));
+    const r = await checkEntailment(
+      ORIGINAL, 'The treaty was signed in the year 1919. The treaty finally ended the long war.', [], new NliClient(backend),
+    );
     expect(batches).toHaveLength(1);
     expect(batches[0]).toEqual([
-      { premise: S0, hypothesis: 'It was signed in 1919.' },
-      { premise: S1, hypothesis: 'It was signed in 1919.' },
-      { premise: `${S0} ${S1}`, hypothesis: 'It was signed in 1919.' },
-      { premise: S0, hypothesis: 'It ended the war.' },
-      { premise: S1, hypothesis: 'It ended the war.' },
-      { premise: `${S0} ${S1}`, hypothesis: 'It ended the war.' },
+      { premise: S0, hypothesis: 'The treaty was signed in the year 1919.' },
+      { premise: S1, hypothesis: 'The treaty was signed in the year 1919.' },
+      { premise: `${S0} ${S1}`, hypothesis: 'The treaty was signed in the year 1919.' },
+      { premise: S0, hypothesis: 'The treaty finally ended the long war.' },
+      { premise: S1, hypothesis: 'The treaty finally ended the long war.' },
+      { premise: `${S0} ${S1}`, hypothesis: 'The treaty finally ended the long war.' },
     ]);
     expect(r).toMatchObject({ pairs: 6, ranking: 'all', truncatedPairs: 0 });
   });
@@ -256,6 +265,50 @@ describe('checkEntailment', () => {
     expect(r.unsupportedSentences).toEqual([]);
     expect(r.passed).toBe(true);
     expect(r.toleratedSentences).toEqual([]);
+  });
+
+  // Short and referring sentences are scored with the previous sentence
+  describe('hypothesis context', () => {
+    it('needs context below 7 words or after a referring word', () => {
+      expect(needsContext('That’s called inflation.')).toBe(true);
+      expect(needsContext('Anatocism is the same.')).toBe(true);
+      expect(needsContext('It happened over many long years in the north.')).toBe(true);
+      expect(needsContext('They were signed by every country at the conference.')).toBe(true);
+      expect(needsContext('The treaty finally ended the long war.')).toBe(false);
+      expect(needsContext('Items are sent to the address on the form.')).toBe(false);
+      expect(needsContext('Thermal energy moves from hot to cold things.')).toBe(false);
+    });
+
+    it('combines with the previous sentence, never for the first', () => {
+      const s = ['When prices go up, you can buy less with your money.', 'That’s called inflation.'];
+      expect(hypothesisFor(s, 1)).toBe(`${s[0]} ${s[1]}`);
+      expect(hypothesisFor(s, 0)).toBe(s[0]);
+      expect(hypothesisFor(['Anatocism is the same.'], 0)).toBe('Anatocism is the same.');
+    });
+
+    it('scores the combined hypothesis but reports the sentence alone', async () => {
+      const original = 'Compound interest is interest earned on a principal sum and on previous interest. It is also called anatocism.';
+      const first = 'Compound interest is interest earned on the money and on old interest.';
+      const { backend, batches } = fakeBackend({ 'Anatocism is the same.': NEUTRAL });
+      const r = await checkEntailment(original, `${first} Anatocism is the same.`, [], new NliClient(backend));
+      expect(batches[0].filter(p => p.hypothesis === `${first} Anatocism is the same.`)).toHaveLength(3);
+      expect(batches[0].some(p => p.hypothesis === 'Anatocism is the same.')).toBe(false);
+      expect(r.sentenceScores[1]).toMatchObject({
+        sentence: 'Anatocism is the same.', hypothesis: `${first} Anatocism is the same.`,
+      });
+      expect(r.sentenceScores[0].hypothesis).toBeUndefined();
+      expect(r.unsupportedSentences).toEqual(['Anatocism is the same.']);
+    });
+
+    it('still decides glossary exemptions on the sentence itself', async () => {
+      const def = 'Reparations means money paid for damage.';
+      const r = await checkEntailment(
+        ORIGINAL, `The treaty finally ended the long war. ${def}`, ['reparations'],
+        new NliClient(fakeBackend({ [def]: NEUTRAL }).backend),
+      );
+      expect(r.exemptedSentences).toEqual([def]);
+      expect(r.sentenceScores[1].hypothesis).toBe(`The treaty finally ended the long war. ${def}`);
+    });
   });
 
   it('exempts a glossary sentence from entailment but not from contradiction', async () => {

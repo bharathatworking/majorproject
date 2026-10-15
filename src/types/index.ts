@@ -159,6 +159,11 @@ export interface MeaningCheck {
 /** NLI scores of one simplified sentence over its premises (lib/quality/nli.ts). */
 export interface SentenceScore {
   sentence: string;
+  /**
+   * The text scored as the hypothesis: the sentence, or the previous
+   * sentence plus it when it is short or referring (hypothesisFor in nli.ts).
+   */
+  hypothesis?: string;
   /** Max entailment over the sentence's premises. */
   entailment: number;
   /** Contradiction per NLI_CONTRADICTION_AGG. */
@@ -456,6 +461,8 @@ export interface RunLog {
     contradictionAggregation?: 'max' | 'best-entailing';
     /** NLI paragraph rule (absent in logs before clarity-run-report/3, which used 'A'). */
     paragraphRule?: NliParagraphRule;
+    /** How hypotheses are formed (config NLI_HYPOTHESIS_CONTEXT; absent: each sentence alone). */
+    hypothesisContext?: string;
   };
   summary: {
     nodes: number;

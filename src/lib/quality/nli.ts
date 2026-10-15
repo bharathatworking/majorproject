@@ -30,6 +30,12 @@
  *    definitions are removed first (lib/quality/glossary.ts).
  *  - Sentences are split from toPlainText(output), so every bullet item is
  *    its own hypothesis, with the same boundary rule as the rolling context.
+ *  - Hypothesis context (hypothesisFor): a sentence of fewer than
+ *    NLI_CONTEXT_MAX_WORDS words, or one starting with This / That / It /
+ *    These / They, is scored as "<previous sentence> <sentence>", since alone
+ *    it has nothing for the premises to entail ("Anatocism is the same.").
+ *    Verdicts and reasons still name the sentence itself, and glossary
+ *    exemptions are decided on it alone.
  *  - NliClient sends a node's uncached pairs in batches of
  *    NLI_BATCH_SIZE_WEBGPU (32) or NLI_BATCH_SIZE_WASM (8), by the backend
  *    the model loaded on, and keeps an in-memory LRU of pair scores keyed by
@@ -52,7 +58,8 @@ import { toPlainText } from '../render/format-output';
 import { sha256 } from '../utils/hash';
 import { getNliBench, getNliDevice, saveNliBench } from '../storage/nli-bench';
 import {
-  NLI_BATCH_SIZE_WASM, NLI_BATCH_SIZE_WEBGPU, NLI_CACHE_MAX, NLI_CONTRADICTION_AGG,
+  NLI_BATCH_SIZE_WASM, NLI_BATCH_SIZE_WEBGPU, NLI_CACHE_MAX, NLI_CONTEXT_MAX_WORDS, NLI_CONTRADICTION_AGG,
+  NLI_REFERRING_START,
   NLI_LOAD_TIMEOUT_MS, NLI_MODEL_ID, NLI_SCORE_TIMEOUT_MS, NLI_TOP_PREMISES,
 } from './config';
 import { selectExemptions, stripParentheticalDefinitions } from './glossary';
@@ -153,6 +160,21 @@ export function splitSentences(text: string): string[] {
     .flatMap(line => line.split(/(?<=[.!?])\s+/))
     .map(s => s.trim())
     .filter(s => s !== '');
+}
+
+/** A short ("Flashlight.") or referring ("That's called inflation.") sentence. */
+export function needsContext(sentence: string): boolean {
+  const words = sentence.split(/\s+/).filter(Boolean).length;
+  return words < NLI_CONTEXT_MAX_WORDS || NLI_REFERRING_START.test(sentence);
+}
+
+/**
+ * The hypothesis scored for sentence i: the previous sentence plus it when it
+ * needs context (needsContext), else the sentence alone. The first sentence
+ * never has context.
+ */
+export function hypothesisFor(sentences: readonly string[], i: number): string {
+  return i > 0 && needsContext(sentences[i]) ? `${sentences[i - 1]} ${sentences[i]}` : sentences[i];
 }
 
 // ─── Worker backend ───────────────────────────────────────────────────────────
@@ -544,10 +566,11 @@ export async function checkEntailment(
   const premises = buildPremises(splitSentences(original));
   if (premises.length === 0) premises.push(original.trim());
 
-  const { top, ranking } = await pickPremises(premises, sentences, options.embed, label);
+  const hypotheses = sentences.map((_, i) => hypothesisFor(sentences, i));
+  const { top, ranking } = await pickPremises(premises, hypotheses, options.embed, label);
   const ranked = performance.now();
 
-  const pairs = sentences.flatMap((hypothesis, i) => top[i].map(j => ({ premise: premises[j], hypothesis })));
+  const pairs = hypotheses.flatMap((hypothesis, i) => top[i].map(j => ({ premise: premises[j], hypothesis })));
   const { probs, cached, truncated } = await client.scorePairs(pairs);
   const scoreMs = performance.now() - ranked;
   const exempt = new Set(selectExemptions(sentences, hintedWords));
@@ -563,7 +586,13 @@ export async function checkEntailment(
         `(entailment ${p.entailment.toFixed(2)}, contradiction ${p.contradiction.toFixed(2)}): "${sentence}"`,
       );
     }
-    return { sentence, entailment: p.entailment, contradiction: p.contradiction, exempt: exempt.has(i) };
+    return {
+      sentence,
+      ...(hypotheses[i] !== sentence && { hypothesis: hypotheses[i] }),
+      entailment: p.entailment,
+      contradiction: p.contradiction,
+      exempt: exempt.has(i),
+    };
   });
   const verdict = nliVerdict(sentenceScores);
   const scored = sentenceScores.filter(s => !s.exempt);

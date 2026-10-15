@@ -50,6 +50,8 @@ A paragraph is **faithful** when every statement in it is supported by the origi
 
 ### How an item is judged (the extension's rule)
 
+Since 2026-10-15 (round 2), a simplified sentence of fewer than 7 words, or one starting with This / That / It / These / They, is scored together with the previous simplified sentence (`hypothesisFor` in `nli.ts`). The sentence-level set (`pairs.jsonl`) scores single hypotheses without a previous sentence, so this rule doesn't apply there.
+
 An item **passes** at a setting when all of these hold:
 
 - SBERT cosine (all-minilm, original vs the plain output) ≥ `SIM_MIN`.

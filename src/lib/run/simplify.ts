@@ -115,8 +115,8 @@ import { PREMISE_STRATEGY } from '../quality/premises';
 import { failureBreakdown, failuresFromReasons, formatFailureBreakdown } from '../quality/verdict';
 import {
   CONTRADICTION_MAX, ENTAILMENT_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
-  NLI_CONTRADICTION_AGG, NLI_MODEL_ID, NLI_PARAGRAPH_RULE, NLI_BUDGET_MS, QUALITY_THRESHOLD, SIMILARITY_THRESHOLD,
-  THESIS_COVERAGE_MIN, WEIGHTS,
+  NLI_BUDGET_MS, NLI_CONTRADICTION_AGG, NLI_HYPOTHESIS_CONTEXT, NLI_MODEL_ID, NLI_PARAGRAPH_RULE,
+  QUALITY_THRESHOLD, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN, WEIGHTS,
 } from '../quality/config';
 import { isFullyChecked, meaningStatusOf, summarizeMeaning } from '../quality/similarity';
 import { formatSeconds, summarizeRun, type NodeTiming } from './timing';
@@ -905,6 +905,7 @@ export async function runSimplification(
       premiseStrategy: PREMISE_STRATEGY,
       contradictionAggregation: NLI_CONTRADICTION_AGG,
       paragraphRule: NLI_PARAGRAPH_RULE,
+      hypothesisContext: NLI_HYPOTHESIS_CONTEXT,
     },
     summary: {
       nodes: summary.nodes,

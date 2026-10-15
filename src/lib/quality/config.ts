@@ -45,6 +45,20 @@ export const NLI_PARAGRAPH_RULE: 'A' | 'B' = 'A';
 /** Rule B tolerates one neutral sentence only in outputs this long or longer. */
 export const NLI_NEUTRAL_MIN_SENTENCES = 6;
 
+/**
+ * Hypothesis context (lib/quality/nli.ts hypothesisFor): a simplified
+ * sentence with fewer words than this, or one starting with a referring word
+ * (NLI_REFERRING_START), is scored together with the previous simplified
+ * sentence. Alone, "That's called inflation." or "Anatocism is the same." has
+ * no subject the premises can entail, and the model reads it as neutral or
+ * contradicted.
+ */
+export const NLI_CONTEXT_MAX_WORDS = 7;
+export const NLI_REFERRING_START = /^["'“‘(]?(?:this|that|it|these|they)\b/i;
+
+/** Recorded in every run log: how a hypothesis is formed. */
+export const NLI_HYPOTHESIS_CONTEXT = 'prev-sentence-if-<7-words-or-referring';
+
 /** Nodes with fewer words than this skip all meaning checks. */
 export const MIN_WORDS_FOR_CHECK = 8;
 
