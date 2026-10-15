@@ -21,7 +21,15 @@
  */
 export const SIMILARITY_THRESHOLD = 0.87;
 
-/** Every non-exempt simplified sentence needs at least this entailment probability. */
+/**
+ * Every non-exempt simplified sentence needs at least this entailment probability.
+ * Calibration 2026-10-15 (npm run calibrate-nli; eval/nli-calibration/, 60
+ * items, PROPOSED labels not yet reviewed; top-3 premises, 'best-entailing'):
+ * no value from 0.30 to 0.70 meets false-fail ≤ 10% and catch ≥ 90%. Every
+ * value gives the same 13.3% false-fail (4/30 faithful) and 96.7% catch
+ * (29/30 wrong), because the model's entailment scores are bimodal. NOT
+ * frozen: it stays 0.5 until the labels are reviewed and the author decides.
+ */
 export const ENTAILMENT_MIN = 0.5;
 
 /** No simplified sentence (exempt or not) may exceed this contradiction probability. */
@@ -68,8 +76,13 @@ export const NLI_TOP_PREMISES = 3;
  * How a sentence's contradiction is taken over its premises: 'max' (the
  * highest over all scored premises) or 'best-entailing' (the contradiction
  * of the premise that entails it best). Entailment is always the max.
+ * Calibration 2026-10-15 (npm run calibrate-nli, 60 items, proposed labels):
+ * 'max' failed 30.0% of faithful sentences, 8 of them on contradiction alone
+ * (e.g. "It was named a World Heritage Site in 1981." scored 0.99 against
+ * another sentence's date), so it is 'best-entailing': 13.3% false-fail,
+ * 96.7% catch.
  */
-export const NLI_CONTRADICTION_AGG: 'max' | 'best-entailing' = 'max';
+export const NLI_CONTRADICTION_AGG: 'max' | 'best-entailing' = 'best-entailing';
 
 /** Pair scores kept in memory (least recently used evicted). */
 export const NLI_CACHE_MAX = 500;

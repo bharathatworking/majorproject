@@ -47,6 +47,8 @@ CLAUDE.md, README.md, PROJECT_CONTEXT.md
 package.json, tsconfig.json, vite.config.ts, vitest.config.ts
 icons/                       icon16/32/48/128.png
 scripts/fetch-models.mjs     npm run fetch-models: NLI model (pinned, SHA-256 checked) + ORT wasm into public/
+scripts/calibrate-nli.mjs    npm run calibrate-nli: ENTAILMENT_MIN table on the calibration set (Node, same model and TS code)
+eval/nli-calibration/        paragraphs.jsonl (15 originals), pairs.jsonl (60 labelled sentences), SOURCES.md, README.md
 public/models/, public/ort/  git-ignored; copied by Vite into dist/models/ and dist/ort/
 src/
   manifest.ts                MV3 manifest (defineManifest); holds the pinned `key`
@@ -127,7 +129,7 @@ tests/
    6. **Stage 6C: meaning preservation, thesis standard** (`assessMeaning` in `src/lib/quality/meaning.ts`; every constant in `config.ts`). It covers every node except headings and texts under 8 words (`shouldCheckNode`, `MIN_WORDS_FOR_CHECK`). A version **passes** only if all three hold:
       - **SBERT:** `checkMeaning` (`semantic.ts`) embeds original and output in one `/api/embed` call; cosine ≥ `SIMILARITY_THRESHOLD = 0.87`.
       - **Entities:** `findMissingEntities` finds none missing (case, possessive 's and thousands separators ignored; numbers also match by value). Entities compare on core tokens (`coreTokens`: a leading in / on / at / the is dropped). `detectEntities` trims trailing punctuation, drops a date's leading in / on / at / the, and types a date that is only a time-zone abbreviation (`TIME_ZONES` in `src/lib/segmentation/time-zones.ts`: PST, EST, IST, UTC, GMT, …) as `timezone`; a time zone is kept when its abbreviation is still a whole word ("in PST time zone" is kept by "during PST"), and a dropped one reads "You dropped the time zone PST." "9am EST" stays a date. `entityRecall` is over distinct entity texts.
-      - **NLI** (`checkEntailment` in `nli.ts`): the output is split into sentences (`splitSentences`: `toPlainText`, then the `(?<=[.!?])\s+` rule and line breaks, so each bullet is a sentence); these are the hypotheses. **Premises follow SummaC zero-shot** (Laban, Schnabel, Bennett & Hearst, 2022, "SummaC: Re-Visiting NLI-based Models for Inconsistency Detection in Summarization", *TACL* 10, 163–177), in `premises.ts`: every original sentence plus every window of 2 adjacent original sentences (`buildPremises`). Each hypothesis is scored only against its `NLI_TOP_PREMISES = 3` most similar premises: ranked by all-minilm cosine (`rankPremises`, using the run's per-node embedding memo, so the original's premise vectors are computed once per node), or by content-word overlap (`lexicalRank`) when the embedding model is missing or fails; with 3 premises or fewer all are scored (`ranking: 'all'`). Entailment of a sentence = max over its premises; contradiction = max over its premises (`NLI_CONTRADICTION_AGG = 'max'`; `'best-entailing'` takes the best-entailing premise's contradiction instead). All of a node's pairs go to the worker in one call. Every non-exempt sentence needs entailment ≥ `ENTAILMENT_MIN`, and every sentence contradiction ≤ `CONTRADICTION_MAX = 0.2`.
+      - **NLI** (`checkEntailment` in `nli.ts`): the output is split into sentences (`splitSentences`: `toPlainText`, then the `(?<=[.!?])\s+` rule and line breaks, so each bullet is a sentence); these are the hypotheses. **Premises follow SummaC zero-shot** (Laban, Schnabel, Bennett & Hearst, 2022, "SummaC: Re-Visiting NLI-based Models for Inconsistency Detection in Summarization", *TACL* 10, 163–177), in `premises.ts`: every original sentence plus every window of 2 adjacent original sentences (`buildPremises`). Each hypothesis is scored only against its `NLI_TOP_PREMISES = 3` most similar premises: ranked by all-minilm cosine (`rankPremises`, using the run's per-node embedding memo, so the original's premise vectors are computed once per node), or by content-word overlap (`lexicalRank`) when the embedding model is missing or fails; with 3 premises or fewer all are scored (`ranking: 'all'`). Entailment of a sentence = max over its premises; contradiction = the contradiction of the best-entailing premise (`NLI_CONTRADICTION_AGG = 'best-entailing'`). The alternative `'max'` (highest contradiction over the scored premises) was tried first and dropped after calibration, because a faithful sentence was often "contradicted" by a premise about something else, such as another date. All of a node's pairs go to the worker in one call. Every non-exempt sentence needs entailment ≥ `ENTAILMENT_MIN`, and every sentence contradiction ≤ `CONTRADICTION_MAX = 0.2`.
       - **Glossary exemptions** (`glossary.ts`, pure, reusable by the offline benchmark): a sentence that defines one of this node's hinted words (`hintedWords` in `builder.ts`, the exact lexical-hint list; empty with `keepTerms` or tier `none`) skips the entailment requirement, never the contradiction one. A definition is "X means …", "X refers to …", or "X is" followed by a / an / the / a kind of / when / how; "Inflation is rising." is **not** a definition. One exemption per word; the cap is `max(1, floor(0.3 × sentences))` (`GLOSSARY_EXEMPTION_MAX_RATE`) for nodes of 2+ sentences, and a 1-sentence node gets none. Parenthetical definitions of hinted words (`word (definition)`) are removed before NLI. Each exemption is logged.
       - **Runtime:** `nli.worker.ts` runs `AutoTokenizer` + `AutoModelForSequenceClassification` with the **same q8 weights on every backend** (`dtype: 'q8'`), `env.allowRemoteModels = false`, model files from `chrome.runtime.getURL('models/')` and the wasm from `ort/` (`wasmPaths` set explicitly, `useWasmCache` off — the default loads the factory from a `blob:` URL, which the CSP blocks). **WebGPU first:** the worker requests the `'high-performance'` adapter (the NVIDIA GPU on a dual-GPU laptop), hands it to ONNX Runtime as `env.backends.onnx.webgpu.adapter`, loads with `device: 'webgpu'` and runs one warm-up pair; any failure falls back to `device: 'wasm'` (one thread). ORT's WebGPU build loads the same `ort-wasm-simd-threaded.asyncify` files, and WGSL shaders are not script, so **no CSP change** is needed. The page logs `[Clarity] NLI model … loaded on webgpu (nvidia …) in N ms` (or `wasm`, with the WebGPU error). Each pair is also tokenized untruncated; pairs over 512 tokens are flagged `truncated` and counted per node and per run. Labels come from the model's `id2label`. `NliClient` sends a node's uncached pairs in one call (`NLI_BATCH_SIZE = 64` cap) and keeps an in-memory LRU (`NLI_CACHE_MAX = 500`) keyed by `sha256(premise, hypothesis)`. The worker is created lazily, once per app tab.
       - **Benchmark switch:** `chrome.storage.local.set({ 'debug:nliDevice': 'wasm' })` in DevTools (app tab) forces wasm for the next load (reload the app tab); remove the key to go back to WebGPU first. Used to measure both backends on one machine.
@@ -173,7 +175,7 @@ The main app chunk is about 284 kB (97 kB gzip). **Never statically import** `pd
 | `src/lib/llm/ollama-provider.ts` | `OllamaProvider` (`simplifyChunk`, `embed`, `/api/tags` checks), `DEFAULT_LLM_MODEL`, `EMBED_MODEL`, `OllamaHttpError`, `chatModelsFromTags` |
 | `src/lib/prompt-builder/builder.ts` | `buildPrompt`, `readerRules`, `hintedWords` (the lexical-hint list, shared with the NLI glossary exemption) |
 | `src/lib/prompt-builder/variants.ts` | `PROMPT_VARIANTS`, `EXTRA_VARIANTS`, `EXAMPLES`, `pickExample`, `stripExampleLabel` |
-| `src/lib/quality/config.ts` | Every quality constant: `SIMILARITY_THRESHOLD` 0.87, `ENTAILMENT_MIN` 0.5, `CONTRADICTION_MAX` 0.2, `MIN_WORDS_FOR_CHECK`, `GLOSSARY_EXEMPTION_MAX_RATE`, `MAX_RETRY_REASONS`, `THESIS_COVERAGE_MIN`, the NLI model id, batch, cache, timeouts and `NLI_SLOW_MS`, and the stage 7 `WEIGHTS`, `QUALITY_THRESHOLD`, `MAX_MODEL_CALLS_PER_NODE`, grade and length constants. Import-free |
+| `src/lib/quality/config.ts` | Every quality constant: `SIMILARITY_THRESHOLD` 0.87, `ENTAILMENT_MIN` 0.5 (calibration result in its comment; not frozen yet), `CONTRADICTION_MAX` 0.2, `NLI_TOP_PREMISES` 3, `NLI_CONTRADICTION_AGG` `'best-entailing'`, `AUTO_LITE_PARAGRAPH_MS` 3000, `MIN_WORDS_FOR_CHECK`, `GLOSSARY_EXEMPTION_MAX_RATE`, `MAX_RETRY_REASONS`, `THESIS_COVERAGE_MIN`, the NLI model id, batch, cache, timeouts and `NLI_SLOW_MS`, and the stage 7 `WEIGHTS`, `QUALITY_THRESHOLD`, `MAX_MODEL_CALLS_PER_NODE`, grade and length constants. Import-free |
 | `src/lib/quality/meaning.ts` | `assessMeaning` (thesis verdict), reasons, `buildRetryInstruction`, `meaningScore`, `pickBetterVersion`, `candidatePasses`, `toStoredMeaning`, `MEANING_RETRY_INSTRUCTION` |
 | `src/lib/quality/nli.ts` / `nli.worker.ts` / `glossary.ts` | `checkEntailment`, `splitSentences`, `NliClient` (`load`, `bench`, `scorePairs`), `createWorkerBackend`, `getNliClient`, `prepareNli`, `NLI_BENCH_PAIRS`, `NliUnavailableError` / the Transformers.js worker (WebGPU → wasm) / `isGlossarySentence`, `selectExemptions`, `stripParentheticalDefinitions` |
 | `src/lib/quality/premises.ts` / `mode.ts` | `buildPremises`, `rankPremises`, `lexicalRank`, `aggregate`, `PREMISE_STRATEGY` (pure, also used by `npm run calibrate-nli`) / `chooseQualityMode`, `predictParagraphMs`, `isBenchStale`, `evidenceOf`, `hasWebGpuAdapter` |
@@ -226,6 +228,7 @@ Every mutating function in `documents.ts` goes through `enqueue` (from `createWr
 ```powershell
 npm install
 npm run fetch-models   # once per clone: NLI model + ORT wasm into public/ (~114 MB, git-ignored)
+npm run calibrate-nli  # ENTAILMENT_MIN calibration table (needs fetch-models; Ollama all-minilm for ranking)
 npm run build          # production build -> dist/
 npm run dev            # crxjs watch / hot reload
 npm test               # vitest run (tests/unit/**/*.test.ts)
@@ -253,8 +256,46 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 ## 8. Current status
 
 - **Done:** phases 1 to 4 (capture and documents, Reading, Progress and Settings, paste and PDF), reading presets, purpose-aware prompt rules and the lexical hint, the stage 6C semantic check, the performance work (skip easy nodes, result cache, start at the visible node, model setting, lazy loading), stage 7 (candidate scoring, prompt variants, run report) and Prompt 9 (the thesis meaning standard: SBERT ≥ 0.87 + entities + local NLI, glossary exemptions, pass rate and coverage).
-- **Health on 2026-10-15:** `npm test` passes (26 files, 497 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
+- **Health on 2026-10-15:** `npm test` passes (26 files, 498 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
 - **NLI premise strategy and speed (decided 2026-10-15).** The Chrome run of the whole-paragraph-premise engine (wasm) measured **13,376 ms of NLI per paragraph** (about 1 s per sentence, budget 500 ms, about 73% of run time) and 0/3 passed at average similarity 0.87. Decision: SummaC sentence premises pruned to the top 3 by all-minilm, one batch per node, WebGPU first with wasm fallback, the stricter glossary rule, and the Auto/Full/Lite quality mode. Not done (by decision): a bigger in-app NLI model, and a contradiction-only check. Multi-threaded wasm (COOP/COEP) is investigated but not applied.
+- **NLI calibration (2026-10-15, `eval/nli-calibration/`, `npm run calibrate-nli`).**
+  - **The set:** 15 originals:
+    - 12 Wikipedia lead paragraphs (CC BY-SA 4.0, pinned revisions).
+    - 3 public-domain U.S. government instruction or list texts (Ready.gov, NWS).
+  - **The items:** 60 sentences.
+    - 30 faithful ones, verbatim from real `qwen2.5:3b` outputs made with the app's prompt.
+    - 30 wrong ones: 7 changed numbers, 7 swapped names, 8 negations and 8 added facts. 2 of them are natural model errors.
+  - **Labels are proposed by Claude and not yet reviewed** (`reviewed: false`).
+  - **Results** (false-fail on faithful / catch on wrong):
+
+    | Strategy | False-fail | Catch |
+    |---|---|---|
+    | Whole-paragraph premise | 63.3% | 100% |
+    | Top-3 premises, `'max'` contradiction | 30.0% | 96.7% |
+    | Top-3 premises, `'best-entailing'` (now the setting) | 13.3% | 96.7% |
+
+    Every rate is flat across t = 0.30 to 0.70, because entailment scores are bimodal.
+  - **No `ENTAILMENT_MIN` meets false-fail ≤ 10% and catch ≥ 90%,** so it stays 0.5 and is **not frozen**. Next: review the labels, re-run with `-- --reviewed-only`, and decide.
+  - **Failures:**
+    - Faithful items that fail: `antibiotic-f2`, `photo-f2`, `compound-f1`, `compound-f2` (borderline).
+    - Wrong item missed: `amazon-w2`.
+  - **Truncated pairs (> 512 tokens):** 0/60 before, 0/180 after.
+  - **Speed proxy** (Node, 1 thread, per simplified paragraph), before → after: onnxruntime-web wasm 1,017 → 1,527 ms; onnxruntime-node CPU 363 → 526 ms. The new strategy scores 3× the pairs (291 vs 97), each shorter, so on wasm it is about 1.5× slower; WebGPU is the speed lever.
+  - **About the earlier 13,376 ms Chrome figure:** it most likely included the model load. The old code loaded the model lazily inside the first paragraph's NLI call, and the average was over 3 paragraphs. The new code loads in `prepareNli` before any check.
+- **Calibration rules:**
+  - `ENTAILMENT_MIN` is set only from `npm run calibrate-nli` and is then frozen for the benchmark.
+  - The calibration paragraphs are never reused in the Ask Gemini benchmark test set or any other test set.
+- **Multi-threaded wasm (investigated, not applied).**
+  - **What it would take:** the manifest keys `cross_origin_opener_policy: { value: 'same-origin' }` and `cross_origin_embedder_policy: { value: 'require-corp' }`, which make the app page `crossOriginIsolated`, plus `numThreads > 1` in the worker.
+  - **What already fits:**
+    - ORT's threaded asyncify build is the one already shipped, and it spawns its threads as same-origin module workers (`new Worker(new URL(import.meta.url))` on `ort/…asyncify.mjs`), so `script-src 'self'` allows them. No CSP change is needed.
+    - The app renders no cross-origin images or iframes (Reading renders text nodes only).
+    - pdf.js, the fonts and Chart.js are all same-origin.
+    - CORS-mode `fetch` to Ollama is allowed under COEP.
+  - **Unverified, needs a Chrome test:**
+    - Whether host-permission fetches to `localhost:11434` still pass under `require-corp`.
+    - Whether nested workers inherit COEP correctly.
+  - **Status:** not applied; needs the author's approval and a throwaway-build test.
 - **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, similarity, glossary, premises, nli, quality-mode, meaning, score, run-log, timing, simplify, text-blocks.
 - **Known issues (not yet fixed):**
   - Progress records the *target grade setting* per session, not measured reading ability.

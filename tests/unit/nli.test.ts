@@ -4,7 +4,9 @@ import {
   splitSentences, type BenchStore, type NliBackend, type NliPair, type NliProbs, type NliRequest,
   type NliResponse, type WorkerLike,
 } from '../../src/lib/quality/nli';
-import { CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_TOP_PREMISES } from '../../src/lib/quality/config';
+import {
+  CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_CONTRADICTION_AGG, NLI_TOP_PREMISES,
+} from '../../src/lib/quality/config';
 import type { NliBenchRecord } from '../../src/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -133,7 +135,7 @@ describe('checkEntailment', () => {
     expect(r).toMatchObject({ pairs: 6, ranking: 'all', truncatedPairs: 0 });
   });
 
-  it('takes the best entailment and the highest contradiction over the premises', async () => {
+  it('takes the best entailment over the premises, and contradiction per NLI_CONTRADICTION_AGG', async () => {
     const hyp = 'It was signed in 1919.';
     const byPremise: Record<string, NliProbs> = {
       [S0]: SUPPORTED,
@@ -143,9 +145,27 @@ describe('checkEntailment', () => {
     const backend: NliBackend = { score: async pairs => pairs.map(p => byPremise[p.premise]) };
     const r = await checkEntailment(ORIGINAL, hyp, [], new NliClient(backend));
     expect(r.minEntailment).toBeCloseTo(0.95);
-    expect(r.maxContradiction).toBeCloseTo(0.3);
-    expect(r.contradictedSentences).toEqual([hyp]);
     expect(r.unsupportedSentences).toEqual([]);
+    if (NLI_CONTRADICTION_AGG === 'best-entailing') {
+      // The contradiction of S0, which entails it best; S1's 0.3 is ignored
+      expect(r.maxContradiction).toBeCloseTo(0.01);
+      expect(r.contradictedSentences).toEqual([]);
+    } else {
+      expect(r.maxContradiction).toBeCloseTo(0.3);
+      expect(r.contradictedSentences).toEqual([hyp]);
+    }
+  });
+
+  it('still fails a sentence whose best-entailing premise contradicts it', async () => {
+    const hyp = 'It was signed in 1945.';
+    const backend: NliBackend = {
+      score: async pairs => pairs.map(p => (p.premise === S0
+        ? { entailment: 0.1, contradiction: 0.95, neutral: 0.05 }
+        : { entailment: 0.02, contradiction: 0.1, neutral: 0.88 })),
+    };
+    const r = await checkEntailment(ORIGINAL, hyp, [], new NliClient(backend));
+    expect(r.contradictedSentences).toEqual([hyp]);
+    expect(r.unsupportedSentences).toEqual([hyp]);
   });
 
   const LONG = 'Alpha founded the city. Beta built a bridge. Gamma wrote a poem.';
