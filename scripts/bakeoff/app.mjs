@@ -97,6 +97,7 @@ export async function openApp() {
     listItems,
     prepare,
     toPlainText: format.toPlainText,
+    isEnglishWord: word => common.isCommonWord(word),
     cosineSimilarity: similarity.cosineSimilarity,
     targetGrade: resolver.resolveTargetGrade(profile),
     close: () => vite.close(),

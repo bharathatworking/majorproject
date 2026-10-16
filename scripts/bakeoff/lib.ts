@@ -136,19 +136,23 @@ export function looksLikeRefusal(text: string): boolean {
   return REFUSAL.test(text.replace(/[’]/g, "'"));
 }
 
-const STOPWORDS = new Set(
-  'the a an and or but of to in on at for with by from as is are was were be been it its this that these those they he she we you i not no can will has have had do does did if so than then there their them which who what when where how'.split(' '),
-);
+/** Below this share of known English words (of 8+ words) an output counts as non-English. */
+export const MIN_ENGLISH_WORD_SHARE = 0.4;
 
-/** True when over 20% of letters are non-Latin, or under 15% of words are English stopwords. */
-export function looksNonEnglish(text: string): boolean {
+/**
+ * True when over 20% of letters are non-Latin, or under MIN_ENGLISH_WORD_SHARE
+ * of the words are known English words. `isEnglishWord` is the app's
+ * isCommonWord (the 5,000-word list with suffix stripping): a stopword test
+ * misfires on terse bullet summaries, which drop most function words.
+ */
+export function looksNonEnglish(text: string, isEnglishWord: (word: string) => boolean): boolean {
   const letters = text.match(/\p{L}/gu) ?? [];
   if (letters.length === 0) return false;
   const nonLatin = letters.filter(c => !/\p{Script=Latin}/u.test(c)).length;
   if (nonLatin / letters.length > 0.2) return true;
-  const words = wordsOf(text).filter(w => /\p{L}/u.test(w));
+  const words = wordsOf(text).filter(w => /^\p{L}+$/u.test(w));
   if (words.length < 8) return false;
-  return words.filter(w => STOPWORDS.has(w)).length / words.length < 0.15;
+  return words.filter(isEnglishWord).length / words.length < MIN_ENGLISH_WORD_SHARE;
 }
 
 export interface FlagInput {
@@ -163,6 +167,8 @@ export interface FlagInput {
   editRatio: number;
   /** all-minilm cosine; null until the flag pass has embedded the pair. */
   similarity: number | null;
+  /** Known English word test for looksNonEnglish (the app's isCommonWord). */
+  isEnglishWord: (word: string) => boolean;
 }
 
 export interface OutputFlags {
@@ -180,7 +186,7 @@ export function outputFlags(f: FlagInput): OutputFlags {
   return {
     empty,
     refusal: !empty && looksLikeRefusal(f.output),
-    nonEnglish: !empty && looksNonEnglish(f.output),
+    nonEnglish: !empty && looksNonEnglish(f.output, f.isEnglishWord),
     listLost: f.originalListItems > 0 && f.outputListItems < f.originalListItems,
     nearCopy: !empty && isNearCopy(f.editRatio, f.similarity),
     lengthOutOfRange: f.lengthRatio < LENGTH_RATIO_MIN || f.lengthRatio > LENGTH_RATIO_MAX,
