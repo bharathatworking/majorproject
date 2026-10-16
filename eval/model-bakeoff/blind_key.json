@@ -1,0 +1,485 @@
+{
+  "seed": 20261016,
+  "rows": {
+    "B001": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-silk-road"
+    },
+    "B002": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-transistor"
+    },
+    "B003": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-cholera"
+    },
+    "B004": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-gps"
+    },
+    "B005": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-niddk-ckd-intro"
+    },
+    "B006": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-nws-flood-incident-sign"
+    },
+    "B007": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-byzantine-empire"
+    },
+    "B008": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-drowning"
+    },
+    "B009": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-ready-tsunamis-prepare"
+    },
+    "B010": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-gps"
+    },
+    "B011": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-nws-wind-shelter"
+    },
+    "B012": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-niddk-ckd-intro"
+    },
+    "B013": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-ready-cyber-protect"
+    },
+    "B014": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-nia-falls-hospital"
+    },
+    "B015": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-nia-falls-hospital"
+    },
+    "B016": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-tuberculosis"
+    },
+    "B017": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-mortgage"
+    },
+    "B018": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-ozone-layer"
+    },
+    "B019": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-ottoman-empire"
+    },
+    "B020": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-ready-finance-benefits"
+    },
+    "B021": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-black-death"
+    },
+    "B022": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-cholera"
+    },
+    "B023": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-nia-falls-causes"
+    },
+    "B024": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-byzantine-empire"
+    },
+    "B025": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-lithium-ion-battery"
+    },
+    "B026": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-silk-road"
+    },
+    "B027": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-gps"
+    },
+    "B028": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-enzyme"
+    },
+    "B029": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-ready-finance-benefits"
+    },
+    "B030": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-carbon-monoxide-poisoning"
+    },
+    "B031": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-drowning"
+    },
+    "B032": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-ready-pandemic-prepare"
+    },
+    "B033": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-asthma"
+    },
+    "B034": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-hypertension"
+    },
+    "B035": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-tuberculosis"
+    },
+    "B036": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-lithium-ion-battery"
+    },
+    "B037": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-drowning"
+    },
+    "B038": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-ready-finance-benefits"
+    },
+    "B039": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-ready-cyber-protect"
+    },
+    "B040": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-ready-cyber-attacks"
+    },
+    "B041": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-neuron"
+    },
+    "B042": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-ready-landslides-intro"
+    },
+    "B043": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-enzyme"
+    },
+    "B044": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-nia-falls-hospital"
+    },
+    "B045": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-nws-tsunami-warning"
+    },
+    "B046": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-enzyme"
+    },
+    "B047": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-nia-falls-causes"
+    },
+    "B048": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-cholera"
+    },
+    "B049": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-seat-belt"
+    },
+    "B050": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-transistor"
+    },
+    "B051": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-ready-cyber-protect"
+    },
+    "B052": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-ready-cyber-attacks"
+    },
+    "B053": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-nws-wind-shelter"
+    },
+    "B054": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-ready-pandemic-prepare"
+    },
+    "B055": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-ottoman-empire"
+    },
+    "B056": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-avalanche"
+    },
+    "B057": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-byzantine-empire"
+    },
+    "B058": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-ready-finance-tips"
+    },
+    "B059": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-hyperinflation"
+    },
+    "B060": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-black-death"
+    },
+    "B061": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-bond"
+    },
+    "B062": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-nia-falls-causes"
+    },
+    "B063": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-silk-road"
+    },
+    "B064": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-hyperinflation"
+    },
+    "B065": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-nws-cold-hypothermia"
+    },
+    "B066": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-ready-finance-tips"
+    },
+    "B067": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-greenhouse-effect"
+    },
+    "B068": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-bond"
+    },
+    "B069": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-hyperinflation"
+    },
+    "B070": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-ready-tsunamis-prepare"
+    },
+    "B071": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-ready-tsunamis-prepare"
+    },
+    "B072": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-nws-cold-hypothermia"
+    },
+    "B073": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-asthma"
+    },
+    "B074": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-transistor"
+    },
+    "B075": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-ready-landslides-before"
+    },
+    "B076": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-nws-cold-hypothermia"
+    },
+    "B077": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-ready-landslides-before"
+    },
+    "B078": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-neuron"
+    },
+    "B079": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-tuberculosis"
+    },
+    "B080": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-ready-landslides-intro"
+    },
+    "B081": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-ready-cyber-attacks"
+    },
+    "B082": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-nws-tsunami-warning"
+    },
+    "B083": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-nws-tsunami-warning"
+    },
+    "B084": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-mortgage"
+    },
+    "B085": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-carbon-monoxide-poisoning"
+    },
+    "B086": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-avalanche"
+    },
+    "B087": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-avalanche"
+    },
+    "B088": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-ready-volcanoes-intro"
+    },
+    "B089": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-hypertension"
+    },
+    "B090": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-ready-volcanoes-intro"
+    },
+    "B091": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-nws-flood-incident-sign"
+    },
+    "B092": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-seat-belt"
+    },
+    "B093": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-credit-score"
+    },
+    "B094": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-public-key-cryptography"
+    },
+    "B095": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-greenhouse-effect"
+    },
+    "B096": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-carbon-monoxide-poisoning"
+    },
+    "B097": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-lithium-ion-battery"
+    },
+    "B098": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-ready-landslides-intro"
+    },
+    "B099": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-nws-flood-incident-sign"
+    },
+    "B100": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-public-key-cryptography"
+    },
+    "B101": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-hypertension"
+    },
+    "B102": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-seat-belt"
+    },
+    "B103": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-bond"
+    },
+    "B104": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-mortgage"
+    },
+    "B105": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-neuron"
+    },
+    "B106": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-ready-pandemic-prepare"
+    },
+    "B107": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-ottoman-empire"
+    },
+    "B108": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-ready-landslides-before"
+    },
+    "B109": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-ozone-layer"
+    },
+    "B110": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-ozone-layer"
+    },
+    "B111": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-gov-ready-finance-tips"
+    },
+    "B112": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-nws-wind-shelter"
+    },
+    "B113": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-wiki-black-death"
+    },
+    "B114": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-public-key-cryptography"
+    },
+    "B115": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-asthma"
+    },
+    "B116": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-gov-ready-volcanoes-intro"
+    },
+    "B117": {
+      "model": "gemma4:e2b-it-qat",
+      "paragraphId": "bo-gov-niddk-ckd-intro"
+    },
+    "B118": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-greenhouse-effect"
+    },
+    "B119": {
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "paragraphId": "bo-wiki-credit-score"
+    },
+    "B120": {
+      "model": "qwen2.5:3b",
+      "paragraphId": "bo-wiki-credit-score"
+    }
+  }
+}

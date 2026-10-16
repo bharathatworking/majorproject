@@ -55,7 +55,15 @@ scripts/add-paragraph-items.mjs   adds the missing #real items (balanced dev/tes
 scripts/labels.mjs           npm run export-labels / import-labels: blind labels.csv (real outputs, random order) ↔ paragraph-items.jsonl
 scripts/replay-meaning.mjs   node scripts/replay-meaning.mjs <pdf|txt>: a run without Chrome (app split, prompt, qwen2.5:3b, meaning check + retry) and its failure breakdown
 scripts/lib/nli-node.mjs     shared by the Node scripts: NLI model on onnxruntime-node, all-minilm via Ollama, Vite module loader, Wilson interval
-eval/nli-calibration/        paragraphs.jsonl (15 originals), pairs.jsonl (60 labelled sentences), SOURCES.md, README.md
+scripts/bakeoff/             Prompt 9.4 base-model bake-off (eval only; no src/ change):
+  lib.ts                     pure logic (cleaning, flags, resume, blind export/unblind, Wilson, McNemar, winner rule); tested
+  app.mjs                    Vite loader: the app's exact prompt (Student preset, grade 8) and metrics for a paragraph
+  fetch-wiki.mjs             one-off: Wikipedia lead paragraphs (API extract + revision id), cleaned
+  check-data.mjs             npm run bakeoff:check: data rules + no overlap with eval/nli-calibration
+  run.mjs                    npm run bakeoff:run: 3 models x 40 paragraphs (GPU) and x 10 (CPU-only), resumable, flag pass
+  export.mjs / unblind.mjs   npm run bakeoff:export (blind labels_bakeoff.csv + blind_key.json) / bakeoff:unblind (REPORT.md)
+eval/nli-calibration/        paragraphs.jsonl (67 originals), pairs.jsonl (60 labelled sentences), paragraph-items.jsonl, labels.csv, SOURCES.md, README.md
+eval/model-bakeoff/          bakeoff-only paragraphs.jsonl (40), SOURCES.md, README.md, outputs.jsonl, labels_bakeoff.csv, blind_key.json (later models.json, REPORT.md)
 public/models/, public/ort/  git-ignored; copied by Vite into dist/models/ and dist/ort/
 src/
   manifest.ts                MV3 manifest (defineManifest); holds the pinned `key`
@@ -86,7 +94,7 @@ src/
 tests/
   mocks/          chrome.ts (installChromeMock), fixtures.ts (makeReport, makeDocInput,
                   makeAssessment, makeEntailment, makeRunMeaningSummary)
-  unit/           26 *.test.ts files (see section 8)
+  unit/           30 *.test.ts files (see section 8)
 ```
 
 `dist/`, `node_modules/` and `coverage/` are git-ignored.
@@ -249,6 +257,10 @@ npm run meaning-breakdown -- <report.json>  # failure kinds per run of a downloa
 npm run export-labels      # eval/nli-calibration/labels.csv for blind labelling (never overwrites labels without --force)
 npm run import-labels      # labels.csv → paragraph-items.jsonl (-- --dry-run)
 npm run calibrate-meaning  # paragraph-level threshold choice (dev) and test report; -- --reviewed-only, --verbose
+npm run bakeoff:check      # Prompt 9.4: validate eval/model-bakeoff/paragraphs.jsonl
+npm run bakeoff:run        # generate the bake-off outputs (resumable; -- --model <tag>, --gpu-only, --cpu-only, --limit N, --flags-only)
+npm run bakeoff:export     # blind labels_bakeoff.csv + blind_key.json (never overwrites labels without --force)
+npm run bakeoff:unblind    # after labelling: eval/model-bakeoff/REPORT.md
 npm run build          # production build -> dist/
 npm run dev            # crxjs watch / hot reload
 npm test               # vitest run (tests/unit/**/*.test.ts)
@@ -334,6 +346,12 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - **Calibration rules:**
   - `ENTAILMENT_MIN` is set only from `npm run calibrate-nli` and is then frozen for the benchmark.
   - The calibration paragraphs are never reused in the Ask Gemini benchmark test set or any other test set.
+- **Base-model bake-off (Prompt 9.4, 2026-10-16, `eval/model-bakeoff/`; eval only, the app's default model is unchanged).**
+  - **Goal:** choose the base model for the Prompt 10 fine-tune from `qwen2.5:3b`, `qwen3:4b-instruct-2507-q4_K_M` and `gemma4:e2b-it-qat`, with blind human meaning labels.
+  - **Data:** 40 new **bakeoff-only** paragraphs (24 Wikipedia, 16 ready.gov / weather.gov / nih.gov; 10 lists, 20 with numbers). `npm run bakeoff:check` checks FKGL ≥ 9, not already simple at grade 8, 40–220 words, and no overlap with the calibration set.
+  - **Generation:** the app's exact prompt (Student preset, grade 8), each model's default sampling, seed 42, `think: false` where supported, one first-try output; GPU on all 40, CPU-only (`num_gpu: 0`) on 10.
+  - **Status:** data, outputs and the blind sheet (`labels_bakeoff.csv`, 120 rows) are done; **waiting for the author's labels**. The analysis and winner rule (`unblind.mjs`) were committed before labelling.
+  - **Rule:** the bake-off paragraphs are never reused in the benchmark, the calibration or a training set.
 - **Multi-threaded wasm (investigated, not applied).**
   - **What it would take:** the manifest keys `cross_origin_opener_policy: { value: 'same-origin' }` and `cross_origin_embedder_policy: { value: 'require-corp' }`, which make the app page `crossOriginIsolated`, plus `numThreads > 1` in the worker.
   - **What already fits:**
@@ -345,7 +363,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
     - Whether host-permission fetches to `localhost:11434` still pass under `require-corp`.
     - Whether nested workers inherit COEP correctly.
   - **Status:** not applied; needs the author's approval and a throwaway-build test.
-- **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, similarity, glossary, premises, nli, verdict, values, progress, quality-mode, meaning, score, run-log, timing, simplify, text-blocks.
+- **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, similarity, glossary, premises, nli, verdict, values, progress, quality-mode, meaning, score, run-log, timing, simplify, text-blocks, bakeoff (`scripts/bakeoff/lib.ts`).
 - **Known issues (not yet fixed):**
   - Progress records the *target grade setting* per session, not measured reading ability.
   - Leftovers from the old Chrome built-in AI provider: the unused `_onProgress` parameter of `createBaseSession`, the `'list'` and `'table'` entries in `STORED_TYPE`, and the `'downloadable'` and `'downloading'` values in `LLMAvailability`. A built-in AI (Gemini Nano) provider is **cancelled** and will not be added.
@@ -353,7 +371,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - The README now states Chrome 138+, matching the manifest.
 - **Planned work after stage 7, in this order:**
   1. **Prompt 9 follow-up:** measure NLI ms per paragraph in Chrome on WebGPU and on wasm, and freeze `ENTAILMENT_MIN` from the calibration set before the benchmark.
-  2. **Prompt 10: fine-tuned model.** A LoRA fine-tune named `clarity-simplify`, built in a `training/` folder on Colab from Qwen2.5-3B-Instruct and exported as GGUF for Ollama.
+  2. **Prompt 10: fine-tuned model.** A LoRA fine-tune named `clarity-simplify`, built in a `training/` folder on Colab from the base model chosen by the Prompt 9.4 bake-off (`eval/model-bakeoff/REPORT.md`), and exported as GGUF for Ollama.
   3. **Prompt 11:** integrate the fine-tuned model into the hybrid engine.
   4. **Prompt 12:**
      - Web URL input
