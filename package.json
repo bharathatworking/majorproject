@@ -14,7 +14,8 @@
     "meaning-breakdown": "node scripts/meaning-breakdown.mjs",
     "calibrate-meaning": "node scripts/calibrate-meaning.mjs",
     "export-labels": "node scripts/labels.mjs export",
-    "import-labels": "node scripts/labels.mjs import"
+    "import-labels": "node scripts/labels.mjs import",
+    "bakeoff:check": "node scripts/bakeoff/check-data.mjs"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.1",
