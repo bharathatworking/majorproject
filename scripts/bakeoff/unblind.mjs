@@ -174,7 +174,7 @@ try {
     '',
     `1. Eligible: mean FKGL drop ≥ ${lib.MIN_FKGL_DROP} grades and near copies ≤ ${pct(lib.MAX_NEAR_COPY_SHARE, 0)} of outputs.`,
     '2. Among eligible models, the highest meaning kept wins.',
-    `3. If the top two are within ${pct(lib.TIE_MARGIN, 0)} points, the faster CPU-only model (median s/100 words) wins.`,
+    `3. If the top two are within ${(lib.TIE_MARGIN * 100).toFixed(0)} percentage points, the faster CPU-only model (median s/100 words) wins.`,
     '4. The winner must be fine-tunable with Unsloth on a Colab T4; otherwise it is dropped and the rule is applied again.',
     '',
     ...result.steps.map(s => `- ${s}`),

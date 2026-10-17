@@ -1,0 +1,32 @@
+{
+  "qwen2.5:3b": {
+    "licence": "Qwen Research License (non-commercial)",
+    "licenceUrl": "https://ollama.com/library/qwen2.5:3b",
+    "finetunable": true,
+    "unslothEvidence": [
+      { "label": "Unsloth model card: \"Qwen 2.5 (all model sizes) free Google Colab Tesla T4 notebook\"", "url": "https://huggingface.co/unsloth/Qwen2.5-3B-Instruct" },
+      { "label": "T4 notebook", "url": "https://colab.research.google.com/drive/1Kose-ucXO1IBaZq5BvbwWieuubP7hxvQ?usp=sharing" }
+    ],
+    "note": "Licence is the Qwen Research License (the 3B is the exception to Qwen2.5's Apache 2.0), which allows research and non-commercial use only."
+  },
+  "qwen3:4b-instruct-2507-q4_K_M": {
+    "licence": "Apache 2.0",
+    "licenceUrl": "https://ollama.com/library/qwen3:4b-instruct-2507-q4_K_M",
+    "finetunable": true,
+    "unslothEvidence": [
+      { "label": "Unsloth Qwen3 (4B) Instruct (2507) notebook", "url": "https://colab.research.google.com/github/unslothai/notebooks/blob/main/nb/Qwen3_(4B)-Instruct.ipynb" },
+      { "label": "Unsloth notebook list", "url": "https://unsloth.ai/docs/get-started/unsloth-notebooks" }
+    ],
+    "note": "Fine-tune base: unsloth/Qwen3-4B-Instruct-2507 (Apache 2.0). Its standard Colab notebook is listed without an A100 requirement, so it runs on the free T4."
+  },
+  "gemma4:e2b-it-qat": {
+    "licence": "Apache 2.0",
+    "licenceUrl": "https://ollama.com/library/gemma4:e2b-it-qat",
+    "finetunable": true,
+    "unslothEvidence": [
+      { "label": "Unsloth Gemma 4 fine-tuning guide (\"E2B LoRA works on 8-10GB VRAM\", free Colab notebooks)", "url": "https://unsloth.ai/docs/models/gemma-4/train" },
+      { "label": "Gemma4 (E2B) Text notebook", "url": "https://colab.research.google.com/github/unslothai/notebooks/blob/main/nb/Gemma4_(E2B)-Text.ipynb" }
+    ],
+    "note": "Fine-tune base: unsloth/gemma-4-E2B-it (Apache 2.0); the Ollama tag is a QAT build of it. The guide's only T4 caveat (an fp16 overflow) is about the audio path."
+  }
+}

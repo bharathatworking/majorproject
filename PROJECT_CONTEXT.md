@@ -63,7 +63,7 @@ scripts/bakeoff/             Prompt 9.4 base-model bake-off (eval only; no src/ 
   run.mjs                    npm run bakeoff:run: 3 models x 40 paragraphs (GPU) and x 10 (CPU-only), resumable, flag pass
   export.mjs / unblind.mjs   npm run bakeoff:export (blind labels_bakeoff.csv + blind_key.json) / bakeoff:unblind (REPORT.md)
 eval/nli-calibration/        paragraphs.jsonl (67 originals), pairs.jsonl (60 labelled sentences), paragraph-items.jsonl, labels.csv, SOURCES.md, README.md
-eval/model-bakeoff/          bakeoff-only paragraphs.jsonl (40), SOURCES.md, README.md, outputs.jsonl, labels_bakeoff.csv, blind_key.json (later models.json, REPORT.md)
+eval/model-bakeoff/          bakeoff-only paragraphs.jsonl (40), SOURCES.md, README.md, outputs.jsonl, labels_bakeoff.csv (labelled), blind_key.json, models.json (licences, Unsloth evidence), REPORT.md
 public/models/, public/ort/  git-ignored; copied by Vite into dist/models/ and dist/ort/
 src/
   manifest.ts                MV3 manifest (defineManifest); holds the pinned `key`
@@ -288,7 +288,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 ## 8. Current status
 
 - **Done:** phases 1 to 4 (capture and documents, Reading, Progress and Settings, paste and PDF), reading presets, purpose-aware prompt rules and the lexical hint, the stage 6C semantic check, the performance work (skip easy nodes, result cache, start at the visible node, model setting, lazy loading), stage 7 (candidate scoring, prompt variants, run report) and Prompt 9 (the thesis meaning standard: SBERT ≥ 0.87 + entities + local NLI, glossary exemptions, pass rate and coverage).
-- **Health on 2026-10-15:** `npm test` passes (29 files, 594 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
+- **Health on 2026-10-17:** `npm test` passes (30 files, 623 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
 - **NLI premise strategy and speed (decided 2026-10-15).** The Chrome run of the whole-paragraph-premise engine (wasm) measured **13,376 ms of NLI per paragraph** (about 1 s per sentence, budget 500 ms, about 73% of run time) and 0/3 passed at average similarity 0.87. Decision: SummaC sentence premises pruned to the top 3 by all-minilm, one batch per node, WebGPU first with wasm fallback, the stricter glossary rule, and the Auto/Full/Lite quality mode. Not done (by decision): a bigger in-app NLI model, and a contradiction-only check. Multi-threaded wasm (COOP/COEP) is investigated but not applied.
 - **NLI calibration (2026-10-15, `eval/nli-calibration/`, `npm run calibrate-nli`).**
   - **The set:** 15 originals:
@@ -350,7 +350,19 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
   - **Goal:** choose the base model for the Prompt 10 fine-tune from `qwen2.5:3b`, `qwen3:4b-instruct-2507-q4_K_M` and `gemma4:e2b-it-qat`, with blind human meaning labels.
   - **Data:** 40 new **bakeoff-only** paragraphs (24 Wikipedia, 16 ready.gov / weather.gov / nih.gov; 10 lists, 20 with numbers). `npm run bakeoff:check` checks FKGL ≥ 9, not already simple at grade 8, 40–220 words, and no overlap with the calibration set.
   - **Generation:** the app's exact prompt (Student preset, grade 8), each model's default sampling, seed 42, `think: false` where supported, one first-try output; GPU on all 40, CPU-only (`num_gpu: 0`) on 10.
-  - **Status:** data, outputs and the blind sheet (`labels_bakeoff.csv`, 120 rows) are done; **waiting for the author's labels**. The analysis and winner rule (`unblind.mjs`) were committed before labelling.
+  - **Labels:** 120 blind rows labelled by the author; the analysis and winner rule (`unblind.mjs`) were committed before labelling.
+  - **Result (2026-10-17, `eval/model-bakeoff/REPORT.md`):** the winner is **`qwen3:4b-instruct-2507-q4_K_M`**.
+
+    | Model | Meaning kept [Wilson 95% CI] | Near copies | Mean FKGL drop | CPU s/100 words (median) | GPU s/100 words (median) | Licence |
+    |---|---|---|---|---|---|---|
+    | `qwen2.5:3b` | 50.0% (20/40) [35–65%] | 0 | 6.18 | 8.53 | 1.23 | Qwen Research (non-commercial) |
+    | `qwen3:4b-instruct-2507-q4_K_M` | **85.0% (34/40)** [71–93%] | 0 | 6.35 | 14.19 | 2.10 | Apache 2.0 |
+    | `gemma4:e2b-it-qat` | 79.5% (31/39) [64–89%] | 1 | 6.67 | 9.66 | 1.42 | Apache 2.0 |
+
+    - All three are eligible. qwen3 leads gemma4 by 5.5 points, more than the 3-point tie margin, so the CPU tie-break doesn't apply. qwen3 is fine-tunable with Unsloth on a Colab T4 (the Qwen3 (4B) Instruct notebook).
+    - **McNemar:** both newer models beat `qwen2.5:3b` (p = 0.001 and 0.003). qwen3 vs gemma4 is not significant (5 vs 3 discordant pairs, p = 0.73).
+    - **Target hit:** every model overshoots below grade 8 (mean FKGL after 5.7–6.2), so hits within ±1 are low (15–28%).
+    - The app's default model is unchanged (`qwen2.5:3b`).
   - **Rule:** the bake-off paragraphs are never reused in the benchmark, the calibration or a training set.
 - **Multi-threaded wasm (investigated, not applied).**
   - **What it would take:** the manifest keys `cross_origin_opener_policy: { value: 'same-origin' }` and `cross_origin_embedder_policy: { value: 'require-corp' }`, which make the app page `crossOriginIsolated`, plus `numThreads > 1` in the worker.
@@ -371,7 +383,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - The README now states Chrome 138+, matching the manifest.
 - **Planned work after stage 7, in this order:**
   1. **Prompt 9 follow-up:** measure NLI ms per paragraph in Chrome on WebGPU and on wasm, and freeze `ENTAILMENT_MIN` from the calibration set before the benchmark.
-  2. **Prompt 10: fine-tuned model.** A LoRA fine-tune named `clarity-simplify`, built in a `training/` folder on Colab from the base model chosen by the Prompt 9.4 bake-off (`eval/model-bakeoff/REPORT.md`), and exported as GGUF for Ollama.
+  2. **Prompt 10: fine-tuned model.** A LoRA fine-tune named `clarity-simplify`, built in a `training/` folder on Colab from `Qwen3-4B-Instruct-2507`, the winner of the Prompt 9.4 bake-off (`eval/model-bakeoff/REPORT.md`), and exported as GGUF for Ollama.
   3. **Prompt 11:** integrate the fine-tuned model into the hybrid engine.
   4. **Prompt 12:**
      - Web URL input

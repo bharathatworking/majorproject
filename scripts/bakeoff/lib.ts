@@ -469,10 +469,10 @@ export function pickWinner(summaries: readonly ModelSummary[]): WinnerResult {
         pick = fb < fa ? second : first;
         steps.push(
           `${first.model} (${pp(first.meaningKept ?? 0)}) and ${second.model} (${pp(second.meaningKept ?? 0)}) ` +
-          `are within ${pp(TIE_MARGIN)}; the faster CPU-only model wins: ${pick.model}.`,
+          `are within ${(TIE_MARGIN * 100).toFixed(0)} percentage points; the faster CPU-only model wins: ${pick.model}.`,
         );
       } else {
-        steps.push(`${first.model} has the highest meaning kept (${pp(first.meaningKept ?? 0)}), ${pp(gap)} ahead of ${second.model}.`);
+        steps.push(`${first.model} has the highest meaning kept (${pp(first.meaningKept ?? 0)}), ${(gap * 100).toFixed(1)} percentage points ahead of ${second.model}.`);
       }
     } else {
       steps.push(`${pick.model} is the only eligible model left.`);
