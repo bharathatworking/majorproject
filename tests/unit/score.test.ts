@@ -75,13 +75,13 @@ describe('scoreCandidate', () => {
     expect(scoreCandidate(input(SIMPLE, 20)).gradeGap).toBeLessThan(0);
   });
 
-  it('total is the weighted sum of meaning (the assessment), readability and length', () => {
-    const meaning = makeAssessment({ similarity: 0.9, entityRecall: 0.75, minEntailment: 0.8, maxContradiction: 0.05 });
+  it('total is the weighted sum of meaning (the combined score), readability and length', () => {
+    const meaning = makeAssessment({ similarity: 0.9, entityRecall: 0.75, minEntailment: 0.8, maxContradiction: 0.05, score: 0.6 });
     const s = scoreCandidate({ ...input(SIMPLE, 6), meaning });
     expect(s).toMatchObject({ similarity: 0.9, entityRecall: 0.75, minEntailment: 0.8, maxContradiction: 0.05, passed: true });
     expect(s.lengthRatio).toBeCloseTo(11 / 15);
     const expected =
-      WEIGHTS.meaning * 0.9 * 0.75 * 0.8 +
+      WEIGHTS.meaning * 0.6 +
       WEIGHTS.readability * readabilityScore(s.gradeGap) +
       WEIGHTS.length * lengthScore(s.lengthRatio);
     expect(s.total).toBeCloseTo(expected);
@@ -91,8 +91,8 @@ describe('scoreCandidate', () => {
     expect(scoreCandidate({ ...input(SIMPLE, 6), meaning: makeAssessment({ passed: false }) }).passed).toBe(false);
   });
 
-  it('uses the measured parts only when a check fell back', () => {
-    const meaning = makeAssessment({ similarity: null, entityRecall: 0.5, minEntailment: null, maxContradiction: null });
+  it('uses the combined score when a check fell back, and reports the missing parts as null', () => {
+    const meaning = makeAssessment({ similarity: null, entityRecall: 0.5, minEntailment: null, maxContradiction: null, score: 0.5 });
     const s = scoreCandidate({ ...input(SIMPLE, 30), meaning });
     expect(s.similarity).toBeNull();
     expect(s.minEntailment).toBeNull();
@@ -108,7 +108,7 @@ describe('scoreCandidate', () => {
   });
 
   it('scores an empty output low', () => {
-    const s = scoreCandidate({ ...input('   ', 6), meaning: makeAssessment({ similarity: 0 }) });
+    const s = scoreCandidate({ ...input('   ', 6), meaning: makeAssessment({ similarity: 0, score: 0 }) });
     expect(s.lengthRatio).toBe(0);
     expect(s.total).toBe(0);
   });
@@ -124,15 +124,15 @@ describe('scoreCandidate', () => {
     });
     const bad = scoreCandidate({
       ...input('She liked science.', 1),
-      meaning: makeAssessment({ similarity: 0.4, entityRecall: 0, minEntailment: 0.1, passed: false }),
+      meaning: makeAssessment({ similarity: 0.4, entityRecall: 0, minEntailment: 0.1, passed: false, score: 0.1 }),
     });
     expect(good.total).toBeGreaterThanOrEqual(QUALITY_THRESHOLD);
     expect(bad.total).toBeLessThan(QUALITY_THRESHOLD);
   });
 
-  it('an unsupported sentence lowers the meaning part', () => {
-    const supported = scoreCandidate({ ...input(SIMPLE, 6), meaning: makeAssessment({ minEntailment: 0.95 }) });
-    const unsupported = scoreCandidate({ ...input(SIMPLE, 6), meaning: makeAssessment({ minEntailment: 0.2 }) });
+  it('a lower combined score lowers the meaning part', () => {
+    const supported = scoreCandidate({ ...input(SIMPLE, 6), meaning: makeAssessment({ minEntailment: 0.95, score: 0.65 }) });
+    const unsupported = scoreCandidate({ ...input(SIMPLE, 6), meaning: makeAssessment({ minEntailment: 0.2, score: 0.4 }) });
     expect(unsupported.total).toBeLessThan(supported.total);
   });
 });

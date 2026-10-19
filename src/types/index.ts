@@ -109,7 +109,7 @@ export interface StoredMeaning {
   maxContradiction?: number;
   /** The NLI model scored this version (false: it fell back to SBERT + entities). */
   nliChecked?: boolean;
-  /** Every check that ran passed. */
+  /** Met the meaning standard (since 2026-10-19: combined score ≥ threshold). */
   passed?: boolean;
   /** Why it failed, most important first; empty when it passed. */
   reasons?: string[];
@@ -117,6 +117,10 @@ export interface StoredMeaning {
   lite?: boolean;
   /** Which checks failed (empty when it passed; absent in results stored before it existed). */
   failures?: MeaningFailure[];
+  /** Combined meaning score (0–1) that decided `passed`; absent in results stored before it existed. */
+  score?: number;
+  /** Which frozen score model gave `score`. */
+  scoreModel?: CombinedScoreModel['id'];
 }
 
 /**
@@ -308,7 +312,7 @@ export interface MeaningAssessment {
   nliChecked: boolean;
   /** SBERT, NLI and entities all ran. */
   fullyChecked: boolean;
-  /** Every check that ran passed. */
+  /** The combined score reached its model's threshold. */
   passed: boolean;
   /** Failure reasons, most important first. */
   reasons: string[];
@@ -324,6 +328,12 @@ export interface MeaningAssessment {
   nliScoreMs: number | null;
   /** NLI-scored sentences; 0 when NLI did not run. */
   nliSentences: number;
+  /** Combined meaning score (lib/quality/checker.ts); `passed` is score ≥ the model's threshold. */
+  score: number;
+  /** The frozen model used: 'full' with NLI, 'lite' without (Lite mode or NLI unavailable). */
+  scoreModel: CombinedScoreModel['id'];
+  /** Feature values the score was computed from (null = not measured). */
+  features: CheckerFeatures;
 }
 
 /** One simplified version of a node; `meaning` is null when the node is not checked. */
@@ -496,6 +506,12 @@ export interface RunLog {
     hypothesisContext?: string;
     /** Minimum share of entities kept (config ENTITY_RECALL_MIN; absent: 1, every entity). */
     entityRecallMin?: number;
+    /**
+     * What decided pass/fail: 'combined-score' (the frozen scoreModels, since
+     * 2026-10-19); absent: the AND of the thresholds above.
+     */
+    verdict?: 'combined-score';
+    scoreModels?: { full: CombinedScoreModel; lite: CombinedScoreModel };
   };
   summary: {
     nodes: number;

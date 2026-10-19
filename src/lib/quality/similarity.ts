@@ -21,7 +21,7 @@
  */
 
 import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN,
+  COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, CONTRADICTION_MAX, ENTAILMENT_MIN, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN,
 } from './config';
 import type { MeaningStatus, MeaningSummary, StoredMeaning, StoredResult } from '../../types';
 
@@ -109,10 +109,16 @@ export interface MeaningBadge {
  */
 export function meaningBadge(m: StoredMeaning): MeaningBadge | null {
   const details: string[] = [];
-  if (m.similarity !== undefined) details.push(`similarity ${m.similarity.toFixed(2)} (needs ${SIMILARITY_THRESHOLD.toFixed(2)})`);
+  // Since the combined score, the parts have no cutoff of their own; older results keep theirs
+  const scored = m.score !== undefined;
+  if (scored) {
+    const threshold = (m.scoreModel === 'lite' ? COMBINED_SCORE_LITE : COMBINED_SCORE_FULL).threshold;
+    details.push(`meaning score ${(m.score as number).toFixed(2)} (needs ${threshold.toFixed(2)})`);
+  }
+  if (m.similarity !== undefined) details.push(`similarity ${m.similarity.toFixed(2)}${scored ? '' : ` (needs ${SIMILARITY_THRESHOLD.toFixed(2)})`}`);
   if (m.entityRecall !== undefined) details.push(`entities kept ${Math.round(m.entityRecall * 100)}%`);
-  if (m.minEntailment !== undefined) details.push(`lowest entailment ${m.minEntailment.toFixed(2)} (needs ${ENTAILMENT_MIN.toFixed(2)})`);
-  if (m.maxContradiction !== undefined) details.push(`highest contradiction ${m.maxContradiction.toFixed(2)} (max ${CONTRADICTION_MAX.toFixed(2)})`);
+  if (m.minEntailment !== undefined) details.push(`lowest entailment ${m.minEntailment.toFixed(2)}${scored ? '' : ` (needs ${ENTAILMENT_MIN.toFixed(2)})`}`);
+  if (m.maxContradiction !== undefined) details.push(`highest contradiction ${m.maxContradiction.toFixed(2)}${scored ? '' : ` (max ${CONTRADICTION_MAX.toFixed(2)})`}`);
   if (m.passed !== undefined && m.nliChecked === false) {
     details.push(m.lite ? 'Lite mode: sentence check (NLI) skipped' : 'sentence check (NLI) unavailable');
   }

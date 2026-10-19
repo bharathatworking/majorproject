@@ -7,11 +7,14 @@
  *  - total = WEIGHTS.meaning · meaning + WEIGHTS.readability · readability
  *          + WEIGHTS.length · length, each part in 0–1:
  *      meaning (0.5)     meaningScore of the thesis assessment
- *                        (lib/quality/meaning.ts): similarity × entity recall
- *                        × minimum NLI entailment, each part only when
- *                        measured. Keeping the content right matters most, so
- *                        it carries half the weight. A node that is not
- *                        checked (heading, short text) scores 1 here.
+ *                        (lib/quality/meaning.ts): the combined meaning score
+ *                        (since 2026-10-19; before, similarity × entity
+ *                        recall × minimum NLI entailment). Keeping the
+ *                        content right matters most, so it carries half the
+ *                        weight. A node that is not checked (heading, short
+ *                        text) scores 1 here. The frozen score is strongly
+ *                        regularised and stays roughly in 0.35–0.7, so this
+ *                        part is lower than with the old product.
  *      readability (0.3) how close the output's grade is to the target:
  *                        1 − |gap| / GRADE_GAP_SCALE, floored at 0. A gap
  *                        below the target counts BELOW_TARGET_FACTOR times,
@@ -26,8 +29,8 @@
  *    1-grade gap give 0.45 + 0.25 + 0.20 = 0.90 (kept); similarity 0.85 and a
  *    3-grade gap give 0.425 + 0.15 + 0.20 = 0.775 (kept, just); similarity
  *    0.85 with a 5-grade gap gives 0.425 + 0.05 + 0.20 = 0.675 (retried).
- *    (These examples assume full entity recall and entailment 1; a minimum
- *    entailment of 0.8 scales the meaning part by 0.8.) A version that fails
+ *    (These examples predate the combined score and use similarity as the
+ *    meaning part.) A version that fails
  *    the stage 6C checks is retried whatever its total.
  *  - Pure and synchronous: the run loop runs assessMeaning and passes the
  *    assessment in. All constants live in config.ts.

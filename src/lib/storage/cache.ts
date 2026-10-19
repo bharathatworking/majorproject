@@ -19,7 +19,8 @@
  *  - The run loop decides what is worth caching (see lib/run/simplify.ts).
  *  - Entries carry CACHE_FORMAT. An entry of another format (e.g. one cached
  *    before the thesis meaning standard, judged by the old 0.80 threshold
- *    without NLI) is a miss, so a stale verdict is never reused. The key is
+ *    without NLI, or one judged by the AND of thresholds before the combined
+ *    score) is a miss, so a stale verdict is never reused. The key is
  *    unchanged, so the next put simply overwrites it.
  */
 
@@ -28,8 +29,8 @@ import { createWriteQueue } from '../utils/write-queue';
 import type { CachedResult, SimplificationSpec } from '../../types';
 
 export const CACHE_MAX_ENTRIES = 2000;
-/** Format of CachedResult; 2 = with the thesis meaning assessment. */
-export const CACHE_FORMAT = 2;
+/** Format of CachedResult; 2 = with the thesis meaning assessment, 3 = judged by the combined score. */
+export const CACHE_FORMAT = 3;
 const CACHE_PREFIX = 'cache:';
 const CACHE_INDEX_KEY = 'cache:index';
 

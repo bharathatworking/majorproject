@@ -149,7 +149,7 @@ try {
     const f = checker.checkerFeatures({
       similarity,
       entityRecall: entity.recall,
-      sentenceScores: nli.sentenceScores,
+      nli,
       mainClaimEntailment: main.entailment,
       keyKept,
       lengthRatio: checker.lengthRatioOf(item.original, plain),

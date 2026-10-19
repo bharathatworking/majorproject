@@ -19,7 +19,7 @@
  *  - lenRatio counts words the way score.ts does (whitespace split).
  */
 
-import type { CheckerFeature, CheckerFeatures, CombinedScoreModel, SentenceScore } from '../../types';
+import type { CheckerFeature, CheckerFeatures, CombinedScoreModel, EntailmentCheck } from '../../types';
 
 // ─── Features ─────────────────────────────────────────────────────────────────
 
@@ -38,8 +38,8 @@ export const LITE_FEATURES: readonly CheckerFeature[] = FEATURES.filter(f => !NL
 export interface CheckerParts {
   similarity: number | null;
   entityRecall: number;
-  /** Sentence scores of the NLI check (null when NLI did not run). */
-  sentenceScores: readonly SentenceScore[] | null;
+  /** The NLI check (null when NLI did not run). */
+  nli: Pick<EntailmentCheck, 'minEntailment' | 'maxContradiction' | 'sentenceScores'> | null;
   /** Entailment of the original's main claim by the simplified text. */
   mainClaimEntailment: number | null;
   /** Share of the main claim's numbers, dates and time zones kept (1 when there are none). */
@@ -58,29 +58,25 @@ export function lengthRatioOf(original: string, simplifiedPlain: string): number
 }
 
 /**
- * The feature vector of one version. NLI features: min and mean entailment
- * over the non-exempt sentences (0 for an output with no sentences, 1 when
- * every sentence is exempt, as checkEntailment's minEntailment), and the max
- * contradiction over every sentence.
+ * The feature vector of one version. NLI features: checkEntailment's
+ * minEntailment (lowest over the non-exempt sentences; 0 for an output with
+ * no sentences, 1 when every sentence is exempt) and maxContradiction (over
+ * every sentence), and the mean entailment over the non-exempt sentences
+ * (minEntailment when there are none).
  */
 export function checkerFeatures(parts: CheckerParts): CheckerFeatures {
-  const scores = parts.sentenceScores;
-  let nliMin: number | null = null;
+  const nli = parts.nli;
   let nliMean: number | null = null;
-  let contra: number | null = null;
-  if (scores) {
-    const scored = scores.filter(s => !s.exempt).map(s => s.entailment);
-    const fallback = scores.length === 0 ? 0 : 1;
-    nliMin = scored.length > 0 ? Math.min(...scored) : fallback;
-    nliMean = scored.length > 0 ? scored.reduce((a, b) => a + b, 0) / scored.length : fallback;
-    contra = Math.max(0, ...scores.map(s => s.contradiction));
+  if (nli) {
+    const scored = nli.sentenceScores.filter(s => !s.exempt).map(s => s.entailment);
+    nliMean = scored.length > 0 ? scored.reduce((a, b) => a + b, 0) / scored.length : nli.minEntailment;
   }
   return {
     sbert: parts.similarity,
     entity: parts.entityRecall,
-    nliMin,
+    nliMin: nli ? nli.minEntailment : null,
     nliMean,
-    contra,
+    contra: nli ? nli.maxContradiction : null,
     mainClaim: parts.mainClaimEntailment,
     numbers: parts.keyKept,
     lenRatio: parts.lengthRatio,

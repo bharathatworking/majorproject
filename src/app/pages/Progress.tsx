@@ -5,7 +5,7 @@ import { getDocument, listDocuments } from '../../lib/storage/documents';
 // similarity.ts and config.ts are import-free of compromise and Transformers.js
 import { meaningOverview, passRateLabel, type MeaningOverview } from '../../lib/quality/similarity';
 import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN,
+  COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, THESIS_COVERAGE_MIN,
 } from '../../lib/quality/config';
 import type { ClarityDocument } from '../../types';
 
@@ -267,11 +267,11 @@ function MeaningTable({ rows }: { rows: DocMeaningRow[] }) {
     <div className="meaning-card">
       <h2 className="section-heading">Meaning Preserved</h2>
       <p className="meaning-card-hint">
-        A paragraph passes when its similarity is at least {SIMILARITY_THRESHOLD.toFixed(2)}, every
-        name, number and date is kept, and no sentence is unsupported (entailment below{' '}
-        {ENTAILMENT_MIN.toFixed(2)}) or contradicted (above {CONTRADICTION_MAX.toFixed(2)}). The pass
-        rate counts fully checked paragraphs only; coverage below {percent(THESIS_COVERAGE_MIN)} means
-        it is not thesis-grade.
+        A paragraph passes when its combined meaning score (similarity, names, numbers and dates kept,
+        sentence support and contradiction, and length) reaches {COMBINED_SCORE_FULL.threshold.toFixed(2)}
+        ({COMBINED_SCORE_LITE.threshold.toFixed(2)} without the sentence check). The pass rate counts
+        fully checked paragraphs only; coverage below {percent(THESIS_COVERAGE_MIN)} means it is not
+        thesis-grade.
       </p>
       <table className="meaning-table">
         <thead>

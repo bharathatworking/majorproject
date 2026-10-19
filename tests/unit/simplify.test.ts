@@ -63,6 +63,38 @@ vi.mock('../../src/lib/quality/nli', async (importOriginal) => {
   };
 });
 
+/**
+ * Combined-score stub: these tests are about the run loop (retries, caching,
+ * notices, logs), not the frozen weights, which checker.test.ts and
+ * meaning.test.ts cover. A version "passes" when its fixtures are all at the
+ * old per-check levels (similarity ≥ 0.87, every entity, entailment ≥ 0.5,
+ * contradiction ≤ 0.2): passing scores are 0.6 + 0.4·m and failing ones
+ * 0.4·m, m = similarity × entity recall × entailment (measured parts), so
+ * either side of both frozen thresholds and ordered as before; a check
+ * below its level gets a negative contribution, which names the reason.
+ */
+vi.mock('../../src/lib/quality/checker', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/lib/quality/checker')>();
+  type Features = Partial<Record<import('../../src/types').CheckerFeature, number | null>>;
+  const levels = (f: Features) => ({
+    sbert: f.sbert == null ? 0 : f.sbert - 0.87,
+    entity: f.entity == null ? 0 : f.entity - 1,
+    nliMin: f.nliMin == null ? 0 : f.nliMin - 0.5,
+    contra: f.contra == null ? 0 : 0.2 - f.contra,
+  });
+  return {
+    ...actual,
+    combinedScore: (model: { features: readonly string[] }, f: Features) => {
+      const all = levels(f);
+      const contributions = Object.fromEntries(Object.entries(all).filter(([k]) => model.features.includes(k)));
+      const passes = Object.values(contributions).every(c => c >= -1e-12);
+      const m = Math.max(0, Math.min(1, f.sbert ?? 1)) * (f.entity ?? 1) *
+        (model.features.includes('nliMin') ? Math.max(0, Math.min(1, f.nliMin ?? 1)) : 1);
+      return { score: passes ? 0.6 + 0.4 * m : 0.4 * m, contributions, missing: [] };
+    },
+  };
+});
+
 /** Easy enough (estimated grade below 0) to be skipped at any target. */
 const EASY: ContentNode = { id: 'n0', type: 'paragraph', text: 'The cat sat on the mat.', entities: [] };
 
@@ -75,7 +107,7 @@ const { beforeAfterOf, getWeeklyProgress } = await import('../../src/lib/storage
 const { DEFAULT_LLM_MODEL, OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
 const { MEANING_RETRY_INSTRUCTION, driftReason, unsupportedReason } = await import('../../src/lib/quality/meaning');
 const {
-  ENTAILMENT_MIN, MAX_MODEL_CALLS_PER_NODE, NLI_CONTRADICTION_AGG, NLI_PARAGRAPH_RULE, QUALITY_THRESHOLD,
+  COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, ENTAILMENT_MIN, MAX_MODEL_CALLS_PER_NODE, NLI_CONTRADICTION_AGG, NLI_PARAGRAPH_RULE, QUALITY_THRESHOLD,
 } = await import('../../src/lib/quality/config');
 const nli = await import('../../src/lib/quality/nli');
 const checkEntailmentMock = vi.mocked(nli.checkEntailment);
@@ -1252,6 +1284,8 @@ describe('runSimplification run log', () => {
       paragraphRule: NLI_PARAGRAPH_RULE,
       hypothesisContext: 'prev-sentence-if-<7-words-or-referring',
       entityRecallMin: 1,
+      verdict: 'combined-score',
+      scoreModels: { full: COMBINED_SCORE_FULL, lite: COMBINED_SCORE_LITE },
     });
   });
 

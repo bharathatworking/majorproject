@@ -29,6 +29,11 @@ export function makeAssessment(overrides: Partial<MeaningAssessment> = {}): Mean
     nliRankMs: 20,
     nliScoreMs: 100,
     nliSentences: 2,
+    score: 0.9,
+    scoreModel: 'full',
+    features: {
+      sbert: 0.92, entity: 1, nliMin: 0.95, nliMean: 0.95, contra: 0.02, mainClaim: null, numbers: 1, lenRatio: 0.8,
+    },
     ...overrides,
   };
 }

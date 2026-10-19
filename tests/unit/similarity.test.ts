@@ -192,6 +192,14 @@ describe('meaningBadge', () => {
     expect(meaningBadge({ similarity: 0.82 })).toMatchObject({ label: 'meaning 0.82', warn: true });
   });
 
+  it('shows the combined score and its threshold, without per-check cutoffs', () => {
+    const full = meaningBadge({ ...FULL_PASS, score: 0.612, scoreModel: 'full' });
+    expect(full?.label).toBe('meaning ✓ 0.91');
+    expect(full?.title).toBe('Meaning preserved: meaning score 0.61 (needs 0.57) · similarity 0.91 · entities kept 100% · lowest entailment 0.90 · highest contradiction 0.01');
+    expect(meaningBadge({ ...FULL_PASS, score: 0.5, scoreModel: 'lite', passed: false })?.title).toContain('meaning score 0.50 (needs 0.54)');
+    expect(meaningBadge(FULL_PASS)?.title).toContain('similarity 0.91 (needs 0.87)');
+  });
+
   it('is null for an unchecked result', () => {
     expect(meaningBadge({})).toBeNull();
   });

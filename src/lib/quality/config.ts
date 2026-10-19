@@ -5,11 +5,13 @@
  * Design decisions:
  *  - No imports, so UI chunks (Reading badge, Progress stats) can read the
  *    thresholds without pulling compromise or Transformers.js in.
- *  - The thesis standard for "meaning preserved" (lib/quality/meaning.ts):
- *    cosine ≥ SIMILARITY_THRESHOLD AND every entity kept AND, per simplified
- *    sentence, entailment ≥ ENTAILMENT_MIN and contradiction ≤
- *    CONTRADICTION_MAX. Changing any of these changes the thesis metric, so
- *    the run log records them with every run.
+ *  - The thesis standard for "meaning preserved" (lib/quality/meaning.ts)
+ *    since 2026-10-19: the combined score (COMBINED_SCORE_FULL / _LITE) ≥
+ *    its frozen threshold. Before, it was cosine ≥ SIMILARITY_THRESHOLD AND
+ *    every entity kept AND, per simplified sentence, entailment ≥
+ *    ENTAILMENT_MIN and contradiction ≤ CONTRADICTION_MAX; those constants
+ *    stay for the retry reasons and as the evaluation baseline. The run log
+ *    records all of them with every run.
  */
 
 // ─── Meaning preservation (stage 6C) ─────────────────────────────────────────
@@ -67,6 +69,41 @@ export const NLI_HYPOTHESIS_CONTEXT = 'prev-sentence-if-<7-words-or-referring';
  * the labels are reviewed.
  */
 export const ENTITY_RECALL_MIN = 1;
+
+/**
+ * The combined meaning score that decides pass/fail (lib/quality/checker.ts,
+ * meaning.ts): score = sigmoid(Σ weights·(x − means)/stds + bias), pass =
+ * score ≥ threshold. FROZEN 2026-10-19: fit on the 81 calibration items only
+ * (npm run checker:fit; 5-fold stratified group CV, L2, balanced weights,
+ * backward elimination, catch ≥ 90% threshold) and pre-registered in
+ * eval/checker/PREREG.md, whose JSON block these values must match
+ * (scripts/checker/test-heldout.mjs checks). Never re-tune them on the
+ * bake-off test set; a new fit needs a new pre-registration.
+ * FULL is used when the NLI model scored the version; LITE (no NLI feature)
+ * in Lite mode or when NLI is unavailable. SIMILARITY_THRESHOLD,
+ * ENTAILMENT_MIN, CONTRADICTION_MAX and ENTITY_RECALL_MIN no longer decide
+ * the verdict: they only pick which sentences and drops a retry names, and
+ * they define the old rule kept as the evaluation baseline.
+ */
+export const COMBINED_SCORE_FULL = {
+  id: 'full',
+  features: ['sbert', 'entity', 'nliMin', 'contra', 'lenRatio'],
+  means: [0.861433, 0.826978, 0.377698, 0.210091, 0.693974],
+  stds: [0.065517, 0.266737, 0.423375, 0.341966, 0.173897],
+  weights: [0.075837, 0.057485, 0.099032, -0.107555, 0.095553],
+  bias: 0.00375,
+  threshold: 0.569168,
+} as const;
+
+export const COMBINED_SCORE_LITE = {
+  id: 'lite',
+  features: ['sbert', 'entity', 'lenRatio'],
+  means: [0.861433, 0.826978, 0.693974],
+  stds: [0.065517, 0.266737, 0.173897],
+  weights: [0.080126, 0.057627, 0.091799],
+  bias: 0.001869,
+  threshold: 0.536117,
+} as const;
 
 /** Nodes with fewer words than this skip all meaning checks. */
 export const MIN_WORDS_FOR_CHECK = 8;

@@ -29,21 +29,24 @@
  *
  * Semantic preservation (stage 6C, thesis standard, lib/quality/meaning.ts):
  * each finished node that passes shouldCheckNode is assessed with
- * assessMeaning: SBERT cosine ≥ 0.87, every entity kept, and no simplified
- * sentence contradicted or unsupported by its premises from the original
- * (NLI, lib/quality/nli.ts, in a Web Worker on WebGPU or wasm; premises are
- * original sentences and 2-sentence windows ranked by all-minilm, see
- * lib/quality/premises.ts). Embeddings are memoized per node, so the
+ * assessMeaning: the frozen combined score (lib/quality/checker.ts,
+ * eval/checker/PREREG.md) over SBERT cosine, entities kept, NLI entailment
+ * and contradiction of every simplified sentence against its premises from
+ * the original (lib/quality/nli.ts, in a Web Worker on WebGPU or wasm;
+ * premises are original sentences and 2-sentence windows ranked by
+ * all-minilm, see lib/quality/premises.ts) and the length ratio; a version
+ * passes when the score reaches its threshold. The main-claim check
+ * (checkMainClaim) runs only if the frozen FULL model uses it. Embeddings are memoized per node, so the
  * original's premise vectors are computed once across retries and variants. A failing node is retried once with a retry
  * instruction naming the specific reasons, and the better version is kept;
  * its assessment (similarity, entityRecall, minEntailment, maxContradiction,
- * nliChecked, passed, reasons) is stored on the result. The check never fails
+ * nliChecked, passed, reasons, score, scoreModel) is stored on the result. The check never fails
  * a run:
  *   - Missing embedding model (404): one notice, no similarity for the rest
  *     of the run. Other embed errors skip it for that node.
  *   - NLI model not loadable: one notice, nliChecked: false for the rest of
- *     the run (SBERT + entities still apply). Other NLI errors skip it for
- *     that node.
+ *     the run (scored with the LITE model: SBERT, entities, length). Other
+ *     NLI errors skip it for that node.
  *   - A failed retry keeps the first version.
  * The run log counts every node as passed / failed / not fully checked /
  * excluded, and the failed ones by failure kind (similarity, entities,
@@ -118,7 +121,7 @@ import {
 import { mainClaimIndexes, PREMISE_STRATEGY } from '../quality/premises';
 import { failureBreakdown, failuresFromReasons, formatFailureBreakdown } from '../quality/verdict';
 import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, ENTITY_RECALL_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
+  COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, CONTRADICTION_MAX, ENTAILMENT_MIN, ENTITY_RECALL_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
   NLI_BUDGET_MS, NLI_CONTRADICTION_AGG, NLI_HYPOTHESIS_CONTEXT, NLI_MODEL_ID, NLI_PARAGRAPH_RULE,
   QUALITY_THRESHOLD, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN, WEIGHTS,
 } from '../quality/config';
@@ -603,6 +606,36 @@ export async function runSimplification(
   }
 
   /**
+   * Entailment of the original's main claim by one version (nli.ts
+   * checkMainClaim), for the combined score's mainClaim feature; null under
+   * the same conditions as entailmentOf (never throws).
+   */
+  async function mainClaimEntailmentOf(
+    nodeId: string,
+    original: string,
+    simplified: string,
+    claim: readonly number[],
+    memo: Map<string, number[]>,
+  ): Promise<{ entailment: number; weakest: string | null } | null> {
+    if (lite || !nliAvailable || signal.aborted) return null;
+    const mod = await ensureNli();
+    if (!mod || !nliAvailable || signal.aborted) return null;
+    try {
+      const result = await mod.checkMainClaim(original, simplified, claim, mod.getNliClient(), {
+        label: nodeId,
+        ...(embedAvailable && { embed: (texts: string[]) => embedWith(memo, texts) }),
+      });
+      nliPairs += result.pairs;
+      console.log(`[Clarity] NLI ${nodeId} main claim: ${result.pairs} pairs, entailment ${result.entailment.toFixed(2)} ${Math.round(result.ms)} ms`);
+      return result;
+    } catch (err) {
+      if (err instanceof mod.NliUnavailableError) disableNli(err);
+      else console.warn('[Clarity] Main-claim check failed for node', nodeId, err);
+      return null;
+    }
+  }
+
+  /**
    * The original's main-claim sentences: all of a list item, else the one
    * closest to the whole paragraph by all-minilm (the vectors are in the
    * node's memo already: the original for SBERT, its sentences as premises).
@@ -635,6 +668,8 @@ export async function runSimplification(
       similarity: (original, plain) => similarityOf(node.id, original, plain, memo),
       entail: (original, simplified, words) => entailmentOf(node.id, original, simplified, words, memo),
       mainClaim: (original, sentences) => mainClaimOf(node, original, sentences, memo),
+      mainClaimEntailment: (original, simplified, claim) =>
+        mainClaimEntailmentOf(node.id, original, simplified, claim, memo),
     });
   }
 
@@ -941,6 +976,8 @@ export async function runSimplification(
       paragraphRule: NLI_PARAGRAPH_RULE,
       hypothesisContext: NLI_HYPOTHESIS_CONTEXT,
       entityRecallMin: ENTITY_RECALL_MIN,
+      verdict: 'combined-score',
+      scoreModels: { full: COMBINED_SCORE_FULL, lite: COMBINED_SCORE_LITE },
     },
     summary: {
       nodes: summary.nodes,
