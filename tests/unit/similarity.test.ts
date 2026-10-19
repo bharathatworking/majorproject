@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  averageSimilarity, cosineSimilarity, meaningBadge, meaningChips, meaningOverview, meaningStats, meaningStatusOf,
-  NOT_VERIFIED_NOTE, passRateLabel, summarizeMeaning,
+  averageSimilarity, cosineSimilarity, liteLabel, liteStats, meaningBadge, meaningChips, meaningOverview, meaningStats,
+  meaningStatusOf, NOT_VERIFIED_NOTE, passRateLabel, summarizeMeaning,
 } from '../../src/lib/quality/similarity';
 import { CONTRADICTION_MAX, THESIS_COVERAGE_MIN } from '../../src/lib/quality/config';
 import { contradictionReason, droppedEntityReason } from '../../src/lib/quality/meaning';
@@ -143,6 +143,34 @@ describe('meaningOverview', () => {
     const o = meaningOverview(results);
     expect(o.avgSimilarity!.toFixed(2)).toBe('0.87');
     expect(passRateLabel(o.stats)).toBe('0% (0/9)');
+  });
+});
+
+describe('liteStats / liteLabel', () => {
+  const LITE: StoredMeaning = { similarity: 0.9, entityRecall: 1, nliChecked: false, lite: true, passed: true, reasons: [] };
+
+  it('counts Lite-checked paragraphs and the ones the Lite check did not pass', () => {
+    const results = [
+      result(LITE),
+      result({ ...LITE, passed: false }),
+      result({ ...LITE, passed: false }),
+      result(FULL_PASS),
+      result(LITE, { skipped: true }),
+      result({ ...LITE, passed: false }, { status: 'error' }),
+    ];
+    expect(liteStats(results)).toEqual({ checked: 3, flagged: 2 });
+    expect(liteLabel(liteStats(results))).toBe('Lite check: 2 of 3 flagged');
+    expect(meaningOverview(results).lite).toEqual({ checked: 3, flagged: 2 });
+  });
+
+  it('keeps the pass rate null for a Lite-only document', () => {
+    const results = [result(LITE), result({ ...LITE, passed: false })];
+    expect(meaningStats(results).passRate).toBeNull();
+    expect(passRateLabel(meaningStats(results))).toBe('—');
+  });
+
+  it('has no label when nothing was Lite-checked', () => {
+    expect(liteLabel(liteStats([result(FULL_PASS)]))).toBeNull();
   });
 });
 

@@ -446,6 +446,13 @@ export interface NodeRunLog {
   retries: number;
   ms: number;
   candidates: CandidateLog[];
+  /**
+   * Flesch-Kincaid grade of the text the model got (modelInput, else
+   * originalText) and of the kept version as plain text; fkglAfter is null
+   * when the node failed. Absent in logs before clarity-run-report/4.
+   */
+  fkglBefore?: number;
+  fkglAfter?: number | null;
   /** Thesis category of the kept version (see MeaningSummary). */
   meaningStatus: MeaningStatus;
   /** Meaning check of the kept version (model or cache); absent when not checked. */
@@ -495,6 +502,15 @@ export interface RunMeaningSummary extends MeaningSummary {
   truncatedPairs?: number;
   /** Failure kinds of the failed kept versions (absent in logs before clarity-run-report/3). */
   failureBreakdown?: FailureBreakdown;
+  /**
+   * Kept versions checked in Lite mode, how many of them the LITE score did
+   * not pass, and why. Lite results stay out of passRate (null for thesis
+   * use); this is what a Lite run says instead. Absent in logs before
+   * clarity-run-report/4.
+   */
+  liteChecked?: number;
+  liteFailed?: number;
+  liteFailureBreakdown?: FailureBreakdown;
 }
 
 /** Everything one simplification run did, for the downloadable run report. */
@@ -505,6 +521,14 @@ export interface RunLog {
   cancelled: boolean;
   mode: RunMode;
   model: string;
+  /**
+   * Build and server of the run (absent in logs before clarity-run-report/4):
+   * package.json version, git commit at build time (null when unknown) and
+   * Ollama's /api/version (null when it didn't answer).
+   */
+  appVersion?: string;
+  gitCommit?: string | null;
+  ollamaVersion?: string | null;
   extraQuality: boolean;
   /** Quality mode setting and the mode used (absent in logs from before quality modes). */
   qualitySetting?: QualityModeSetting;

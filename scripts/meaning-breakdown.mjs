@@ -6,7 +6,8 @@
  *  - Counts the kept version of every node whose meaningStatus is 'failed'.
  *    One paragraph can fail several checks, so the kinds don't add up to the
  *    failed count.
- *  - Format 3 reports carry `failures` per node; format 2 reports are
+ *  - Format 3 and 4 reports (checked with run-log.ts parseRunReport) carry
+ *    `failures` per node; format 2 reports are
  *    classified from their reason strings (failuresFromReasons), so older
  *    reports give a "before" breakdown too. Both come from the extension's own
  *    lib/quality/verdict.ts, loaded through Vite's ssrLoadModule (no copy of
@@ -40,6 +41,9 @@ const vite = await createServer({
 try {
   const { failureBreakdown, failuresFromReasons, formatFailureBreakdown } =
     await vite.ssrLoadModule('/src/lib/quality/verdict.ts');
+  const { parseRunReport } = await vite.ssrLoadModule('/src/lib/run/run-log.ts');
+  // Formats 2 and older predate failures; parseRunReport accepts 3 and 4
+  if (report.format !== 'clarity-run-report/2') parseRunReport(report);
 
   console.log(`[Clarity] ${report.title} (${report.format}, ${report.runs.length} run(s))`);
   report.runs.forEach((run, i) => {

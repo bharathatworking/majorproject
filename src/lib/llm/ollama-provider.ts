@@ -98,6 +98,15 @@ export class OllamaProvider {
     return chatModelsFromTags(await res.json());
   }
 
+  /** Ollama's version from /api/version (for the run report); throws on failure. */
+  async version(): Promise<string> {
+    const res = await fetch(`${OLLAMA_BASE_URL}/api/version`);
+    if (!res.ok) throw new OllamaHttpError(res.status);
+    const body = await res.json() as { version?: unknown };
+    if (typeof body.version !== 'string') throw new Error('[Clarity] /api/version returned no version');
+    return body.version;
+  }
+
   /** The model's /api/show response. Throws OllamaHttpError (404 = model not pulled). */
   async show(): Promise<unknown> {
     const res = await fetch(`${OLLAMA_BASE_URL}/api/show`, {

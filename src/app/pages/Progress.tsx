@@ -3,7 +3,7 @@ import { Chart, registerables } from 'chart.js';
 import { beforeAfterOf, getWeeklyProgress } from '../../lib/storage/progress';
 import { getDocument, listDocuments } from '../../lib/storage/documents';
 // similarity.ts and config.ts are import-free of compromise and Transformers.js
-import { meaningOverview, passRateLabel, type MeaningOverview } from '../../lib/quality/similarity';
+import { liteLabel, meaningOverview, passRateLabel, type MeaningOverview } from '../../lib/quality/similarity';
 import {
   COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, THESIS_COVERAGE_MIN,
 } from '../../lib/quality/config';
@@ -201,6 +201,17 @@ export function Progress({ activeDoc }: ProgressProps) {
                 </span>
               </div>
             )}
+            {activeMeaning && liteLabel(activeMeaning.lite) && (
+              <div className="comparison-row meaning-row">
+                <span className="comparison-label">Lite check</span>
+                <span
+                  className="comparison-after"
+                  title="Paragraphs checked in Lite mode (no sentence check) whose meaning score did not pass. Not part of the pass rate."
+                >
+                  {activeMeaning.lite.flagged} of {activeMeaning.lite.checked} flagged
+                </span>
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -284,10 +295,20 @@ function MeaningTable({ rows }: { rows: DocMeaningRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ id, title, stats, avgSimilarity }) => (
+          {rows.map(({ id, title, stats, avgSimilarity, lite }) => (
             <tr key={id}>
               <th scope="row" className="meaning-doc-title">{title}</th>
-              <td className="meaning-pass-rate">{passRateLabel(stats)}</td>
+              <td className="meaning-pass-rate">
+                {passRateLabel(stats)}
+                {liteLabel(lite) && (
+                  <span
+                    className="meaning-lite"
+                    title="Checked in Lite mode (no sentence check); not part of the pass rate"
+                  >
+                    {liteLabel(lite)}
+                  </span>
+                )}
+              </td>
               <td
                 className={stats.thesisGrade ? '' : 'coverage-low'}
                 title={stats.thesisGrade ? undefined : 'Not thesis-grade: too few paragraphs were fully checked'}

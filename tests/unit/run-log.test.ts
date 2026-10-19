@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
-  appendRunLog, buildRunReport, runReportFileName, MAX_RUN_LOGS, RUN_REPORT_FORMAT,
+  appendRunLog, buildRunReport, parseRunReport, runReportFileName, MAX_RUN_LOGS, RUN_REPORT_FIELD_NOTES, RUN_REPORT_FORMAT,
 } from '../../src/lib/run/run-log';
 import { makeRunMeaningSummary } from '../mocks/fixtures';
 import type { ClarityDocument, RunLog } from '../../src/types';
@@ -62,6 +63,7 @@ describe('buildRunReport', () => {
     const report = buildRunReport(doc({ runLogs: [log('a'), log('b')] }), now);
     expect(report).toEqual({
       format: RUN_REPORT_FORMAT,
+      fieldNotes: RUN_REPORT_FIELD_NOTES,
       exportedAt: '2026-10-15T09:30:00.000Z',
       docId: 'doc-1',
       title: 'How Plants Make Food: A Guide!',
@@ -71,8 +73,12 @@ describe('buildRunReport', () => {
     });
   });
 
-  it('is format 3 (failure kinds and replay data)', () => {
-    expect(RUN_REPORT_FORMAT).toBe('clarity-run-report/3');
+  it('is format 4, and explains gradeGap and the FKGL fields', () => {
+    expect(RUN_REPORT_FORMAT).toBe('clarity-run-report/4');
+    const notes = buildRunReport(doc(), now).fieldNotes;
+    expect(notes?.gradeGap).toContain('minus the target grade');
+    expect(notes?.gradeGap).toContain('Negative = simpler than the target');
+    expect(Object.keys(notes ?? {})).toEqual(['gradeGap', 'fkglBefore', 'fkglAfter', 'modelInput']);
   });
 
   it('has an empty run list for a document without logs', () => {
@@ -82,5 +88,29 @@ describe('buildRunReport', () => {
   it('names the file after the title and date', () => {
     expect(runReportFileName(doc(), now)).toBe('clarity-run-report-how-plants-make-food-a-guide-2026-10-15.json');
     expect(runReportFileName(doc({ title: '!!!' }), now)).toBe('clarity-run-report-document-2026-10-15.json');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseRunReport — formats 3 and 4
+// ---------------------------------------------------------------------------
+describe('parseRunReport', () => {
+  it('reads an old format-3 report (the UK fixture)', () => {
+    const raw: unknown = JSON.parse(readFileSync('eval/fixtures/runs/uk-wiki-2026-10-19.json', 'utf8'));
+    const report = parseRunReport(raw);
+    expect(report.format).toBe('clarity-run-report/3');
+    expect(report.runs).toHaveLength(5);
+    expect(report.runs[0].nodes[0].fkglBefore).toBeUndefined();
+  });
+
+  it('reads a report it just built (format 4)', () => {
+    const built = buildRunReport(doc({ runLogs: [log('a')] }));
+    expect(parseRunReport(JSON.parse(JSON.stringify(built)))).toEqual(built);
+  });
+
+  it('rejects other formats and shapes', () => {
+    expect(() => parseRunReport({ format: 'clarity-run-report/2', runs: [] })).toThrow(/Unsupported run report format/);
+    expect(() => parseRunReport({ format: 'clarity-run-report/4' })).toThrow(/no runs/);
+    expect(() => parseRunReport(null)).toThrow();
   });
 });

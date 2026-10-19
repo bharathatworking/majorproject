@@ -19,6 +19,11 @@
  *    Progress card and table show them from one computation and can't
  *    disagree.
  *
+ * Lite check (liteStats / liteLabel): Lite results (SBERT + entities, NLI
+ * skipped on purpose) never enter the pass rate, which stays null for
+ * thesis use. So a Lite run still says something, the paragraphs its LITE
+ * score did not pass are counted separately: "Lite check: 2 of 7 flagged".
+ *
  * Reader-facing badge (meaningBadge): the frozen checker fails about 70% of
  * faithful paragraphs (eval/checker/REPORT.md), so a version that does not
  * pass is shown as a neutral "Not verified", not as a warning. Chips name
@@ -218,14 +223,32 @@ export function averageSimilarity(results: readonly StoredResult[]): number | nu
   return scores.reduce((sum, s) => sum + s, 0) / scores.length;
 }
 
+/** Lite-checked paragraphs of a document and how many of them the Lite check did not pass. */
+export interface LiteStats {
+  checked: number;
+  flagged: number;
+}
+
+/** Lite stats of a document's done results (see file header). */
+export function liteStats(results: readonly StoredResult[]): LiteStats {
+  const lite = results.filter(r => r.status === 'done' && !r.skipped && r.lite === true && r.passed !== undefined);
+  return { checked: lite.length, flagged: lite.filter(r => r.passed === false).length };
+}
+
+/** "Lite check: 2 of 7 flagged"; null when nothing was Lite-checked. */
+export function liteLabel(stats: LiteStats): string | null {
+  return stats.checked > 0 ? `Lite check: ${stats.flagged} of ${stats.checked} flagged` : null;
+}
+
 /** A document's meaning numbers, as the Progress card and table show them. */
 export interface MeaningOverview {
   stats: MeaningSummary;
   avgSimilarity: number | null;
+  lite: LiteStats;
 }
 
 export function meaningOverview(results: readonly StoredResult[]): MeaningOverview {
-  return { stats: meaningStats(results), avgSimilarity: averageSimilarity(results) };
+  return { stats: meaningStats(results), avgSimilarity: averageSimilarity(results), lite: liteStats(results) };
 }
 
 /** "42% (5/12)": passed / fully checked paragraphs; "—" when none were fully checked. */

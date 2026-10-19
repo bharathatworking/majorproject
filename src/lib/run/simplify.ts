@@ -121,6 +121,7 @@ import { segmentHtml, simplifiableNodes } from '../segmentation/segmenter';
 import { cleanForModel } from '../segmentation/clutter';
 import { getExtraQuality, getLlmModel, getQualityMode, getUserProfile } from '../storage/settings';
 import { extensionVersion, getNliBench, getNliDevice } from '../storage/nli-bench';
+import { appVersion, gitCommit } from '../utils/build-info';
 import { getCommonWordSet } from '../metrics/word-set';
 import { computeReadabilityReport } from '../metrics/engine';
 import { findDifficultWords } from '../metrics/difficult-words';
@@ -371,8 +372,10 @@ export async function runSimplification(
 
   callbacks.onProgress(0, toRun.length);
 
-  // 4. Bootstrap the LLM session with the first node's system prompt
+  // 4. Bootstrap the LLM session with the first node's system prompt; ask
+  //    Ollama its version for the run report meanwhile (never fails the run)
   const llm = new OllamaProvider(model);
+  const ollamaVersion = llm.version().catch(() => null);
   const firstPromptObj = doc.report
     ? buildPrompt(toRun[0], spec, doc.report)
     : null;
@@ -435,10 +438,19 @@ export async function runSimplification(
   // The current node's cleaned text when it differs from the original (run log)
   let nodeModelInput: string | undefined;
 
+  /** Flesch-Kincaid grade of a text, 2 decimals (run log). */
+  const fkgl = (text: string) =>
+    Math.round(computeReadabilityReport(text, wordSet).fleschKincaidGradeLevel * 100) / 100;
+
+  /**
+   * Records a finished node. `finalText` is the kept text (null for an
+   * error), for its Flesch-Kincaid grade.
+   */
   function finishNode(
     node: ContentNode,
     source: NodeSource,
     nodeStartedAt: number,
+    finalText: string | null,
     details: Partial<Pick<NodeRunLog, 'variantUsed' | 'candidates' | 'meaning'>> = {},
   ) {
     const now = performance.now();
@@ -459,6 +471,8 @@ export async function runSimplification(
       retries: Math.max(0, nodeCalls - 1),
       ms: Math.round(ms),
       candidates: details.candidates ?? [],
+      fkglBefore: fkgl(nodeModelInput || node.text),
+      fkglAfter: finalText === null ? null : fkgl(toPlainText(finalText)),
       meaningStatus,
       ...(details.meaning && { meaning: details.meaning }),
     });
@@ -878,7 +892,7 @@ export async function runSimplification(
         plainById.set(node.id, toPlainText(node.text));
         await persist({ ...base, simplifiedText: node.text, status: 'done', skipped: true });
         callbacks.onProgress(doneCount, toRun.length);
-        finishNode(node, 'heading', nodeStartedAt);
+        finishNode(node, 'heading', nodeStartedAt, node.text);
         continue;
       }
 
@@ -895,7 +909,7 @@ export async function runSimplification(
         plainById.set(node.id, toPlainText(node.text));
         await persist({ ...base, simplifiedText: node.text, status: 'done', skipped: true });
         callbacks.onProgress(doneCount, toRun.length);
-        finishNode(node, 'skipped', nodeStartedAt);
+        finishNode(node, 'skipped', nodeStartedAt, node.text);
         continue;
       }
 
@@ -905,7 +919,7 @@ export async function runSimplification(
       let fullText: string;
       let stored: StoredMeaning | null;
       let source: NodeSource;
-      let details: Parameters<typeof finishNode>[3];
+      let details: Parameters<typeof finishNode>[4];
       if (cached) {
         fullText = cached.text;
         stored = cached.meaning;
@@ -945,7 +959,7 @@ export async function runSimplification(
       await persist({ ...base, simplifiedText: fullText, status: 'done', ...stored });
 
       callbacks.onProgress(doneCount, toRun.length);
-      finishNode(node, source, nodeStartedAt, details);
+      finishNode(node, source, nodeStartedAt, fullText, details);
 
     } catch (err) {
       if (signal.aborted) break;
@@ -955,7 +969,7 @@ export async function runSimplification(
 
       // Persist now: a failure after the last success would otherwise be lost
       await persist({ ...base, simplifiedText: '', status: 'error' });
-      finishNode(node, 'error', nodeStartedAt);
+      finishNode(node, 'error', nodeStartedAt, null);
     }
   }
 
@@ -965,8 +979,15 @@ export async function runSimplification(
   // Assigned inside ensureNli, which TypeScript can't see from here
   const bench = nliBench as NliBenchRecord | null;
   const firstResult = firstResultMs === null ? 'n/a' : formatSeconds(firstResultMs);
+  // Lite results never enter the pass rate; count what the Lite check flagged
+  const liteLogs = nodeLogs.filter(n => n.meaning?.lite === true && n.meaning.passed !== undefined);
+  const liteFailedLogs = liteLogs.filter(n => n.meaning?.passed === false);
   const meaning = {
     ...summarizeMeaning(nodeLogs.map(n => n.meaningStatus)),
+    liteChecked: liteLogs.length,
+    liteFailed: liteFailedLogs.length,
+    liteFailureBreakdown: failureBreakdown(
+      liteFailedLogs.map(n => n.meaning?.failures ?? failuresFromReasons(n.meaning?.reasons ?? []))),
     avgNliMs: nliTimes.length > 0 ? nliTimes.reduce((a, b) => a + b, 0) / nliTimes.length : null,
     exemptedSentences: keptExempted,
     exemptionRate: keptNliSentences > 0 ? keptExempted / keptNliSentences : null,
@@ -995,6 +1016,12 @@ export async function runSimplification(
   if (meaning.failureBreakdown.failedParagraphs > 0) {
     console.log(`[Clarity] Meaning failures: ${formatFailureBreakdown(meaning.failureBreakdown)}`);
   }
+  if (meaning.liteChecked > 0) {
+    console.log(
+      `[Clarity] Lite check: ${meaning.liteFailed} of ${meaning.liteChecked} flagged` +
+      (meaning.liteFailed > 0 ? ` (${formatFailureBreakdown(meaning.liteFailureBreakdown)})` : ''),
+    );
+  }
   if (meaning.coverage !== null && !meaning.thesisGrade) {
     console.warn(
       `[Clarity] Meaning coverage ${pct(meaning.coverage)} is below ${pct(THESIS_COVERAGE_MIN)}: ` +
@@ -1016,6 +1043,9 @@ export async function runSimplification(
     cancelled: signal.aborted,
     mode,
     model,
+    appVersion: appVersion(),
+    gitCommit: gitCommit(),
+    ollamaVersion: await ollamaVersion,
     // The effective value: Lite turns best-of-N off whatever the toggle says
     extraQuality,
     qualitySetting,

@@ -11,6 +11,9 @@
  *    the A/B evidence.
  *  - Pure with type-only imports, so Reading can import it without pulling
  *    the metrics engine or compromise into the main chunk.
+ *  - parseRunReport reads formats 3 and 4 (format 4 only adds fields), so
+ *    older downloaded reports stay usable by the scripts
+ *    (scripts/meaning-breakdown.mjs).
  */
 
 import type { ClarityDocument, RunLog } from '../../types';
@@ -29,12 +32,35 @@ export const MAX_RUN_LOGS = 5;
  * `originalText`, NLI rank/score ms), so a report can be re-judged offline
  * (scripts/meaning-breakdown.mjs).
  */
-export const RUN_REPORT_FORMAT = 'clarity-run-report/3';
+export const RUN_REPORT_FORMAT = 'clarity-run-report/4';
+
+/**
+ * 4 adds, per node, `fkglBefore` / `fkglAfter` and `modelInput` (text after
+ * clutter removal); per candidate, `echoStripped`; per run, `appVersion`,
+ * `gitCommit`, `ollamaVersion` and the Lite counts in summary.meaning
+ * (`liteChecked`, `liteFailed`, `liteFailureBreakdown`); per report,
+ * `fieldNotes` explaining fields whose meaning isn't obvious.
+ */
+export const READABLE_RUN_REPORT_FORMATS = ['clarity-run-report/3', 'clarity-run-report/4'] as const;
+
+export type RunReportFormat = typeof READABLE_RUN_REPORT_FORMATS[number];
+
+/** What the less obvious fields of a report mean; written into every format-4 report. */
+export const RUN_REPORT_FIELD_NOTES = {
+  gradeGap:
+    'Per candidate: estimated grade of the version (lib/metrics/node-grade.ts) minus the target grade. ' +
+    'Negative = simpler than the target, positive = harder (lib/quality/score.ts readability part).',
+  fkglBefore: 'Per node: Flesch-Kincaid grade of the text the model got (modelInput, else originalText).',
+  fkglAfter: 'Per node: Flesch-Kincaid grade of the kept version as plain text; null when the node failed.',
+  modelInput: 'Per node, when present: the text the model and the meaning check got, after removing citation markers and hatnotes.',
+} as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface RunReport {
-  format: typeof RUN_REPORT_FORMAT;
+  format: RunReportFormat;
+  /** Format 4 and later. */
+  fieldNotes?: typeof RUN_REPORT_FIELD_NOTES;
   exportedAt: string;
   docId: string;
   title: string;
@@ -56,6 +82,7 @@ export function appendRunLog(previous: RunLog[] | undefined, log: RunLog): RunLo
 export function buildRunReport(doc: ClarityDocument, now: Date = new Date()): RunReport {
   return {
     format: RUN_REPORT_FORMAT,
+    fieldNotes: RUN_REPORT_FIELD_NOTES,
     exportedAt: now.toISOString(),
     docId: doc.id,
     title: doc.title,
@@ -64,6 +91,20 @@ export function buildRunReport(doc: ClarityDocument, now: Date = new Date()): Ru
     ...(doc.fileName !== undefined && { fileName: doc.fileName }),
     runs: doc.runLogs ?? [],
   };
+}
+
+/**
+ * A downloaded report (parsed JSON) of a readable format; throws for any
+ * other format or a shape without runs.
+ */
+export function parseRunReport(raw: unknown): RunReport {
+  const r = raw as Partial<RunReport> | null;
+  const format = r?.format;
+  if (!format || !(READABLE_RUN_REPORT_FORMATS as readonly string[]).includes(format)) {
+    throw new Error(`[Clarity] Unsupported run report format: ${String(format)}`);
+  }
+  if (!Array.isArray(r.runs)) throw new Error('[Clarity] Run report has no runs');
+  return r as RunReport;
 }
 
 /** e.g. "clarity-run-report-my-article-2026-10-15.json". */

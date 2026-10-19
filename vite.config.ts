@@ -1,7 +1,23 @@
+    import { execSync } from 'node:child_process';
+    import { readFileSync } from 'node:fs';
     import { defaultClientConditions, defineConfig } from 'vite';
     import react from '@vitejs/plugin-react';
     import { crx } from '@crxjs/vite-plugin';
     import manifest from './src/manifest';
+
+    /** package.json version, for the run report (src/lib/utils/build-info.ts). */
+    const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
+
+    /** Short commit of this build, "-dirty" with uncommitted changes; null outside a git checkout. */
+    function gitCommit(): string | null {
+      try {
+        const run = (cmd: string) => execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+        const hash = run('git rev-parse --short HEAD');
+        return run('git status --porcelain') === '' ? hash : `${hash}-dirty`;
+      } catch {
+        return null;
+      }
+    }
 
     export default defineConfig({
       plugins: [
@@ -19,6 +35,11 @@
       ],
       build: {
         target: 'esnext',
+      },
+      // Build info for the run report; plain constants, not code (no eval)
+      define: {
+        __APP_VERSION__: JSON.stringify(version),
+        __GIT_COMMIT__: JSON.stringify(gitCommit()),
       },
       resolve: {
         // onnxruntime-web's export condition for an external wasm: its runtime

@@ -1169,6 +1169,8 @@ ol.node-list { list-style: decimal; }
 }
 .meaning-table .meaning-pass-rate { color: var(--accent-light); font-weight: 600; }
 .meaning-table .coverage-low { color: var(--warning); }
+/* "Lite check: X of Y flagged" under the pass rate: Lite results are not in it */
+.meaning-table .meaning-lite { display: block; margin-top: 2px; color: var(--text-muted); font-size: 0.8em; font-weight: 400; }
 
 /* ── Settings page ─────────────────────────────────────────── */
 .settings-page { max-width: 640px; }

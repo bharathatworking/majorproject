@@ -2,6 +2,8 @@ import { useState, useCallback, useRef } from 'react';
 // Type-only: the run module (and compromise, via NER and the entity check) is
 // loaded on the first run, keeping it out of the main chunk.
 import type { RunCallbacks } from '../../lib/run/simplify';
+import { createRunSerializer, type RunSerializer } from '../../lib/run/run-serializer';
+import { getDocument } from '../../lib/storage/documents';
 import type { ClarityDocument, RunMode, StoredMeaning } from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -43,16 +45,21 @@ export interface UseRunStateReturn {
  *
  * `liveResults` holds per-node streaming state for the current run.
  * The Reading page merges these with the stored doc.results for display.
+ *
+ * One run at a time (lib/run/run-serializer.ts): a new start cancels the
+ * current run AND waits for it, post-run saves included, before the new run
+ * reads the document again from storage (so 'remaining' sees what the
+ * cancelled run saved) and writes anything. Callbacks of a run that is no
+ * longer current are dropped, so a cancelled run can't mark the new one
+ * inactive.
  */
 export function useRunState(): UseRunStateReturn {
   const [runState, setRunState] = useState<RunState | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const serializerRef = useRef<RunSerializer | null>(null);
+  serializerRef.current ??= createRunSerializer();
 
   const startRun = useCallback(async (doc: ClarityDocument, mode: RunMode, startIndex = 0) => {
-    // Cancel any in-flight run before starting a new one
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const serializer = serializerRef.current ?? createRunSerializer();
 
     setRunState({
       docId: doc.id,
@@ -64,73 +71,64 @@ export function useRunState(): UseRunStateReturn {
       liveResults: {},
     });
 
-    const callbacks: RunCallbacks = {
-      signal: controller.signal,
+    /** One run; its callbacks change state only while it is the current run. */
+    const execute = async (signal: AbortSignal): Promise<void> => {
+      const update = (fn: (prev: RunState | null) => RunState | null) => {
+        if (serializer.isCurrent(signal)) setRunState(fn);
+      };
 
-      onProgress: (done, total) =>
-        setRunState(prev => prev ? { ...prev, nodesDone: done, nodesTotal: total } : null),
+      const callbacks: RunCallbacks = {
+        signal,
 
-      onNodeStart: (nodeId) =>
-        setRunState(prev => {
-          if (!prev) return null;
-          return {
+        onProgress: (done, total) =>
+          update(prev => prev ? { ...prev, nodesDone: done, nodesTotal: total } : null),
+
+        onNodeStart: (nodeId) =>
+          update(prev => prev && {
             ...prev,
             liveResults: { ...prev.liveResults, [nodeId]: { text: '', status: 'streaming' } },
-          };
-        }),
+          }),
 
-      onNodeChunk: (nodeId, accumulated) =>
-        setRunState(prev => {
-          if (!prev) return null;
-          return {
+        onNodeChunk: (nodeId, accumulated) =>
+          update(prev => prev && {
             ...prev,
-            liveResults: {
-              ...prev.liveResults,
-              [nodeId]: { text: accumulated, status: 'streaming' },
-            },
-          };
-        }),
+            liveResults: { ...prev.liveResults, [nodeId]: { text: accumulated, status: 'streaming' } },
+          }),
 
-      onNodeDone: (nodeId, finalText, meaning, skipped) =>
-        setRunState(prev => {
-          if (!prev) return null;
-          return {
+        onNodeDone: (nodeId, finalText, meaning, skipped) =>
+          update(prev => prev && {
             ...prev,
-            liveResults: {
-              ...prev.liveResults,
-              [nodeId]: { text: finalText, status: 'done', meaning, skipped },
-            },
-          };
-        }),
+            liveResults: { ...prev.liveResults, [nodeId]: { text: finalText, status: 'done', meaning, skipped } },
+          }),
 
-      onNodeError: (nodeId) =>
-        setRunState(prev => {
-          if (!prev) return null;
-          return {
+        onNodeError: (nodeId) =>
+          update(prev => prev && {
             ...prev,
-            liveResults: {
-              ...prev.liveResults,
-              [nodeId]: { text: '', status: 'error' },
-            },
-          };
-        }),
+            liveResults: { ...prev.liveResults, [nodeId]: { text: '', status: 'error' } },
+          }),
 
-      onBannerError: (message) =>
-        setRunState(prev => prev ? { ...prev, errorBanner: message } : null),
+        onBannerError: (message) =>
+          update(prev => prev ? { ...prev, errorBanner: message } : null),
 
-      onNotice: (message) =>
-        setRunState(prev =>
-          prev && !prev.notices.includes(message) ? { ...prev, notices: [...prev.notices, message] } : prev,
-        ),
+        onNotice: (message) =>
+          update(prev =>
+            prev && !prev.notices.includes(message) ? { ...prev, notices: [...prev.notices, message] } : prev,
+          ),
 
-      onComplete: () =>
-        setRunState(prev => prev ? { ...prev, active: false } : null),
+        onComplete: () =>
+          update(prev => prev ? { ...prev, active: false } : null),
+      };
+
+      // The previous run has settled: start from what is stored now
+      const fresh = await getDocument(doc.id).catch(() => null);
+      if (signal.aborted) return;
+      const { runSimplification } = await import('../../lib/run/simplify');
+      if (signal.aborted) return;
+      await runSimplification(fresh ?? doc, callbacks, mode, startIndex);
     };
 
     try {
-      const { runSimplification } = await import('../../lib/run/simplify');
-      if (controller.signal.aborted) return;
-      await runSimplification(doc, callbacks, mode, startIndex);
+      await serializer.start(execute);
     } catch (err) {
       // The run never rejects by design; if it does, don't leave it "active"
       console.error('[Clarity] Simplification run failed', err);
@@ -139,8 +137,7 @@ export function useRunState(): UseRunStateReturn {
   }, []);
 
   const cancelRun = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+    serializerRef.current?.cancel();
     setRunState(prev => prev ? { ...prev, active: false } : null);
   }, []);
 

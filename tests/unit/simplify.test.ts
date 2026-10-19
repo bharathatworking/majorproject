@@ -163,9 +163,18 @@ const showMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit)
     ? new Response('{"error":"model not found"}', { status: showStatus })
     : new Response(JSON.stringify({ capabilities: showCapabilities }), { status: 200 }));
 
-/** Routes /api/show to showMock and everything else (/api/chat) to fetchMock. */
+/** What /api/version answers; null = HTTP 500. */
+let ollamaVersionReply: string | null;
+const versionMock = vi.fn(async () =>
+  ollamaVersionReply === null
+    ? new Response('boom', { status: 500 })
+    : new Response(JSON.stringify({ version: ollamaVersionReply }), { status: 200 }));
+
+/** Routes /api/show and /api/version to their mocks and everything else (/api/chat) to fetchMock. */
 const routedFetch = (url: string | URL | Request, init?: RequestInit) =>
-  String(url).endsWith('/api/show') ? showMock(url, init) : fetchMock(url, init);
+  String(url).endsWith('/api/show') ? showMock(url, init)
+  : String(url).endsWith('/api/version') ? versionMock()
+  : fetchMock(url, init);
 
 /** Unit vector whose cosine with [1, 0] is exactly `sim`. */
 const vec = (sim: number) => [sim, Math.sqrt(1 - sim * sim)];
@@ -218,6 +227,8 @@ beforeEach(async () => {
   showMock.mockClear();
   showCapabilities = ['completion'];
   showStatus = null;
+  ollamaVersionReply = '0.12.6';
+  versionMock.mockClear();
   failing = new Set();
   prompts = [];
   replies = {};
@@ -1228,6 +1239,22 @@ describe('runSimplification quality mode', () => {
     expect(log?.summary.meaning).toMatchObject({ notFullyChecked: 1, passRate: null });
   });
 
+  it('Lite counts what its check flagged while the pass rate stays null', async () => {
+    await setMode('lite');
+    nodes = [CURIE, DARWIN];
+    replies = { n0: [GOOD_CURIE], n1: ['Charles Darwin liked plants.', 'Charles Darwin liked plants a lot.'] };
+    scores = { [GOOD_CURIE]: 0.92, 'Charles Darwin liked plants.': 0.5, 'Charles Darwin liked plants a lot.': 0.5 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const meaning = (await lastLog(doc.id))?.summary.meaning;
+    expect(meaning).toMatchObject({ passRate: null, notFullyChecked: 2, liteChecked: 2, liteFailed: 1 });
+    expect(meaning?.liteFailureBreakdown).toMatchObject({ similarity: 1, failedParagraphs: 1 });
+    expect(vi.mocked(console.log).mock.calls.map(c => String(c[0])))
+      .toContainEqual(expect.stringMatching(/^\[Clarity\] Lite check: 1 of 2 flagged \(similarity 1/));
+  });
+
   it('Lite allows one retry and turns best-of-N off even with Extra quality on', async () => {
     await setMode('lite');
     await chrome.storage.sync.set({ extraQuality: true });
@@ -1324,6 +1351,48 @@ describe('runSimplification quality mode', () => {
 });
 
 describe('runSimplification run log', () => {
+  it('a run cancelled mid-node counts only the nodes it saved', async () => {
+    const doc = await storedDoc();
+    const controller = new AbortController();
+    const cb = { ...callbacks(), signal: controller.signal };
+    // Cancel while n1 streams: n0 is saved, n1 never is
+    cb.onNodeChunk = vi.fn((nodeId: string) => { if (nodeId === 'n1') controller.abort(); });
+
+    await runSimplification(doc, cb, 'all');
+
+    const saved = await getDocument(doc.id);
+    expect(saved?.results.map(r => [r.nodeId, r.status])).toEqual([['n0', 'done']]);
+    const log = saved?.runLogs?.at(-1);
+    expect(log?.cancelled).toBe(true);
+    expect(log?.nodes.map(n => n.nodeId)).toEqual(['n0']);
+    expect(log?.summary.nodes).toBe(1);
+    expect(log?.summary.counts.model).toBe(1);
+  });
+
+  it('records the build, the Ollama version and the grade of each node before and after (format 4)', async () => {
+    nodes = [CURIE];
+    replies = { n0: ['Marie Curie won a big prize in 1903.'] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const log = (await getDocument(doc.id))?.runLogs?.at(-1);
+    expect(log).toMatchObject({ appVersion: 'dev', gitCommit: null, ollamaVersion: '0.12.6', depthTier: expect.any(String) });
+    expect(log?.nodes[0].fkglBefore).toBeGreaterThan(log?.nodes[0].fkglAfter ?? Infinity);
+    expect(Number.isInteger((log?.nodes[0].fkglBefore ?? 0) * 100)).toBe(true);
+  });
+
+  it('records a null Ollama version when /api/version fails, without failing the run', async () => {
+    ollamaVersionReply = null;
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const log = (await getDocument(doc.id))?.runLogs?.at(-1);
+    expect(log?.ollamaVersion).toBeNull();
+    expect(log?.summary.counts.model).toBe(3);
+  });
+
   it('records every node with its source, time and the run settings', async () => {
     nodes = [EASY, NODES[1]];
     await setTargetGrade(4);

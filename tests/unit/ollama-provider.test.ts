@@ -58,6 +58,18 @@ describe('OllamaProvider', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
     await expect(new OllamaProvider().listModels()).rejects.toMatchObject({ status: 403 });
   });
+
+  it('version reads /api/version and throws on an error or a missing version', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"version":"0.12.6"}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(new OllamaProvider().version()).resolves.toBe('0.12.6');
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe('http://localhost:11434/api/version');
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
+    await expect(new OllamaProvider().version()).rejects.toMatchObject({ status: 403 });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    await expect(new OllamaProvider().version()).rejects.toThrow(/no version/);
+  });
 });
 
 // ---------------------------------------------------------------------------
