@@ -108,6 +108,20 @@ describe('buildPrompt user prompt', () => {
     expect(buildPrompt(node, spec(), report).user).not.toContain('Context from previous section');
   });
 
+  it('tells a paragraph to stay plain sentences unless the style allows bullets', () => {
+    expect(buildPrompt(node, spec({ allowBullets: false }), report).user)
+      .toContain('This is a paragraph. Rewrite it as one paragraph of plain sentences. Do not use bullets or a list.');
+    expect(buildPrompt(node, spec({ allowBullets: true }), report).user).not.toContain('This is a paragraph');
+    const quote: ContentNode = { id: 'n3', type: 'blockquote', text: 'To be or not to be.' };
+    expect(buildPrompt(quote, spec({ allowBullets: false }), report).user).toContain('Do not use bullets or a list.');
+    expect(buildPrompt(quote, spec({ allowBullets: true }), report).user).not.toContain('Do not use bullets');
+  });
+
+  it('keeps a list item one item, whatever the style', () => {
+    const item: ContentNode = { id: 'n2', type: 'list-item', text: 'Collect samples' };
+    expect(buildPrompt(item, spec({ allowBullets: true }), report).user).toContain('Keep it one item; no bullets inside it.');
+  });
+
   it('adds a type hint for list items, and none for headings (they never reach the model)', () => {
     const heading: ContentNode = { id: 'n1', type: 'heading', level: 2, text: 'Mission goals' };
     expect(buildPrompt(heading, spec(), report).user).not.toContain('This is a heading');

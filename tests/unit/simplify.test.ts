@@ -1402,6 +1402,48 @@ describe('runSimplification quality mode', () => {
   });
 });
 
+describe('runSimplification bullets', () => {
+  const BULLETS = '- Marie Curie won the Nobel Prize in Physics in 1903  \n- She won it for her work on radiation';
+  const PARAGRAPH = 'Marie Curie won the Nobel Prize in Physics in 1903. She won it for her work on radiation.';
+
+  it('stores a bulleted answer to a paragraph as one paragraph for a plain style', async () => {
+    nodes = [CURIE];
+    replies = { n0: [BULLETS] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const saved = await getDocument(doc.id);
+    expect(saved?.results[0].simplifiedText).toBe(PARAGRAPH);
+    expect(saved?.runLogs?.at(-1)).toMatchObject({ style: 'plain', allowBullets: false });
+    expect(saved?.runLogs?.at(-1)?.nodes[0].candidates[0].text).toBe(PARAGRAPH);
+  });
+
+  it('keeps the bullets when the style is Bullet summary', async () => {
+    await chrome.storage.sync.set({ userProfile: { ...DEFAULT_PROFILE, targetGradeLevel: 1, preferredStyle: 'bullet-summary' } });
+    nodes = [CURIE];
+    replies = { n0: [BULLETS] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    const saved = await getDocument(doc.id);
+    expect(saved?.results[0].simplifiedText).toBe(BULLETS);
+    expect(saved?.runLogs?.at(-1)).toMatchObject({ style: 'bullet-summary', allowBullets: true });
+  });
+
+  it('keeps a list item one item, even for Bullet summary', async () => {
+    await chrome.storage.sync.set({ userProfile: { ...DEFAULT_PROFILE, targetGradeLevel: 1, preferredStyle: 'bullet-summary' } });
+    nodes = [{ ...CURIE, type: 'list-item' }];
+    replies = { n0: [BULLETS] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect((await getDocument(doc.id))?.results[0]).toMatchObject({ simplifiedText: PARAGRAPH, type: 'list-item' });
+  });
+});
+
 describe('runSimplification run log', () => {
   it('a run cancelled mid-node counts only the nodes it saved', async () => {
     const doc = await storedDoc();

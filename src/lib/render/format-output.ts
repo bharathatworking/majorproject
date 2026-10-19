@@ -26,6 +26,12 @@
  *    and only top-level items decide whether the list is ordered.
  *  - nestByDepth turns flat items with depths into a tree; the Reading page
  *    uses it for both model-output lists and pasted list-item nodes.
+ *  - flattenLists turns every list of an output into sentences of one
+ *    paragraph. The run loop applies it to paragraph output when the reader's
+ *    style didn't ask for bullets, and to list-item output always (one node
+ *    stays one item). The Student preset's "Bullet summary" style keeps them
+ *    (eval/fixtures UK run: every paragraph came back as one bullet per
+ *    sentence).
  */
 
 import type { Block } from '../../types';
@@ -180,6 +186,33 @@ export function nestByDepth<T>(items: readonly T[], depthOf: (item: T, index: nu
   return roots;
 }
 
+// ─── Flattening (paragraph input stays a paragraph) ──────────────────────────
+
+const withPeriod = (item: string) => (ENDS_WITH_PUNCTUATION.test(item) ? item : `${item}.`);
+
+/**
+ * `text` with every list turned into one paragraph of sentences (an item
+ * without end punctuation gets a period). A paragraph ending in ":" takes
+ * the list after it ("Three parts:" + items → "Three parts: A. B. C.").
+ * Other paragraphs stay as they are. Unchanged when there is no list.
+ */
+export function flattenLists(text: string): string {
+  const blocks = parseSimplifiedText(text);
+  if (!blocks.some(b => b.kind === 'list')) return text;
+  const paragraphs: string[] = [];
+  for (const block of blocks) {
+    if (block.kind === 'paragraph') {
+      paragraphs.push(block.text);
+      continue;
+    }
+    const sentences = block.items.filter(Boolean).map(withPeriod).join(' ');
+    const last = paragraphs.length - 1;
+    if (last >= 0 && paragraphs[last].endsWith(':')) paragraphs[last] += ` ${sentences}`;
+    else paragraphs.push(sentences);
+  }
+  return paragraphs.join('\n\n');
+}
+
 // ─── Plain text (metrics + rolling context) ───────────────────────────────────
 
 /**
@@ -192,9 +225,7 @@ export function toPlainText(text: string): string {
     .map(block =>
       block.kind === 'paragraph'
         ? block.text
-        : block.items
-            .map(item => (ENDS_WITH_PUNCTUATION.test(item) ? item : `${item}.`))
-            .join('\n'),
+        : block.items.map(withPeriod).join('\n'),
     )
     .join('\n\n');
 }

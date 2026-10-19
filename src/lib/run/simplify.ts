@@ -78,6 +78,12 @@
  * "[Clarity] Meaning failures" line; when coverage (fully checked / eligible) is below
  * THESIS_COVERAGE_MIN it warns that the pass rate is not thesis-grade.
  *
+ * Bullets: paragraph and blockquote output is flattened to sentences
+ * (format-output.ts flattenLists) unless the style allows bullets
+ * ('bullet-summary'); list-item output always is, so one node stays one item.
+ * This happens before the meaning check, so the checked text is the stored
+ * text. The run log records `style` and `allowBullets`.
+ *
  * Prompt optimization (stage 7, lib/quality/score.ts and
  * lib/prompt-builder/variants.ts): every model output is scored with
  * scoreCandidate (meaning 0.5, readability 0.3, length 0.2), whose meaning
@@ -135,7 +141,7 @@ import { isAlreadySimple } from '../metrics/node-grade';
 import { addRunLog, saveDocument } from '../storage/documents';
 import { cacheKey, getCached, putCached } from '../storage/cache';
 import { recordSession } from '../storage/progress';
-import { toPlainText } from '../render/format-output';
+import { flattenLists, toPlainText } from '../render/format-output';
 import { checkMeaning, shouldCheckNode } from '../quality/semantic';
 import {
   assessMeaning, buildRetryInstruction, candidatePasses, pickBetterVersion, retryInputOf, shouldRetry, toStoredMeaning,
@@ -750,6 +756,15 @@ export async function runSimplification(
         ? buildPrompt(node, spec, doc.report, contextFor(node), difficultWords, variant).user
         : node.text;
 
+    /**
+     * The output in the node's shape: lists flattened to sentences for a
+     * paragraph or blockquote when the style doesn't allow bullets, and
+     * always for a list item (see file header).
+     */
+    const flatten = node.type === 'list-item'
+      || ((node.type === 'paragraph' || node.type === 'blockquote') && !spec.allowBullets);
+    const shape = (text: string) => (flatten ? flattenLists(text) : text);
+
     /** Checks (6C) and scores one version of the node. Null if aborted. */
     async function judge(
       text: string,
@@ -781,7 +796,7 @@ export async function runSimplification(
         stream,
       );
       if (raw === null) return null;
-      const text = variant === 'example-guided' ? stripExampleLabel(raw) : raw;
+      const text = shape(variant === 'example-guided' ? stripExampleLabel(raw) : raw);
       return judge(text, variant, retryFrom !== null, started);
     }
 
@@ -1094,6 +1109,8 @@ export async function runSimplification(
     },
     targetGrade: spec.targetGrade,
     depthTier: spec.depthTier,
+    style: spec.style,
+    allowBullets: spec.allowBullets,
     qualityThreshold: QUALITY_THRESHOLD,
     weights: { ...WEIGHTS },
     meaningThresholds: {

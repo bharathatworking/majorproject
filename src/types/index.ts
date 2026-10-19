@@ -566,6 +566,13 @@ export interface RunLog {
   } | null;
   targetGrade: number;
   depthTier: SimplificationSpec['depthTier'];
+  /**
+   * The reader's style and whether it allows bullets ('bullet-summary'
+   * only); paragraph output is flattened to sentences otherwise. Absent in
+   * logs before clarity-run-report/4.
+   */
+  style?: SimplificationSpec['style'];
+  allowBullets?: boolean;
   qualityThreshold: number;
   weights: { meaning: number; readability: number; length: number };
   /** The meaning standard this run was judged by (lib/quality/config.ts). */

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  nestByDepth, parseSimplifiedText, toPlainText, type TreeItem,
+  flattenLists, nestByDepth, parseSimplifiedText, toPlainText, type TreeItem,
 } from '../../src/lib/render/format-output';
 
 // ---------------------------------------------------------------------------
@@ -243,5 +243,29 @@ describe('nestByDepth', () => {
 
   it('clamps the first item and depth jumps', () => {
     expect(shape(nestByDepth(['x', 'y', 'z'], (_, i) => [2, 3, 0][i]))).toEqual([['x', ['y']], 'z']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// flattenLists — paragraph input stays a paragraph (UK run, Student preset)
+// ---------------------------------------------------------------------------
+describe('flattenLists', () => {
+  it('turns a one-sentence-per-bullet answer into one paragraph, with markdown line breaks dropped', () => {
+    const qwen = '- The UK has a king.  \n- It has three parts: England, Wales, Scotland, and Northern Ireland  \n- UK trades a lot';
+    expect(flattenLists(qwen)).toBe(
+      'The UK has a king. It has three parts: England, Wales, Scotland, and Northern Ireland. UK trades a lot.',
+    );
+  });
+
+  it('joins a lead-in ending in ":" with its list, and keeps other paragraphs apart', () => {
+    expect(flattenLists('It has three parts:\n1. England\n2. Wales\n\nIt is old.')).toBe(
+      'It has three parts: England. Wales.\n\nIt is old.',
+    );
+    expect(flattenLists('First paragraph.\n\n- a\n- b')).toBe('First paragraph.\n\na. b.');
+  });
+
+  it('leaves text without a list unchanged', () => {
+    const text = 'Plain sentences only. Nothing to flatten.\n\nA second paragraph.';
+    expect(flattenLists(text)).toBe(text);
   });
 });

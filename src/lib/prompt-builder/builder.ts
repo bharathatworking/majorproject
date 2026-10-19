@@ -93,8 +93,13 @@ export function hintedWords(spec: SimplificationSpec, difficultWords: readonly s
  * OllamaProvider.createBaseSession and sent with every /api/chat request).
  * The user prompt is node-specific and includes:
  *  - A node-type hint so the model knows structural constraints
- *    (list items stay parallel; blockquotes stay quotes). Headings never
- *    reach the model (lib/run/simplify.ts keeps them as written).
+ *    (list items stay parallel and one item; blockquotes stay quotes).
+ *    Paragraphs and blockquotes are told to stay plain sentences unless the
+ *    style allows bullets ('bullet-summary'): qwen3 turned every paragraph
+ *    into one bullet per sentence (eval/fixtures UK run, Student preset).
+ *    The run loop also flattens any list it gets back for them
+ *    (format-output.ts flattenLists). Headings never reach the model
+ *    (lib/run/simplify.ts keeps them as written).
  *  - An optional entity preservation instruction
  *  - An optional rolling context sentence from the previous node
  *  - An optional lexical hint listing words the common-word list flags as
@@ -138,15 +143,18 @@ ${extraRules}`;
 
   // Node-type hint — tells the model the structural role of this text so it
   // doesn't, e.g., expand a 3-word heading into a paragraph.
+  const noBullets = spec.allowBullets ? '' : ' Do not use bullets or a list.';
   let typeHint = '';
   if (node.type === 'list-item') {
     typeHint =
       `This is one item in a list. ` +
       `Keep it parallel in structure and length to a typical list item. ` +
-      `Do not turn it into a full paragraph.\n\n`;
+      `Do not turn it into a full paragraph. Keep it one item; no bullets inside it.\n\n`;
   } else if (node.type === 'blockquote') {
     typeHint =
-      `This is a blockquote. Simplify it but preserve its quoted/cited nature.\n\n`;
+      `This is a blockquote. Simplify it but preserve its quoted/cited nature.${noBullets}\n\n`;
+  } else if (node.type === 'paragraph' && !spec.allowBullets) {
+    typeHint = 'This is a paragraph. Rewrite it as one paragraph of plain sentences. Do not use bullets or a list.\n\n';
   }
 
   let user = typeHint;
