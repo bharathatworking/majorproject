@@ -101,6 +101,7 @@ const EASY: ContentNode = { id: 'n0', type: 'paragraph', text: 'The cat sat on t
 const {
   runSimplification, selectNodesToRun, rotateFrom, EMBED_MISSING_NOTICE, NLI_MISSING_NOTICE,
 } = await import('../../src/lib/run/simplify');
+const { cleanForModel } = await import('../../src/lib/segmentation/clutter');
 const { DEFAULT_PROFILE } = await import('../../src/lib/storage/settings');
 const { getDocument, upsertDocument, saveDocument } = await import('../../src/lib/storage/documents');
 const { beforeAfterOf, getWeeklyProgress } = await import('../../src/lib/storage/progress');
@@ -145,7 +146,7 @@ const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit)
   prompts.push(user);
   models.push(model);
   if (chatStatus !== null) return new Response('nope', { status: chatStatus });
-  const node = nodes.find(n => user.endsWith(n.text));
+  const node = nodes.find(n => user.endsWith(n.text) || user.endsWith(cleanForModel(n.text)));
   if (!node || failing.has(node.text)) return new Response('boom', { status: 500 });
   const reply = replies[node.id]?.shift() ?? `Simple ${node.id}.`;
   if (reply === FAIL) return new Response('boom', { status: 500 });
@@ -792,6 +793,36 @@ describe('runSimplification speed paths', () => {
     expect(log?.nodes[0]).toMatchObject({ source: 'heading', modelCalls: 0, meaningStatus: 'excluded' });
     expect(log?.summary.counts.heading).toBe(1);
     expect(log?.summary.meaning).toMatchObject({ excluded: 1, passed: 1 });
+  });
+
+  it('sends the model the text without citation markers or hatnote, and stores the original', async () => {
+    const raw = 'See also: Britain (place name) The Acts of Union 1707 joined England and Scotland into one kingdom.[o][19]';
+    nodes = [{ id: 'n0', type: 'paragraph', text: raw }];
+    replies = { n0: ['In 1707 the Acts of Union joined England and Scotland into one kingdom.'] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].endsWith('TEXT TO REWRITE:\nThe Acts of Union 1707 joined England and Scotland into one kingdom.')).toBe(true);
+    expect(prompts[0]).not.toMatch(/\[(?:o|19)\]|See also/);
+    const saved = await getDocument(doc.id);
+    expect(saved?.results[0].originalText).toBe(raw);
+    const log = saved?.runLogs?.at(-1)?.nodes[0];
+    expect(log?.originalText).toBe(raw);
+    expect(log?.modelInput).toBe('The Acts of Union 1707 joined England and Scotland into one kingdom.');
+  });
+
+  it('keeps a node that is only a hatnote as is, without the model', async () => {
+    nodes = [{ id: 'n0', type: 'paragraph', text: 'Main article: History of the United Kingdom' }, NODES[1]];
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(prompts).toHaveLength(1);
+    const saved = await getDocument(doc.id);
+    expect(saved?.results.find(r => r.nodeId === 'n0')).toMatchObject({ simplifiedText: 'Main article: History of the United Kingdom', skipped: true });
+    expect(saved?.runLogs?.at(-1)?.nodes.find(n => n.nodeId === 'n0')).toMatchObject({ source: 'skipped', modelInput: '' });
   });
 
   it('keeps an already simple node as is, without the model or the meaning check', async () => {

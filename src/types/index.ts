@@ -432,6 +432,12 @@ export interface NodeRunLog {
   type: StoredResult['type'];
   /** The node's original text, for offline replay (absent in older logs). */
   originalText?: string;
+  /**
+   * The text the model and the meaning check got, when it differs from
+   * originalText: citation markers and hatnotes removed
+   * (lib/segmentation/clutter.ts). '' when the node was only a hatnote.
+   */
+  modelInput?: string;
   source: NodeSource;
   /** Variant of the kept version; null when the model did not produce it. */
   variantUsed: PromptVariantId | null;

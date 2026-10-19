@@ -13,6 +13,14 @@
  * Every node result — success or error — is persisted as soon as it finishes,
  * so a failure after the last success is not lost.
  *
+ * Clutter: every other node's text is cleaned first (lib/segmentation/
+ * clutter.ts: Wikipedia citation markers and hatnotes removed). The cleaned
+ * text is what NER, the prompt, the already-simple check, the cache key, the
+ * meaning check and the candidate score see; the stored and displayed
+ * original stays as captured, and the run log records the cleaned text as
+ * `modelInput` when it differs. A node that was only a hatnote is kept as
+ * is ('skipped').
+ *
  * Speed (each node takes the first path that applies):
  *   0. Heading (h1–h6 of a page, or a short title line of a paste: see
  *      lib/input/text-blocks.ts): kept as written, stored as `done` with
@@ -110,6 +118,7 @@ import { resolveProfile } from '../profile/resolver';
 import { buildPrompt, hintedWords } from '../prompt-builder/builder';
 import { EXTRA_VARIANTS, stripExampleLabel } from '../prompt-builder/variants';
 import { segmentHtml, simplifiableNodes } from '../segmentation/segmenter';
+import { cleanForModel } from '../segmentation/clutter';
 import { getExtraQuality, getLlmModel, getQualityMode, getUserProfile } from '../storage/settings';
 import { extensionVersion, getNliBench, getNliDevice } from '../storage/nli-bench';
 import { getCommonWordSet } from '../metrics/word-set';
@@ -423,6 +432,8 @@ export async function runSimplification(
   let keptExempted = 0;
   // Model calls made for the current node (reset per node; read on errors too)
   let nodeCalls = 0;
+  // The current node's cleaned text when it differs from the original (run log)
+  let nodeModelInput: string | undefined;
 
   function finishNode(
     node: ContentNode,
@@ -441,6 +452,7 @@ export async function runSimplification(
       nodeId: node.id,
       type: STORED_TYPE[node.type] ?? 'paragraph',
       originalText: node.text,
+      ...(nodeModelInput !== undefined && { modelInput: nodeModelInput }),
       source,
       variantUsed: details.variantUsed ?? null,
       modelCalls: nodeCalls,
@@ -850,6 +862,7 @@ export async function runSimplification(
 
     const nodeStartedAt = performance.now();
     nodeCalls = 0;
+    nodeModelInput = undefined;
     const base = {
       nodeId: node.id,
       originalText: node.text,
@@ -869,8 +882,14 @@ export async function runSimplification(
         continue;
       }
 
-      // b. Already at or below the target grade: keep the original
-      if (isAlreadySimple(node.text, spec.targetGrade, wordSet)) {
+      // The model and the meaning check get the text without Wikipedia clutter
+      const modelText = cleanForModel(node.text);
+      if (modelText !== node.text) nodeModelInput = modelText;
+      // Entities (if any) were found in the original; NER runs again on the cleaned text
+      const work: ContentNode = modelText === node.text ? node : { ...node, text: modelText, entities: undefined };
+
+      // b. Only a hatnote, or already at or below the target grade: keep the original
+      if (modelText.trim() === '' || isAlreadySimple(modelText, spec.targetGrade, wordSet)) {
         callbacks.onNodeDone(node.id, node.text, undefined, true);
         doneCount++;
         plainById.set(node.id, toPlainText(node.text));
@@ -881,7 +900,7 @@ export async function runSimplification(
       }
 
       // c. Cache, then d. the model
-      const key = await cacheKey(node.text, spec, model, extraQuality ? 'extra' : 'standard');
+      const key = await cacheKey(work.text, spec, model, extraQuality ? 'extra' : 'standard');
       const cached = await lookupCache(key);
       let fullText: string;
       let stored: StoredMeaning | null;
@@ -894,7 +913,7 @@ export async function runSimplification(
         details = stored ? { meaning: roundMeaning(stored) } : {};
       } else {
         callbacks.onNodeStart(node.id);
-        const generated = await generate(node);
+        const generated = await generate(work);
         if (generated === null) break;
         const { chosen } = generated;
         fullText = chosen.text;
