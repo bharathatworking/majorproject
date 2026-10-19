@@ -168,3 +168,20 @@ describe('shouldCheckNode', () => {
     expect(shouldCheckNode(node('heading', words(12)))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// findMissingEntities: centuries (UK Wikipedia run)
+// ---------------------------------------------------------------------------
+describe('findMissingEntities: centuries', () => {
+  it('keeps "17th century" when the output says "1600s", and the other way round', () => {
+    const original = 'Over the 17th century the role of the British monarchy was reduced.';
+    const entities = detectEntities(original);
+    expect(entities.map(e => e.text)).toContain('17th century');
+    expect(findMissingEntities(entities, 'In the 1600s, the king had less power.')).toEqual([]);
+    expect(findMissingEntities([entity('1600s', 'date')], 'During the 17th century, the king had less power.')).toEqual([]);
+  });
+
+  it('still reports a different century as dropped', () => {
+    expect(findMissingEntities([entity('17th century', 'date')], 'In the 1700s, the king had less power.')).toEqual(['17th century']);
+  });
+});

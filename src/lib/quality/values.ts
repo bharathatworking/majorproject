@@ -12,6 +12,16 @@
  *      months         "month:june" (full names and abbreviations)
  *      weekdays       "day:monday" (also plurals: "Mondays")
  *      time zones     "tz:pst"
+ *      centuries      "century:17" for "17th century", "seventeenth
+ *                     century", "17th-century" and "1600s" (a multiple of
+ *                     100 then "s"), so the two ways of naming a century
+ *                     match (eval/fixtures UK run: "Over the 17th century"
+ *                     → "In the 1600s" was reported as dropped). The
+ *                     number tokens that only spell the century ("17",
+ *                     "17 century", "1600") are `centuryParts`: kept in the
+ *                     signature, so "19th century" still keeps a "19th",
+ *                     but not required when the needle names the century.
+ *                     Decades ("1920s") are unchanged.
  *  - Everything else is ignored, which drops the modifiers: next, last, the,
  *    about, around, approximately, nearly, almost, over, under, more than,
  *    at least, aged, age, of, for, during, in, on, at, by, some.
@@ -75,12 +85,54 @@ const DIGITS = /\d+(?:\.\d+)?/g;
 /** After a number: optional hyphen or space, then a unit word or symbol. */
 const UNIT_AFTER = /^\s*-?\s*(per cent|%|[a-z$€]+)/i;
 
+/** "17th century", "17th-century", "21st centuries". */
+const CENTURY_DIGITS = /\b(\d{1,2})(?:st|nd|rd|th)[\s-]+centur(?:y|ies)\b/gi;
+/** "seventeenth century", "twenty-first-century". */
+const CENTURY_WORDS =
+  /\b((?:twenty[\s-])?(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth))[\s-]+centur(?:y|ies)\b/gi;
+/** "1600s": the century after 16 hundred. */
+const HUNDREDS = /\b(\d{1,2})00s\b/g;
+
+const ORDINAL_VALUES: Record<string, number> = {
+  first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10,
+  eleventh: 11, twelfth: 12, thirteenth: 13, fourteenth: 14, fifteenth: 15, sixteenth: 16, seventeenth: 17,
+  eighteenth: 18, nineteenth: 19, twentieth: 20,
+};
+
+/** Value of "seventeenth" or "twenty-first"; null when not an ordinal word. */
+function ordinalWordValue(text: string): number | null {
+  const words = text.toLowerCase().split(/[\s-]+/);
+  if (words.length === 2 && words[0] === 'twenty') {
+    const unit = ORDINAL_VALUES[words[1]];
+    return unit !== undefined && unit < 10 ? 20 + unit : null;
+  }
+  return words.length === 1 ? ORDINAL_VALUES[words[0]] ?? null : null;
+}
+
+/** Where a century is named, and which one (see file header). */
+function centurySpans(text: string): { start: number; end: number; century: number }[] {
+  const spans: { start: number; end: number; century: number }[] = [];
+  for (const m of text.matchAll(CENTURY_DIGITS)) {
+    spans.push({ start: m.index ?? 0, end: (m.index ?? 0) + m[0].length, century: Number(m[1]) });
+  }
+  for (const m of text.matchAll(CENTURY_WORDS)) {
+    const century = ordinalWordValue(m[1]);
+    if (century !== null) spans.push({ start: m.index ?? 0, end: (m.index ?? 0) + m[0].length, century });
+  }
+  for (const m of text.matchAll(HUNDREDS)) {
+    spans.push({ start: m.index ?? 0, end: (m.index ?? 0) + m[0].length, century: Number(m[1]) + 1 });
+  }
+  return spans;
+}
+
 // ─── Signature ────────────────────────────────────────────────────────────────
 
 export interface ValueSignature {
   tokens: Set<string>;
-  /** Has a number, month, weekday or time zone (units alone don't count). */
+  /** Has a number, month, weekday, time zone or century (units alone don't count). */
   hasValue: boolean;
+  /** Number tokens that only spell a named century ("17", "17 century", "1600"). */
+  centuryParts: Set<string>;
 }
 
 /** Canonical number text: "21", "1.5", "1500" (no trailing zeros). */
@@ -98,7 +150,7 @@ interface OffsetMatch {
  * plain digits outside its matches are added, so a parse miss never hides a
  * number.
  */
-function numberMatches(text: string): { value: number; end: number }[] {
+function numberMatches(text: string): { value: number; start: number; end: number }[] {
   const found: { value: number; start: number; end: number }[] = [];
   try {
     const view = nlp<NumbersMethods>(text).numbers();
@@ -137,15 +189,26 @@ function unitAfter(text: string, end: number): string | null {
 export function valueSignature(text: string): ValueSignature {
   const clean = text.replace(/(\d),(?=\d{3}\b)/g, '$1');
   const tokens = new Set<string>();
+  const centuryParts = new Set<string>();
   let hasValue = false;
 
-  for (const { value, end } of numberMatches(clean)) {
+  const centuries = centurySpans(clean);
+  for (const c of centuries) {
+    tokens.add(`century:${c.century}`);
+    hasValue = true;
+  }
+
+  for (const { value, start, end } of numberMatches(clean)) {
     const n = numberToken(value);
     tokens.add(n);
     hasValue = true;
     // compromise counts a "%" right after the digits as part of the number
     const u = clean[end - 1] === '%' ? 'percent' : unitAfter(clean, end);
     if (u) tokens.add(`${n} ${u}`);
+    if (centuries.some(c => start >= c.start && start < c.end)) {
+      centuryParts.add(n);
+      if (u) centuryParts.add(`${n} ${u}`);
+    }
   }
 
   const lower = clean.toLowerCase();
@@ -167,18 +230,21 @@ export function valueSignature(text: string): ValueSignature {
     }
   }
 
-  return { tokens, hasValue };
+  return { tokens, hasValue, centuryParts };
 }
 
 /**
  * True when every value token of `needle` is in `haystack`. In a date with a
  * number, the weekday is redundant ("Sunday 2 September 1666" is kept by
- * "Sep 2, 1666"); alone it counts ("on Monday").
+ * "Sep 2, 1666"); alone it counts ("on Monday"). The number tokens that only
+ * spell a named century are redundant too: "17th century" is kept by
+ * "1600s" and the other way round (both are "century:17").
  */
 export function signatureKept(needle: ValueSignature, haystack: ValueSignature): boolean {
   const hasNumber = [...needle.tokens].some(t => /^\d/.test(t));
   for (const t of needle.tokens) {
     if (hasNumber && t.startsWith('day:')) continue;
+    if (needle.centuryParts.has(t)) continue;
     if (!haystack.tokens.has(t)) return false;
   }
   return true;

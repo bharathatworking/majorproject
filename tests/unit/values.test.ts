@@ -64,3 +64,34 @@ describe('signatureKept', () => {
     expect(kept('Monday', 'on Tuesday')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Centuries (UK Wikipedia run: "Over the 17th century" → "In the 1600s")
+// ---------------------------------------------------------------------------
+describe('centuries', () => {
+  it('names a century the same way in words, digits and hundreds', () => {
+    for (const t of ['17th century', 'seventeenth century', '17th-century', 'the 1600s', 'two 17th centuries']) {
+      expect(valueSignature(t).tokens.has('century:17')).toBe(true);
+    }
+    expect(valueSignature('twenty-first century').tokens.has('century:21')).toBe(true);
+    expect(valueSignature('1900s').tokens.has('century:20')).toBe(true);
+  });
+
+  it('treats "17th century" and "1600s" as equal when matching, both ways', () => {
+    expect(kept('17th century', 'In the 1600s the king had less power.')).toBe(true);
+    expect(kept('1600s', 'During the 17th century, the king had less power.')).toBe(true);
+    expect(kept('seventeenth century', 'the 1600s')).toBe(true);
+  });
+
+  it('still tells centuries apart, and leaves decades and plain years alone', () => {
+    expect(kept('17th century', 'In the 1700s the king had less power.')).toBe(false);
+    expect(kept('1920s', 'In the 1920s the empire was large.')).toBe(true);
+    expect(kept('1920s', 'In the 1900s the empire was large.')).toBe(false);
+    expect(valueSignature('1920s').tokens.has('century:20')).toBe(false);
+    expect(kept('1600', 'the 1600s')).toBe(true);
+  });
+
+  it('a plain ordinal is still kept by a century phrase that contains it', () => {
+    expect(kept('19th', 'London was the main money centre in the 19th century.')).toBe(true);
+  });
+});

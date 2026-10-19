@@ -106,3 +106,30 @@ describe('detectEntities', () => {
     expect(detectEntities('')).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// UK Wikipedia run (eval/fixtures): ordinals in names, time-phrase prepositions
+// ---------------------------------------------------------------------------
+describe('detectEntities: names with ordinals and time phrases', () => {
+  const texts = (text: string) => detectEntities(text).map(e => e.text);
+
+  it('does not read an ordinal inside a proper-noun phrase as a number', () => {
+    const t = 'Its involvement in the First World War and in the Second World War damaged Britain.';
+    expect(texts(t)).not.toContain('Second');
+    expect(texts(t)).not.toContain('First');
+    expect(detectEntities('Alex Salmond became First Minister of Scotland.').some(e => e.type === 'number')).toBe(false);
+  });
+
+  it('still reads a lowercase ordinal as a number', () => {
+    expect(texts('It was the first industrialised country.')).toContain('first');
+  });
+
+  it('strips leading prepositions from time phrases, with offsets that still slice back', () => {
+    const t = 'Over the 17th century the role of the monarchy was reduced.';
+    const date = detectEntities(t).find(e => e.type === 'date');
+    expect(date?.text).toBe('17th century');
+    expect(t.slice(date?.start, date?.end)).toBe('17th century');
+    expect(texts('Throughout the 1990s prices rose.')).toContain('1990s');
+    expect(texts('Around 1850 the town grew.')).toContain('1850');
+  });
+});

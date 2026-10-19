@@ -17,8 +17,14 @@
  *  - A match is cut at a sentence end or an opening bracket: compromise
  *    runs names across them ("Team Cal. The other" → "Team Cal",
  *    "TeamCal (Google" → "TeamCal").
- *  - A date loses a leading in / on / at / the / during ("during PST" →
- *    "PST").
+ *  - A date loses leading prepositions and "the" (in, on, at, during,
+ *    over, throughout, through, around, about, by, since, from, until,
+ *    before, after, within, for): "during PST" → "PST", "Over the 17th
+ *    century" → "17th century" (eval/fixtures UK run).
+ *  - A capitalised ordinal word (First … Twentieth) directly followed by a
+ *    capitalised word is part of a name, not a number: "Second World War",
+ *    "First Minister" (the UK run reported "You dropped the number
+ *    Second.").
  *  - A date whose core is only a time-zone abbreviation ("in PST", "UTC",
  *    "PST time zone") is a `timezone`, not a date, so a dropped one is
  *    reported as a time zone. "9am EST" stays a date.
@@ -49,7 +55,11 @@ nlp.plugin(numberPlugin);
 
 const LEADING_OPENERS = /^[\s(["'“‘]+/;
 const TRAILING_PUNCTUATION = /[\s.,;:!?)\]"'”’—–-]+$/;
-const LEADING_FILLER = /^(?:(?:in|on|at|the|during)\s+)+/i;
+const LEADING_FILLER =
+  /^(?:(?:in|on|at|the|during|over|throughout|through|around|about|by|since|from|until|before|after|within|for)\s+)+/i;
+/** A capitalised ordinal word ("Second" of "Second World War"). */
+const ORDINAL_WORD =
+  /^(?:First|Second|Third|Fourth|Fifth|Sixth|Seventh|Eighth|Ninth|Tenth|Eleventh|Twelfth|Thirteenth|Fourteenth|Fifteenth|Sixteenth|Seventeenth|Eighteenth|Nineteenth|Twentieth)$/;
 /** A sentence end inside a match, or an opening bracket: the match is cut there. */
 const BOUNDARY = /[.!?]["'”’)\]]*\s+|\s+[([]/;
 /** Digits then "." or ")" then a capital: a list marker when it starts a line, a sentence or follows ":". */
@@ -91,6 +101,10 @@ function cleanMatch(
     return { text, start };
   }
   if ((type === 'number' || type === 'date') && !valueSignature(text).hasValue) return null;
+  if ((type === 'number' || type === 'date') && ORDINAL_WORD.test(text)
+    && /^\s+[A-Z]/.test(source.slice(start + text.length))) {
+    return null;
+  }
   if (type === 'number' && UNIT_CONVERSION_BEFORE.test(source.slice(0, start))) return null;
   if (type === 'number' && /^\d{1,3}$/.test(text)
     && LIST_MARKER_AFTER.test(source.slice(start + text.length))
