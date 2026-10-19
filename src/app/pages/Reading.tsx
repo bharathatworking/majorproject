@@ -459,10 +459,20 @@ function NodeBlock({
         )}
       </Tag>
 
-      {/* Meaning-check verdict; CSS shows it on hover/focus */}
+      {/* Meaning-check verdict and its concrete reasons; CSS shows them on hover/focus */}
       {badge && (
-        <span className={`meaning-badge ${badge.warn ? 'meaning-low' : ''}`} title={badge.title}>
-          {badge.label}
+        <span className="meaning-status">
+          {badge.chips.map(chip => (
+            <span key={chip.label} className={`meaning-chip meaning-chip-${chip.kind}`} title={chip.title}>
+              {chip.label}
+            </span>
+          ))}
+          <span
+            className={`meaning-badge ${badge.warn ? 'meaning-low' : ''} ${badge.unverified ? 'meaning-unverified' : ''}`}
+            title={badge.title}
+          >
+            {badge.label}
+          </span>
         </span>
       )}
 

@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  averageSimilarity, cosineSimilarity, meaningBadge, meaningOverview, meaningStats, meaningStatusOf,
-  passRateLabel, summarizeMeaning,
+  averageSimilarity, cosineSimilarity, meaningBadge, meaningChips, meaningOverview, meaningStats, meaningStatusOf,
+  NOT_VERIFIED_NOTE, passRateLabel, summarizeMeaning,
 } from '../../src/lib/quality/similarity';
-import { THESIS_COVERAGE_MIN } from '../../src/lib/quality/config';
-import type { StoredMeaning, StoredResult } from '../../src/types';
+import { CONTRADICTION_MAX, THESIS_COVERAGE_MIN } from '../../src/lib/quality/config';
+import { contradictionReason, droppedEntityReason } from '../../src/lib/quality/meaning';
+import type { Entity, StoredMeaning, StoredResult } from '../../src/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -176,16 +177,23 @@ describe('meaningBadge', () => {
     expect(pass?.label).toBe('meaning ✓ 0.91 · Lite');
     expect(pass?.title).toMatch(/Lite mode: sentence check \(NLI\) skipped/);
     const fail = meaningBadge({ ...FULL_PASS, nliChecked: false, lite: true, passed: false, reasons: ['Drifted.'] });
-    expect(fail?.label).toBe('meaning ⚠ Drifted. · Lite');
+    expect(fail?.label).toBe('Not verified · Lite');
   });
 
-  it('shows the first reason when it failed, and every reason in the title', () => {
+  it('shows a neutral "Not verified" when the kept version did not pass, every reason in the title', () => {
     const badge = meaningBadge({
       ...FULL_PASS, passed: false, reasons: ['You dropped the number 1945.', 'The meaning drifted.'],
     });
-    expect(badge?.label).toBe('meaning ⚠ You dropped the number 1945.');
-    expect(badge?.warn).toBe(true);
+    expect(badge).toMatchObject({ label: 'Not verified', warn: false, unverified: true });
+    expect(badge?.title.split('\n')[0]).toBe(NOT_VERIFIED_NOTE);
+    expect(badge?.title).toContain('You dropped the number 1945.');
     expect(badge?.title).toContain('The meaning drifted.');
+    expect(badge?.chips).toEqual([{ kind: 'entity', label: 'missing number', title: 'You dropped the number 1945.' }]);
+  });
+
+  it('a passing or legacy result is not unverified and has no chips', () => {
+    expect(meaningBadge(FULL_PASS)).toMatchObject({ unverified: false, chips: [] });
+    expect(meaningBadge({ similarity: 0.82 })).toMatchObject({ unverified: false, chips: [] });
   });
 
   it('shows the similarity alone for results checked before the thesis standard', () => {
@@ -202,5 +210,62 @@ describe('meaningBadge', () => {
 
   it('is null for an unchecked result', () => {
     expect(meaningBadge({})).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// meaningChips — concrete reasons beside "Not verified"
+// ---------------------------------------------------------------------------
+describe('meaningChips', () => {
+  const FAIL: StoredMeaning = { ...FULL_PASS, passed: false };
+
+  it('one chip per kind of dropped entity; people, places and organizations are names', () => {
+    const chips = meaningChips({
+      ...FAIL,
+      reasons: [
+        'You dropped the number 1945.', 'You dropped the date 3 May.', 'You dropped the name Marie Curie.',
+        'You dropped the place Paris.', 'You dropped the organization UNESCO.', 'You dropped the time zone UTC.',
+      ],
+    });
+    expect(chips.map(c => c.label)).toEqual(['missing number', 'missing date', 'missing name', 'missing time zone']);
+    expect(chips.every(c => c.kind === 'entity')).toBe(true);
+    expect(chips[2].title).toBe('You dropped the name Marie Curie.\nYou dropped the place Paris.\nYou dropped the organization UNESCO.');
+  });
+
+  it('no chip for an untyped entity, drift, length or an unsupported sentence', () => {
+    expect(meaningChips({
+      ...FAIL,
+      reasons: [
+        'You dropped "Magna Carta".', 'The meaning drifted from the original (similarity 0.80).',
+        'You left out too much of the original (your version has 40% of its words).',
+        'This sentence is not supported by the original: "It rained."',
+      ],
+    })).toEqual([]);
+  });
+
+  it('a contradiction chip only when the contradiction is above CONTRADICTION_MAX', () => {
+    const reasons = ['This sentence contradicts the original: "It was built in 1900."'];
+    expect(meaningChips({ ...FAIL, reasons, maxContradiction: CONTRADICTION_MAX + 0.3 })).toEqual([
+      { kind: 'contradiction', label: 'contradiction', title: reasons[0] },
+    ]);
+    // The "highest contradiction" fallback reason with a low value is not a concrete contradiction
+    expect(meaningChips({ ...FAIL, reasons, maxContradiction: CONTRADICTION_MAX })).toEqual([]);
+    expect(meaningChips({ ...FAIL, reasons, maxContradiction: undefined })).toEqual([]);
+  });
+
+  it('reads the reason strings meaning.ts actually builds', () => {
+    const types: Entity['type'][] = ['number', 'date', 'timezone', 'person', 'place', 'org'];
+    const chips = meaningChips({
+      ...FAIL,
+      reasons: [...types.map(t => droppedEntityReason('X', t)), droppedEntityReason('Y', 'other'), contradictionReason('Z.')],
+      maxContradiction: 0.9,
+    });
+    expect(chips.map(c => c.label)).toEqual(['missing number', 'missing date', 'missing time zone', 'missing name', 'contradiction']);
+  });
+
+  it('is empty for a passing, unchecked or legacy result', () => {
+    const reasons = ['You dropped the number 1945.'];
+    expect(meaningChips({ ...FULL_PASS, reasons })).toEqual([]);
+    expect(meaningChips({ reasons })).toEqual([]);
   });
 });

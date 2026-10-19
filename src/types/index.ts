@@ -134,6 +134,19 @@ export type MeaningFailure = 'similarity' | 'entities' | 'unsupported' | 'contra
 export type FailureBreakdown = Record<MeaningFailure, number> & { failedParagraphs: number };
 
 /**
+ * A concrete reason shown beside a "Not verified" badge on the Reading page
+ * (lib/quality/similarity.ts meaningChips): a dropped number, date, time
+ * zone or name, or an NLI contradiction. Rendered as React text only.
+ */
+export interface MeaningChip {
+  kind: 'entity' | 'contradiction';
+  /** Short text, e.g. "missing number" or "contradiction". */
+  label: string;
+  /** Tooltip: the full reason(s) behind the chip. */
+  title: string;
+}
+
+/**
  * A SimplificationResult that has been persisted to storage.
  * Carries the node's structural type and heading level so the Reading page
  * can render it correctly (h2/h3 vs p vs blockquote vs li) without needing

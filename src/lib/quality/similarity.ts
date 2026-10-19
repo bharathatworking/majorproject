@@ -18,12 +18,21 @@
  *    checked result, passed or not). meaningOverview returns both, so the
  *    Progress card and table show them from one computation and can't
  *    disagree.
+ *
+ * Reader-facing badge (meaningBadge): the frozen checker fails about 70% of
+ * faithful paragraphs (eval/checker/REPORT.md), so a version that does not
+ * pass is shown as a neutral "Not verified", not as a warning. Chips name
+ * only concrete problems the checker already found (meaningChips): a
+ * dropped number, date, time zone or name, and a contradiction above
+ * CONTRADICTION_MAX. Low similarity, length or an unsupported sentence get
+ * no chip; they stay in the tooltip. The thesis metric (passed / failed)
+ * is unchanged.
  */
 
 import {
   COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, CONTRADICTION_MAX, ENTAILMENT_MIN, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN,
 } from './config';
-import type { MeaningStatus, MeaningSummary, StoredMeaning, StoredResult } from '../../types';
+import type { MeaningChip, MeaningStatus, MeaningSummary, StoredMeaning, StoredResult } from '../../types';
 
 // ─── Arithmetic ───────────────────────────────────────────────────────────────
 
@@ -97,15 +106,64 @@ export interface MeaningBadge {
   label: string;
   /** Hover text with every measured value and reason. */
   title: string;
-  /** Show the warning (amber) style. */
+  /** Show the warning (amber) style (only results from before the thesis standard). */
   warn: boolean;
+  /** The kept version did not pass the check: neutral "Not verified" style. */
+  unverified: boolean;
+  /** Concrete reasons to show beside an unverified badge (meaningChips). */
+  chips: MeaningChip[];
 }
+
+/** "You dropped the number 1945." → number (meaning.ts droppedEntityReason). */
+const DROPPED_ENTITY = /^You dropped the (number|date|time zone|name|place|organization) /;
+const CONTRADICTION_PREFIX = 'This sentence contradicts';
+
+/** Chip label per dropped-entity noun; people, places and organizations are all names. */
+const ENTITY_CHIP_LABEL: Record<string, string> = {
+  number: 'missing number',
+  date: 'missing date',
+  'time zone': 'missing time zone',
+  name: 'missing name',
+  place: 'missing name',
+  organization: 'missing name',
+};
+
+/**
+ * Concrete reasons of a version that did not pass, as chips: one per kind of
+ * dropped entity (number, date, time zone, name; same label merged, every
+ * reason in the title) and one for a contradiction, only when a reason names
+ * a contradicted sentence AND the highest contradiction is above
+ * CONTRADICTION_MAX. Empty for a passing or unchecked version.
+ */
+export function meaningChips(m: StoredMeaning): MeaningChip[] {
+  if (m.passed !== false) return [];
+  const reasons = m.reasons ?? [];
+  const byLabel = new Map<string, string[]>();
+  for (const r of reasons) {
+    const match = DROPPED_ENTITY.exec(r);
+    if (!match) continue;
+    const label = ENTITY_CHIP_LABEL[match[1]];
+    byLabel.set(label, [...(byLabel.get(label) ?? []), r]);
+  }
+  const chips: MeaningChip[] = [...byLabel].map(([label, rs]) => ({ kind: 'entity', label, title: rs.join('\n') }));
+  const contradicted = reasons.filter(r => r.startsWith(CONTRADICTION_PREFIX));
+  if (contradicted.length > 0 && m.maxContradiction !== undefined && m.maxContradiction > CONTRADICTION_MAX) {
+    chips.push({ kind: 'contradiction', label: 'contradiction', title: contradicted.join('\n') });
+  }
+  return chips;
+}
+
+/** First line of an unverified badge's tooltip. */
+export const NOT_VERIFIED_NOTE =
+  'Not verified: the on-device check could not confirm that every fact was kept. '
+  + 'This does not mean the text is wrong. Click the paragraph to compare it with the original.';
 
 /**
  * "meaning ✓ 0.91", "meaning ✓ 0.91 · no NLI" (NLI fell back), "meaning ✓
- * 0.91 · Lite" (Lite quality mode) or "meaning ⚠ <first reason>";
- * results checked before the thesis standard show their similarity only.
- * Null when the result was not checked.
+ * 0.91 · Lite" (Lite quality mode) or a neutral "Not verified" (with
+ * meaningChips) when the kept version did not pass; results checked before
+ * the thesis standard show their similarity only. Null when the result was
+ * not checked.
  */
 export function meaningBadge(m: StoredMeaning): MeaningBadge | null {
   const details: string[] = [];
@@ -129,6 +187,8 @@ export function meaningBadge(m: StoredMeaning): MeaningBadge | null {
       label: `meaning ${m.similarity.toFixed(2)}`,
       title: `Checked before the current meaning standard: ${details.join(' · ')}`,
       warn: m.similarity < SIMILARITY_THRESHOLD,
+      unverified: false,
+      chips: [],
     };
   }
 
@@ -137,14 +197,15 @@ export function meaningBadge(m: StoredMeaning): MeaningBadge | null {
     if (m.similarity !== undefined) parts.push(m.similarity.toFixed(2));
     let label = parts.join(' ');
     if (m.nliChecked === false) label += m.lite ? ' · Lite' : ' · no NLI';
-    return { label, title: `Meaning preserved: ${details.join(' · ')}`, warn: false };
+    return { label, title: `Meaning preserved: ${details.join(' · ')}`, warn: false, unverified: false, chips: [] };
   }
 
-  const reasons = m.reasons ?? [];
   return {
-    label: `meaning ⚠ ${reasons[0] ?? 'not preserved'}${m.lite ? ' · Lite' : ''}`,
-    title: [...reasons, details.join(' · ')].filter(Boolean).join('\n'),
-    warn: true,
+    label: `Not verified${m.lite ? ' · Lite' : ''}`,
+    title: [NOT_VERIFIED_NOTE, ...(m.reasons ?? []), details.join(' · ')].filter(Boolean).join('\n'),
+    warn: false,
+    unverified: true,
+    chips: meaningChips(m),
   };
 }
 

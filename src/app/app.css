@@ -862,11 +862,26 @@ ol.node-list { list-style: decimal; }
 .reading-content.dyslexia-font .node-list { padding-left: 1.9em; }
 .reading-content.dyslexia-font .node-list li { margin: 0.45em 0; }
 
-/* Meaning-check badge: hidden until the paragraph is hovered or focused */
-.meaning-badge {
+/* Meaning-check status: the badge plus any reason chips, top right of the
+   paragraph, hidden until the paragraph is hovered or focused. Each pill
+   carries its full text in a title tooltip, so the row takes hover (it sits
+   beside the clickable text, not over it). */
+.meaning-status {
   position: absolute;
   top: -0.6rem;
   right: 0;
+  display: flex;
+  gap: 0.3rem;
+  justify-content: flex-end;
+  max-width: min(80%, 36rem);
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+.node-block:hover .meaning-status,
+.node-block:focus-within .meaning-status { opacity: 1; }
+
+.meaning-badge,
+.meaning-chip {
   padding: 0.05rem 0.45rem;
   border-radius: 999px;
   background: var(--surface-raised);
@@ -875,21 +890,24 @@ ol.node-list { list-style: decimal; }
   font-family: system-ui, sans-serif;
   font-size: 0.68rem;
   line-height: 1.4;
-  /* A failure reason can be long: one line, cut with an ellipsis. The full
-     text is in the title tooltip, so the badge takes hover (it sits beside
-     the clickable text, not over it). */
-  max-width: min(70%, 32rem);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0;
-  transition: opacity var(--transition);
+  min-width: 0;
 }
-.node-block:hover .meaning-badge,
-.node-block:focus-within .meaning-badge { opacity: 1; }
+.meaning-badge { flex-shrink: 0; }
 .meaning-badge.meaning-low {
   color: var(--warning);
   border-color: rgba(250, 204, 21, 0.4);
+}
+/* Not verified: neutral, not a warning (the check is cautious and fails
+   many faithful paragraphs) */
+.meaning-badge.meaning-unverified { border-style: dashed; }
+/* Concrete reasons (missing number / date / name, contradiction): quiet
+   pills, slightly more visible than the badge so they can be read */
+.meaning-chip {
+  background: transparent;
+  color: var(--text-secondary);
 }
 
 /* "already simple" tag: kept-as-is nodes; faint until hovered */
