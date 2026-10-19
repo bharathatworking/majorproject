@@ -48,7 +48,7 @@ export interface NliVerdict {
 }
 
 /** Every MeaningFailure, in the order reports list them. */
-export const MEANING_FAILURES: readonly MeaningFailure[] = ['similarity', 'entities', 'unsupported', 'contradiction'];
+export const MEANING_FAILURES: readonly MeaningFailure[] = ['similarity', 'entities', 'unsupported', 'contradiction', 'echo'];
 
 // ─── NLI rule ─────────────────────────────────────────────────────────────────
 
@@ -112,7 +112,7 @@ export function entityVerdict(args: {
 
 /** Counts failure kinds over the failure lists of failed versions. */
 export function failureBreakdown(failureLists: readonly (readonly MeaningFailure[])[]): FailureBreakdown {
-  const counts: FailureBreakdown = { similarity: 0, entities: 0, unsupported: 0, contradiction: 0, failedParagraphs: 0 };
+  const counts: FailureBreakdown = { similarity: 0, entities: 0, unsupported: 0, contradiction: 0, echo: 0, failedParagraphs: 0 };
   for (const list of failureLists) {
     if (list.length === 0) continue;
     counts.failedParagraphs++;
@@ -121,9 +121,12 @@ export function failureBreakdown(failureLists: readonly (readonly MeaningFailure
   return counts;
 }
 
-/** "similarity 4, entities 5, unsupported 5, contradiction 0 (of 9 failed)". */
+/**
+ * "similarity 4, entities 5, unsupported 5, contradiction 0, echo 0 (of 9
+ * failed)"; a kind missing from an older log counts 0.
+ */
 export function formatFailureBreakdown(b: FailureBreakdown): string {
-  return `${MEANING_FAILURES.map(k => `${k} ${b[k]}`).join(', ')} (of ${b.failedParagraphs} failed)`;
+  return `${MEANING_FAILURES.map(k => `${k} ${b[k] ?? 0}`).join(', ')} (of ${b.failedParagraphs} failed)`;
 }
 
 /**
@@ -137,6 +140,7 @@ export function failuresFromReasons(reasons: readonly string[]): MeaningFailure[
     else if (r.startsWith('This sentence contradicts')) kinds.add('contradiction');
     else if (r.startsWith('This sentence is not supported') || r.startsWith('The simplified version has no sentences')) kinds.add('unsupported');
     else if (r.startsWith('The meaning drifted')) kinds.add('similarity');
+    else if (r.startsWith('Your version has a line that only lists') || r.startsWith('Your version repeats the instructions')) kinds.add('echo');
   }
   return MEANING_FAILURES.filter(k => kinds.has(k));
 }

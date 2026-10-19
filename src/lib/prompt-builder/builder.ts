@@ -1,5 +1,5 @@
 import { PROMPT_VARIANTS } from './variants';
-import type { ContentNode, PromptVariantId, SimplificationSpec, ReadabilityReport } from '../../types';
+import type { ContentNode, Entity, PromptVariantId, SimplificationSpec, ReadabilityReport } from '../../types';
 
 // ─── Reader rules ─────────────────────────────────────────────────────────────
 
@@ -33,6 +33,27 @@ export function readerRules(spec: SimplificationSpec): string[] {
     );
   }
   return rules;
+}
+
+// ─── Entities ─────────────────────────────────────────────────────────────────
+
+/**
+ * The entity texts the prompt names, each once (case-insensitive, first form
+ * kept). The old "Preserve the following entities EXACTLY as written: Roman,
+ * Roman, 43, …" line, duplicates included, was copied verbatim into a retry
+ * answer (eval/fixtures/runs/uk-wiki-2026-10-19.json), so the line now says
+ * to keep them inside sentences.
+ */
+export function entityList(entities: readonly Entity[]): string {
+  const seen = new Set<string>();
+  const texts: string[] = [];
+  for (const e of entities) {
+    const key = e.text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    texts.push(e.text);
+  }
+  return texts.join(', ');
 }
 
 // ─── Prompt ───────────────────────────────────────────────────────────────────
@@ -141,8 +162,7 @@ ${extraRules}`;
   user += `Please rewrite the following text according to the system instructions.\n\n`;
 
   if (spec.preserveEntities && node.entities && node.entities.length > 0) {
-    const entityList = node.entities.map(e => e.text).join(', ');
-    user += `IMPORTANT: Preserve the following entities EXACTLY as written: ${entityList}\n\n`;
+    user += `Keep these names, numbers and dates inside your sentences; do not list them separately: ${entityList(node.entities)}\n\n`;
   }
 
   const hinted = hintedWords(spec, difficultWords);

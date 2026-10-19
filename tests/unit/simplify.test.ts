@@ -105,7 +105,7 @@ const { DEFAULT_PROFILE } = await import('../../src/lib/storage/settings');
 const { getDocument, upsertDocument, saveDocument } = await import('../../src/lib/storage/documents');
 const { beforeAfterOf, getWeeklyProgress } = await import('../../src/lib/storage/progress');
 const { DEFAULT_LLM_MODEL, OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
-const { MEANING_RETRY_INSTRUCTION, driftReason, unsupportedReason } = await import('../../src/lib/quality/meaning');
+const { RETRY_OPENING, driftReason, unsupportedReason } = await import('../../src/lib/quality/meaning');
 const {
   COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, ENTAILMENT_MIN, MAX_MODEL_CALLS_PER_NODE, NLI_CONTRADICTION_AGG, NLI_PARAGRAPH_RULE, QUALITY_THRESHOLD,
 } = await import('../../src/lib/quality/config');
@@ -386,9 +386,9 @@ describe('runSimplification meaning check', () => {
     await runSimplification(doc, callbacks(), 'all');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(prompts[0].startsWith(MEANING_RETRY_INSTRUCTION)).toBe(false);
-    expect(prompts[1].startsWith(MEANING_RETRY_INSTRUCTION)).toBe(true);
-    expect(prompts[1]).toContain(`- ${driftReason(0.6)}\n\n`);
+    expect(prompts[0].startsWith(RETRY_OPENING)).toBe(false);
+    expect(prompts[1].startsWith(RETRY_OPENING)).toBe(true);
+    expect(prompts[1]).toContain(`Fix this: ${driftReason(0.6)} Output only the rewritten text.\n\n`);
     const saved = await savedResult(doc.id, 'n0');
     expect(saved?.simplifiedText).toBe(retry);
     expect(saved?.similarity).toBeCloseTo(0.88);
@@ -422,8 +422,47 @@ describe('runSimplification meaning check', () => {
     await runSimplification(doc, callbacks(), 'all');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(prompts[1]).toContain('- You dropped the name Marie Curie.');
+    expect(prompts[1]).toContain('left out "Marie Curie"');
     expect((await savedResult(doc.id, 'n0'))?.simplifiedText).toBe(retry);
+  });
+
+  /** A faithful rewrite of CURIE with a copied entity list under it (eval/fixtures UK run). */
+  const CURIE_TEXT = 'Marie Curie won the Nobel Prize in Physics in 1903 for her work on radiation.';
+  const ECHO_LINE = '- Marie Curie, 1903, Nobel Prize, Physics';
+
+  it('fails a version that copied the entity list (echo) and keeps the clean retry', async () => {
+    const first = `${CURIE_TEXT}\n${ECHO_LINE}`;
+    nodes = [CURIE];
+    replies = { n0: [first, CURIE_TEXT] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(prompts[1].startsWith(RETRY_OPENING)).toBe(true);
+    expect((await savedResult(doc.id, 'n0'))?.simplifiedText).toBe(CURIE_TEXT);
+    const log = (await getDocument(doc.id))?.runLogs?.at(-1)?.nodes[0];
+    expect(log?.candidates[0].failures).toEqual(['echo']);
+    expect(log?.candidates[0].reasons[0]).toContain('only lists names or numbers');
+  });
+
+  it('removes the echo lines, without a model call, when every version echoed', async () => {
+    const echoed = `${CURIE_TEXT}\n${ECHO_LINE}`;
+    nodes = [CURIE];
+    replies = { n0: [echoed, echoed] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const saved = await savedResult(doc.id, 'n0');
+    expect(saved?.simplifiedText).toBe(CURIE_TEXT);
+    expect(saved?.passed).toBe(true);
+    expect(saved?.echo).toBeUndefined();
+    const log = (await getDocument(doc.id))?.runLogs?.at(-1)?.nodes[0];
+    expect(log?.modelCalls).toBe(2);
+    expect(log?.candidates.map(c => c.chosen)).toEqual([false, false, true]);
+    expect(log?.candidates[2].echoStripped).toBe(true);
   });
 
   it('skips the meaning score with one notice when the embedding model is missing', async () => {
@@ -532,7 +571,7 @@ describe('runSimplification thesis meaning standard', () => {
     await runSimplification(doc, callbacks(), 'all');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(prompts[1]).toContain(`- ${unsupportedReason('She was born in Paris.')}`);
+    expect(prompts[1]).toContain(`Fix this: ${unsupportedReason('She was born in Paris.')}`);
     const saved = (await getDocument(doc.id))?.results[0];
     expect(saved).toMatchObject({ simplifiedText: GOOD_CURIE, passed: true });
     const node = (await lastLog(doc.id))?.nodes[0];
@@ -633,11 +672,11 @@ describe('runSimplification thesis meaning standard', () => {
     expect(log?.summary.meaning.thesisGrade).toBe(true);
     expect(log?.summary.meaning.avgNliMs).toBe(100);
     expect(log?.summary.meaning.failureBreakdown).toEqual({
-      similarity: 0, entities: 0, unsupported: 1, contradiction: 0, failedParagraphs: 1,
+      similarity: 0, entities: 0, unsupported: 1, contradiction: 0, echo: 0, failedParagraphs: 1,
     });
     expect(log?.nodes[2].meaning?.failures).toEqual(['unsupported']);
     expect(vi.mocked(console.log).mock.calls.map(c => String(c[0])))
-      .toContainEqual('[Clarity] Meaning failures: similarity 0, entities 0, unsupported 1, contradiction 0 (of 1 failed)');
+      .toContainEqual('[Clarity] Meaning failures: similarity 0, entities 0, unsupported 1, contradiction 0, echo 0 (of 1 failed)');
   });
 
   it('logs each candidate with its text, failure kinds and NLI time split, and each node with its original', async () => {
@@ -985,7 +1024,7 @@ describe('runSimplification extra quality', () => {
     expect(prompts[1]).toContain(STEP_MARK);
     expect(prompts[2]).toContain(EXAMPLE_MARK);
     // Standard passed 6C, so the variants carry no meaning-retry instruction
-    expect(prompts.slice(1).some(p => p.startsWith(MEANING_RETRY_INSTRUCTION))).toBe(false);
+    expect(prompts.slice(1).some(p => p.startsWith(RETRY_OPENING))).toBe(false);
     // Only the standard version is streamed
     expect(cb.onNodeChunk.mock.calls.map(c => c[1])).toEqual([HARD]);
 
@@ -1009,10 +1048,10 @@ describe('runSimplification extra quality', () => {
     await runSimplification(doc, callbacks(), 'all');
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(prompts[0].startsWith(MEANING_RETRY_INSTRUCTION)).toBe(false);
+    expect(prompts[0].startsWith(RETRY_OPENING)).toBe(false);
     for (const prompt of prompts.slice(1)) {
-      expect(prompt.startsWith(MEANING_RETRY_INSTRUCTION)).toBe(true);
-      expect(prompt).toContain('- You dropped the name Marie Curie.');
+      expect(prompt.startsWith(RETRY_OPENING)).toBe(true);
+      expect(prompt).toContain('left out "Marie Curie"');
     }
     expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe('Marie Curie won in 1903.');
     const node = (await lastLog(doc.id))?.nodes[0];

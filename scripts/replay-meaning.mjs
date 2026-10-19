@@ -66,7 +66,7 @@ try {
   const { buildPrompt, hintedWords } = await load('/src/lib/prompt-builder/builder.ts');
   const { DEFAULT_PROFILE } = await load('/src/lib/storage/settings.ts');
   const { OllamaProvider, DEFAULT_LLM_MODEL } = await load('/src/lib/llm/ollama-provider.ts');
-  const { assessMeaning, buildRetryInstruction, candidatePasses, pickBetterVersion } = await load('/src/lib/quality/meaning.ts');
+  const { assessMeaning, buildRetryInstruction, candidatePasses, pickBetterVersion, retryInputOf } = await load('/src/lib/quality/meaning.ts');
   const { checkMeaning, shouldCheckNode } = await load('/src/lib/quality/semantic.ts');
   const { checkEntailment, NliClient } = await load('/src/lib/quality/nli.ts');
   const { failureBreakdown, formatFailureBreakdown } = await load('/src/lib/quality/verdict.ts');
@@ -118,7 +118,7 @@ try {
         const [paragraph, ...vecs] = await embedOrThrow([original, ...sentences]);
         return mainClaimIndexes(sentences.length, { sentences: vecs, paragraph });
       },
-    });
+    }, { echoGuard: true });
 
     const firstText = await complete(prompt);
     const checked = shouldCheckNode(node);

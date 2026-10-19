@@ -2,11 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 import prereg from '../../eval/checker/PREREG.md?raw';
 import {
   assessMeaning, buildRetryInstruction, candidatePasses, contradictionReason, driftReason,
-  droppedEntityReason, keyEntityTexts, lengthReason, mainPointReason, meaningScore, MEANING_RETRY_INSTRUCTION,
-  NO_SENTENCES_REASON, pickBetterVersion, SCORE_MODELS, toStoredMeaning, unsupportedReason,
+  droppedEntityReason, echoLineReason, INSTRUCTION_ECHO_REASON, keyEntityTexts, lengthReason, mainPointReason,
+  meaningScore, MEANING_RETRY_INSTRUCTION, NO_SENTENCES_REASON, pickBetterVersion, RETRY_OPENING, retryInputOf,
+  SCORE_MODELS, toStoredMeaning, unsupportedReason,
   type MeaningDeps, type ScoreModels,
 } from '../../src/lib/quality/meaning';
 import { NLI_FEATURES, sigmoid } from '../../src/lib/quality/checker';
+import { RETRY_ECHO_PHRASES } from '../../src/lib/quality/echo';
 import { COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, MAX_RETRY_REASONS } from '../../src/lib/quality/config';
 import { makeAssessment, makeEntailment } from '../mocks/fixtures';
 import type { EntailmentCheck, Entity, MeaningCandidate } from '../../src/types';
@@ -301,25 +303,96 @@ describe('reasons', () => {
 });
 
 describe('buildRetryInstruction', () => {
-  it('names the specific reasons after the base instruction', () => {
-    expect(buildRetryInstruction(['You dropped the number 1945.'])).toBe(
-      `${MEANING_RETRY_INSTRUCTION} Fix these problems:\n- You dropped the number 1945.`,
+  it('names missing items in quotes, in one sentence, and forbids a list', () => {
+    expect(buildRetryInstruction({ missing: ['Roman', '1801'], reasons: [] })).toBe(
+      `${RETRY_OPENING} left out "Roman" and "1801". Work them into your existing sentences; ` +
+      'never output a list of names or numbers. Output only the rewritten text.',
     );
   });
 
-  it(`names at most ${MAX_RETRY_REASONS} reasons, most important first`, () => {
-    const text = buildRetryInstruction(['a', 'b', 'c', 'd']);
-    expect(text).toContain('- a\n- b\n- c');
-    expect(text).not.toContain('- d');
+  it(`names at most ${MAX_RETRY_REASONS} items in all, missing entities first, never as bullets`, () => {
+    const text = buildRetryInstruction({
+      missing: ['Roman', '43', '383', '410'],
+      reasons: [droppedEntityReason('Roman', 'person'), driftReason(0.8)],
+    });
+    expect(text).toContain('"Roman", "43" and "383"');
+    expect(text).not.toContain('"410"');
+    expect(text).not.toContain('drifted');
+    expect(text).not.toMatch(/^\s*- /m);
+    expect(text).not.toContain('\n');
   });
 
-  it('is the base instruction without reasons', () => {
-    expect(buildRetryInstruction([])).toBe(MEANING_RETRY_INSTRUCTION);
+  it('turns the other reasons into prose, without the dropped-entity strings', () => {
+    const text = buildRetryInstruction({
+      missing: ['1945'],
+      reasons: [droppedEntityReason('1945', 'date'), unsupportedReason('It ended in Rome.')],
+    });
+    expect(text).toContain('left out "1945"');
+    expect(text).toContain('Also fix this: This sentence is not supported by the original: "It ended in Rome."');
+    expect(text).not.toContain('You dropped');
   });
 
-  it('a retry built from a failed assessment names its worst feature first', async () => {
+  it('names a meaning change when nothing is missing', () => {
+    expect(buildRetryInstruction({ missing: [], reasons: [driftReason(0.8)] })).toBe(
+      `${RETRY_OPENING} changed the meaning. Fix this: The meaning drifted from the original (similarity 0.80). ` +
+      'Output only the rewritten text.',
+    );
+  });
+
+  it('is the base instruction without anything to name', () => {
+    expect(buildRetryInstruction({ missing: [], reasons: [] })).toBe(`${MEANING_RETRY_INSTRUCTION} Output only the rewritten text.`);
+  });
+
+  it('a retry built from a failed assessment names its missing entity', async () => {
     const a = await assess(DROPS, deps(0.8, makeEntailment()));
-    expect(buildRetryInstruction(a.reasons)).toContain('Fix these problems:\n- You dropped the date 1945.');
+    expect(retryInputOf(a).missing).toEqual(['1945']);
+    expect(buildRetryInstruction(retryInputOf(a))).toContain('left out "1945"');
+  });
+
+  it('retryInputOf names no entities when no dropped entity is among the reasons', () => {
+    const a = makeAssessment({ passed: false, missingEntities: ['Rome'], reasons: [driftReason(0.8)] });
+    expect(retryInputOf(a).missing).toEqual([]);
+  });
+
+  it('every echo phrase of the current prompts occurs in the retry or entity instruction', () => {
+    const retry = buildRetryInstruction({ missing: ['A'], reasons: [driftReason(0.8)] }).toLowerCase();
+    const entityLine = 'keep these names, numbers and dates inside your sentences; do not list them separately';
+    const current = RETRY_ECHO_PHRASES.filter(p => retry.includes(p) || entityLine.includes(p));
+    expect(current).toEqual(expect.arrayContaining([
+      'your last version', 'work them into your existing sentences', 'never output a list',
+      'output only the rewritten text', 'do not list them separately',
+    ]));
+  });
+});
+
+describe('echo guard in assessMeaning', () => {
+  const echoed = `${KEEPS}\n- 1945, Germany, Berlin, Allies`;
+
+  it('fails a passing version that copied the entity list, with failure echo', async () => {
+    const a = await assessMeaning(ORIGINAL, echoed, ENTITIES, [], deps(0.95, makeEntailment()), {
+      models: TEST, echoGuard: true,
+    });
+    expect(a.echo).toBe(true);
+    expect(a.passed).toBe(false);
+    expect(a.failures).toEqual(['echo']);
+    expect(a.reasons[0]).toBe(echoLineReason('- 1945, Germany, Berlin, Allies'));
+    expect(toStoredMeaning(a).echo).toBe(true);
+  });
+
+  it('does not change the score: the guard only adds the echo condition', async () => {
+    const on = await assessMeaning(ORIGINAL, echoed, ENTITIES, [], deps(0.95, makeEntailment()), { models: TEST, echoGuard: true });
+    const off = await assessMeaning(ORIGINAL, echoed, ENTITIES, [], deps(0.95, makeEntailment()), { models: TEST });
+    expect(on.score).toBe(off.score);
+    expect(off.passed).toBe(true);
+    expect(off.echo).toBe(false);
+    expect(toStoredMeaning(off).echo).toBeUndefined();
+  });
+
+  it('fails a version that repeats the instruction wording', async () => {
+    const a = await assessMeaning(ORIGINAL, `${KEEPS} Work them into your existing sentences.`, ENTITIES, [],
+      deps(0.95, makeEntailment()), { models: TEST, echoGuard: true });
+    expect(a.passed).toBe(false);
+    expect(a.reasons).toContain(INSTRUCTION_ECHO_REASON);
   });
 });
 

@@ -30,7 +30,9 @@ describe('entityVerdict', () => {
     expect(entityVerdict({ entityTexts, missing: ['Gustave'], keyTexts: [] }).passed).toBe(false);
   });
 });
-import { contradictionReason, driftReason, droppedEntityReason, NO_SENTENCES_REASON, unsupportedReason } from '../../src/lib/quality/meaning';
+import {
+  contradictionReason, driftReason, droppedEntityReason, echoLineReason, INSTRUCTION_ECHO_REASON, NO_SENTENCES_REASON, unsupportedReason,
+} from '../../src/lib/quality/meaning';
 import type { SentenceScore } from '../../src/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -115,14 +117,15 @@ describe('failureBreakdown', () => {
       [],
       ['entities', 'entities'],
     ]);
-    expect(b).toEqual({ similarity: 1, entities: 2, unsupported: 1, contradiction: 0, failedParagraphs: 3 });
-    expect(formatFailureBreakdown(b)).toBe('similarity 1, entities 2, unsupported 1, contradiction 0 (of 3 failed)');
+    expect(b).toEqual({ similarity: 1, entities: 2, unsupported: 1, contradiction: 0, echo: 0, failedParagraphs: 3 });
+    expect(formatFailureBreakdown(b)).toBe('similarity 1, entities 2, unsupported 1, contradiction 0, echo 0 (of 3 failed)');
   });
 
   it('classifies every reason the meaning check writes', () => {
     expect(failuresFromReasons([
       unsupportedReason('A.'), droppedEntityReason('1945', 'date'), driftReason(0.8),
-      contradictionReason('B.'), droppedEntityReason('Magna Carta', 'other'),
+      contradictionReason('B.'), droppedEntityReason('Magna Carta', 'other'), echoLineReason('- A, B, C, D'),
+      INSTRUCTION_ECHO_REASON,
     ])).toEqual(MEANING_FAILURES);
     expect(failuresFromReasons([NO_SENTENCES_REASON])).toEqual(['unsupported']);
     expect(failuresFromReasons([])).toEqual([]);

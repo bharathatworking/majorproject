@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPrompt, readerRules } from '../../src/lib/prompt-builder/builder';
+import { buildPrompt, entityList, readerRules } from '../../src/lib/prompt-builder/builder';
 import {
   EXAMPLES, EXTRA_VARIANTS, PROMPT_VARIANTS, pickExample, stripExampleLabel,
 } from '../../src/lib/prompt-builder/variants';
@@ -75,19 +75,27 @@ describe('buildPrompt system prompt', () => {
 // User prompt — entities, type hint, rolling context, text
 // ---------------------------------------------------------------------------
 describe('buildPrompt user prompt', () => {
-  it('lists the entities to preserve', () => {
+  it('lists the entities to keep inside sentences', () => {
     const { user } = buildPrompt(node, spec(), report);
-    expect(user).toContain('Preserve the following entities EXACTLY as written: NASA, Paris');
+    expect(user).toContain('Keep these names, numbers and dates inside your sentences; do not list them separately: NASA, Paris');
+    expect(user).not.toContain('Preserve the following entities');
+  });
+
+  it('names each entity once (case-insensitive, first form kept)', () => {
+    const roman = { text: 'Roman', type: 'other' as const, start: 0, end: 5 };
+    const { user } = buildPrompt({ ...node, entities: [roman, { ...roman, start: 9, end: 14 }, { ...roman, text: 'ROMAN' }] }, spec(), report);
+    expect(user).toContain('do not list them separately: Roman\n');
+    expect(entityList([roman, roman])).toBe('Roman');
   });
 
   it('omits the entity line when there are no entities', () => {
     const { user } = buildPrompt({ ...node, entities: [] }, spec(), report);
-    expect(user).not.toContain('Preserve the following entities');
+    expect(user).not.toContain('do not list them separately');
   });
 
   it('omits the entity line when preservation is off', () => {
     const { user } = buildPrompt(node, spec({ preserveEntities: false }), report);
-    expect(user).not.toContain('Preserve the following entities');
+    expect(user).not.toContain('do not list them separately');
   });
 
   it('ends with the node text', () => {

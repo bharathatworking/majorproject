@@ -109,8 +109,13 @@ export interface StoredMeaning {
   maxContradiction?: number;
   /** The NLI model scored this version (false: it fell back to SBERT + entities). */
   nliChecked?: boolean;
-  /** Met the meaning standard (since 2026-10-19: combined score ≥ threshold). */
+  /**
+   * Met the meaning standard: since 2026-10-19 the combined score ≥ its
+   * threshold, and no copied list or instruction echo (lib/quality/echo.ts).
+   */
   passed?: boolean;
+  /** The version copied the prompt (a list of entities or instruction wording); absent otherwise. */
+  echo?: true;
   /** Why it failed, most important first; empty when it passed. */
   reasons?: string[];
   /** Checked in Lite quality mode (SBERT + entities only, NLI skipped on purpose). */
@@ -126,9 +131,10 @@ export interface StoredMeaning {
 /**
  * Why a version failed the meaning standard; one version can fail several:
  * SBERT cosine below the cutoff, a dropped entity, an NLI-unsupported
- * sentence (or no sentences), an NLI-contradicted sentence.
+ * sentence (or no sentences), an NLI-contradicted sentence, a line copied
+ * from the prompt (lib/quality/echo.ts).
  */
-export type MeaningFailure = 'similarity' | 'entities' | 'unsupported' | 'contradiction';
+export type MeaningFailure = 'similarity' | 'entities' | 'unsupported' | 'contradiction' | 'echo';
 
 /** Failed versions per failure kind (one can count under several), and how many failed. */
 export type FailureBreakdown = Record<MeaningFailure, number> & { failedParagraphs: number };
@@ -325,8 +331,10 @@ export interface MeaningAssessment {
   nliChecked: boolean;
   /** SBERT, NLI and entities all ran. */
   fullyChecked: boolean;
-  /** The combined score reached its model's threshold. */
+  /** The combined score reached its model's threshold and the version did not echo the prompt. */
   passed: boolean;
+  /** The version has a copied list line or repeats instruction wording (echo guard on). */
+  echo: boolean;
   /** Failure reasons, most important first. */
   reasons: string[];
   /** Which checks failed; empty exactly when `passed`. */
@@ -407,6 +415,11 @@ export interface CandidateLog {
   /** Of nliMs: premise ranking and pair scoring (absent in older logs). */
   nliRankMs?: number | null;
   nliScoreMs?: number | null;
+  /**
+   * This entry is the kept version with its copied-list lines removed (no
+   * model call), because every version echoed the prompt.
+   */
+  echoStripped?: boolean;
 }
 
 /** How a node got its result in a run. */

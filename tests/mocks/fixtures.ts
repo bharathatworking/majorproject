@@ -21,6 +21,7 @@ export function makeAssessment(overrides: Partial<MeaningAssessment> = {}): Mean
     nliChecked: true,
     fullyChecked: true,
     passed: true,
+    echo: false,
     reasons: [],
     failures: [],
     exemptedSentences: [],

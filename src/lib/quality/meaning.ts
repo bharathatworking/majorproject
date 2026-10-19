@@ -24,15 +24,27 @@
  *  - Reasons: the features that pulled the score down (negative w·z), worst
  *    first, each named by its existing reason string: dropped entities,
  *    unsupported or contradicted sentences, drift, the lost main point, a
- *    too-short version. The retry prompt names the first MAX_RETRY_REASONS
- *    ("You dropped the number 1945."). `failures` maps those features to
- *    the failure kinds of the run report.
+ *    too-short version. `failures` maps those features to the failure kinds
+ *    of the run report.
+ *  - Retry prompt (buildRetryInstruction): one short sentence naming at most
+ *    MAX_RETRY_REASONS missing items in quotes ("Your last version left out
+ *    "Roman" and "1801". Work them into your existing sentences; never
+ *    output a list of names or numbers."), then the other reasons as prose.
+ *    Never a bulleted list: the old "Fix these problems:\n- You dropped …"
+ *    made qwen3 append the prompt's entity list to its answer
+ *    (eval/fixtures/runs/uk-wiki-2026-10-19.json).
+ *  - Echo guard (options.echoGuard, lib/quality/echo.ts; the app turns it
+ *    on, the eval scripts leave it off so their numbers don't move): a
+ *    version with a copied list line or instruction wording fails with
+ *    failure 'echo', whatever its score. The combined score, its features
+ *    and its threshold are unchanged: pass = score ≥ threshold AND no echo.
  *  - meaningScore is the combined score: it picks between a first attempt
  *    and its retry, and is the meaning part of the stage 7 candidate total.
  */
 
 import { toPlainText } from '../render/format-output';
 import { checkerFeatures, combinedScore, harmfulFeatures, lengthRatioOf, worstFeature } from './checker';
+import { findEcho } from './echo';
 import { COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, MAX_RETRY_REASONS } from './config';
 import { mainClaimIndexes, splitSentences } from './premises';
 import { findMissingEntities } from './semantic';
@@ -80,9 +92,15 @@ const KEY_TYPES: ReadonlySet<Entity['type']> = new Set<Entity['type']>(['number'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/** Opening of every retry prompt; the specific reasons follow it. */
+/** Opening of every retry prompt. */
+export const RETRY_OPENING = 'Your last version';
+
+/** The retry prompt when there is nothing specific to name. */
 export const MEANING_RETRY_INSTRUCTION =
-  'Your previous version changed the meaning. Keep every fact, number and name from the original.';
+  `${RETRY_OPENING} changed the meaning of the original. Write it again so every sentence says only what the original says.`;
+
+/** Closing of every retry prompt. */
+const RETRY_CLOSING = 'Output only the rewritten text.';
 
 const ENTITY_NOUN: Record<Entity['type'], string | null> = {
   number: 'the number',
@@ -96,11 +114,21 @@ const ENTITY_NOUN: Record<Entity['type'], string | null> = {
 
 // ─── Reasons ──────────────────────────────────────────────────────────────────
 
+const DROPPED_PREFIX = 'You dropped ';
+
 /** "You dropped the number 1945." / "You dropped "Magna Carta"." */
 export function droppedEntityReason(text: string, type: Entity['type']): string {
   const noun = ENTITY_NOUN[type];
-  return noun ? `You dropped ${noun} ${text}.` : `You dropped "${text}".`;
+  return noun ? `${DROPPED_PREFIX}${noun} ${text}.` : `${DROPPED_PREFIX}"${text}".`;
 }
+
+/** True for a droppedEntityReason string. */
+export const isDroppedEntityReason = (reason: string) => reason.startsWith(DROPPED_PREFIX);
+
+export const echoLineReason = (line: string) =>
+  `Your version has a line that only lists names or numbers: "${line}"`;
+
+export const INSTRUCTION_ECHO_REASON = 'Your version repeats the instructions instead of only rewriting the text.';
 
 export const contradictionReason = (sentence: string) =>
   `This sentence contradicts the original: "${sentence}"`;
@@ -121,14 +149,55 @@ export const lengthReason = (ratio: number) => (ratio < 1
   ? `You left out too much of the original (your version has ${Math.round(ratio * 100)}% of its words).`
   : `Your version is much longer than the original (${Math.round(ratio * 100)}% of its words).`);
 
+/** What a retry should fix: missing entity texts (key first) and the reasons. */
+export interface RetryInput {
+  missing: readonly string[];
+  reasons: readonly string[];
+}
+
+/** "A", "A" and "B", "A", "B" and "C" (each in quotes). */
+function quoteList(items: readonly string[]): string {
+  const quoted = items.map(t => `"${t}"`);
+  return quoted.length <= 1 ? quoted.join('') : `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+}
+
 /**
- * Retry prompt prefix naming what to fix. Without reasons it is the plain
- * MEANING_RETRY_INSTRUCTION.
+ * Retry prompt prefix naming what to fix, in prose (see file header): at
+ * most MAX_RETRY_REASONS items in all, missing entities first. Without
+ * anything to name it is MEANING_RETRY_INSTRUCTION.
  */
-export function buildRetryInstruction(reasons: readonly string[]): string {
-  const named = reasons.slice(0, MAX_RETRY_REASONS);
-  if (named.length === 0) return MEANING_RETRY_INSTRUCTION;
-  return `${MEANING_RETRY_INSTRUCTION} Fix these problems:\n${named.map(r => `- ${r}`).join('\n')}`;
+export function buildRetryInstruction(input: RetryInput): string {
+  const missing = [...new Set(input.missing)].slice(0, MAX_RETRY_REASONS);
+  const others = input.reasons
+    .filter(r => !isDroppedEntityReason(r))
+    .slice(0, MAX_RETRY_REASONS - missing.length);
+  const parts: string[] = [];
+  if (missing.length > 0) {
+    parts.push(
+      `${RETRY_OPENING} left out ${quoteList(missing)}. ` +
+      'Work them into your existing sentences; never output a list of names or numbers.',
+    );
+  }
+  if (others.length > 0) {
+    parts.push(`${missing.length > 0 ? 'Also fix this' : `${RETRY_OPENING} changed the meaning. Fix this`}: ${others.join(' ')}`);
+  }
+  if (parts.length === 0) parts.push(MEANING_RETRY_INSTRUCTION);
+  parts.push(RETRY_CLOSING);
+  return parts.join(' ');
+}
+
+/**
+ * What a retry of a failed version should fix: its missing entities (key
+ * first) when a dropped entity is among its reasons, and its reasons.
+ */
+export function retryInputOf(
+  a: Pick<MeaningAssessment, 'missingEntities' | 'missingKeyEntities' | 'reasons'>,
+): RetryInput {
+  const named = a.reasons.some(isDroppedEntityReason);
+  return {
+    missing: named ? [...new Set([...a.missingKeyEntities, ...a.missingEntities])] : [],
+    reasons: a.reasons,
+  };
 }
 
 // ─── Assessment ───────────────────────────────────────────────────────────────
@@ -229,7 +298,7 @@ export async function assessMeaning(
   entities: readonly Entity[],
   hintedWords: readonly string[],
   deps: MeaningDeps,
-  options: { models?: ScoreModels } = {},
+  options: { models?: ScoreModels; echoGuard?: boolean } = {},
 ): Promise<MeaningAssessment> {
   const models = options.models ?? SCORE_MODELS;
   const plain = toPlainText(simplified);
@@ -268,10 +337,13 @@ export async function assessMeaning(
   // FULL needs every NLI feature it uses; otherwise LITE, which uses none
   const model = nli !== null && (!fullUsesMain || main !== null) ? models.full : models.lite;
   const { score, contributions } = combinedScore(model, features);
-  const passed = score >= model.threshold;
+  const scorePassed = score >= model.threshold;
+  const echoFound = options.echoGuard ? findEcho(simplified, { original, entities }) : null;
+  const echo = echoFound !== null && (echoFound.lines.length > 0 || echoFound.instruction);
+  const passed = scorePassed && !echo;
 
   let harmful: CheckerFeature[] = [];
-  if (!passed) {
+  if (!scorePassed) {
     harmful = harmfulFeatures(contributions);
     const worst = worstFeature(contributions);
     if (harmful.length === 0 && worst) harmful = [worst];
@@ -281,8 +353,12 @@ export async function assessMeaning(
     missingKey: entity.missingKey, missingMinor: entity.missingMinor,
     typeOf: new Map(entities.map(e => [e.text, e.type])),
   };
-  const reasons = [...new Set(harmful.flatMap(f => reasonsFor(f, context)))];
-  const failures = MEANING_FAILURES.filter(k => harmful.some(f => FEATURE_FAILURE[f] === k));
+  const echoReasons = echoFound
+    ? [...echoFound.lines.map(echoLineReason), ...(echoFound.instruction ? [INSTRUCTION_ECHO_REASON] : [])]
+    : [];
+  const reasons = [...new Set([...echoReasons, ...harmful.flatMap(f => reasonsFor(f, context))])];
+  const failures = MEANING_FAILURES.filter(k =>
+    (k === 'echo' && echo) || harmful.some(f => k !== 'echo' && FEATURE_FAILURE[f] === k));
   const nliChecked = nli !== null && model.id === 'full';
 
   return {
@@ -295,6 +371,7 @@ export async function assessMeaning(
     nliChecked,
     fullyChecked: nliChecked && similarity !== null,
     passed,
+    echo,
     reasons,
     failures,
     exemptedSentences: nli?.exemptedSentences ?? [],
@@ -344,6 +421,7 @@ export function toStoredMeaning(a: MeaningAssessment): StoredMeaning {
     ...(a.maxContradiction !== null && { maxContradiction: a.maxContradiction }),
     nliChecked: a.nliChecked,
     passed: a.passed,
+    ...(a.echo && { echo: true as const }),
     reasons: a.reasons,
     failures: a.failures,
     score: a.score,

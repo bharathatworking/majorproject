@@ -115,8 +115,23 @@ export const MIN_WORDS_FOR_CHECK = 8;
  */
 export const GLOSSARY_EXEMPTION_MAX_RATE = 0.3;
 
-/** At most this many reasons are named in a retry instruction. */
+/** At most this many reasons (missing items included) are named in a retry instruction. */
 export const MAX_RETRY_REASONS = 3;
+
+/**
+ * Echo guard (lib/quality/echo.ts): an output line is a copied list, not a
+ * sentence, when it splits at commas into at least ECHO_MIN_PARTS parts, at
+ * least ECHO_MIN_SOURCE_SHARE of them are entities or numbers from the
+ * source, and no other part has more than ECHO_MAX_OTHER_WORDS words. The
+ * last rule keeps real sentences with lists ("It is surrounded by the
+ * Atlantic Ocean, North Sea, English Channel, Celtic Sea, and Irish Sea":
+ * 3 of 5 parts are names, but the first part is a clause). Seen in a real
+ * run (eval/fixtures/runs/uk-wiki-2026-10-19.json): "- Roman, Roman, 43,
+ * 383, 410, 450, 1066, England, …" copied from the prompt's entity line.
+ */
+export const ECHO_MIN_PARTS = 4;
+export const ECHO_MIN_SOURCE_SHARE = 0.6;
+export const ECHO_MAX_OTHER_WORDS = 3;
 
 /**
  * A run's pass rate is thesis-grade only when at least this share of its

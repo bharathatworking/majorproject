@@ -40,7 +40,13 @@
  * original's premise vectors are computed once across retries and variants. A failing node is retried once with a retry
  * instruction naming the specific reasons, and the better version is kept;
  * its assessment (similarity, entityRecall, minEntailment, maxContradiction,
- * nliChecked, passed, reasons, score, scoreModel) is stored on the result. The check never fails
+ * nliChecked, passed, reasons, score, scoreModel) is stored on the result.
+ * The retry instruction is prose built from the failed assessment
+ * (buildRetryInstruction(retryInputOf(…)): missing items in quotes, never a
+ * list). The echo guard (lib/quality/echo.ts) fails a version that copied
+ * the prompt (a line of entities, instruction wording); if the kept version
+ * still echoes, its echo lines are removed and it is re-assessed without a
+ * model call (logged as an `echoStripped` candidate). The check never fails
  * a run:
  *   - Missing embedding model (404): one notice, no similarity for the rest
  *     of the run. Other embed errors skip it for that node.
@@ -112,8 +118,9 @@ import { recordSession } from '../storage/progress';
 import { toPlainText } from '../render/format-output';
 import { checkMeaning, shouldCheckNode } from '../quality/semantic';
 import {
-  assessMeaning, buildRetryInstruction, candidatePasses, pickBetterVersion, toStoredMeaning,
+  assessMeaning, buildRetryInstruction, candidatePasses, pickBetterVersion, retryInputOf, toStoredMeaning,
 } from '../quality/meaning';
+import { findEcho, stripEchoLines } from '../quality/echo';
 import { pickBestCandidate, scoreCandidate, type ScoredCandidate } from '../quality/score';
 import {
   chooseQualityMode, evidenceOf, hasWebGpuAdapter, isBenchStale, type BenchContext, type QualityDecision,
@@ -285,6 +292,8 @@ const STORED_TYPE: Record<ContentNode['type'], StoredResult['type']> = {
 interface Attempt extends ScoredCandidate {
   retryInstruction: boolean;
   ms: number;
+  /** The kept version with its echo lines removed (no model call). */
+  echoStripped?: boolean;
 }
 
 /** The version a node keeps, plus every candidate for the run log. */
@@ -670,7 +679,7 @@ export async function runSimplification(
       mainClaim: (original, sentences) => mainClaimOf(node, original, sentences, memo),
       mainClaimEntailment: (original, simplified, claim) =>
         mainClaimEntailmentOf(node.id, original, simplified, claim, memo),
-    });
+    }, { echoGuard: true });
   }
 
   /**
@@ -697,32 +706,39 @@ export async function runSimplification(
         ? buildPrompt(node, spec, doc.report, contextFor(node), difficultWords, variant).user
         : node.text;
 
+    /** Checks (6C) and scores one version of the node. Null if aborted. */
+    async function judge(
+      text: string,
+      variant: PromptVariantId,
+      retryInstruction: boolean,
+      started: number,
+    ): Promise<Attempt | null> {
+      const meaning = checked ? await assess(node, text, hinted, vectors) : null;
+      if (signal.aborted) return null;
+      const scores = scoreCandidate({ original: node.text, simplified: text, spec, wordSet, meaning });
+      return { text, meaning, variant, scores, retryInstruction, ms: performance.now() - started };
+    }
+
     /**
-     * Generates, checks (6C) and scores one candidate. `retryReasons` (null
-     * for a first attempt) are named in the retry instruction. Null if aborted.
+     * Generates, checks (6C) and scores one candidate. `retryFrom` (null for
+     * a first attempt) is the failed assessment the retry instruction names.
+     * Null if aborted.
      */
     async function attempt(
       variant: PromptVariantId,
-      retryReasons: string[] | null,
+      retryFrom: MeaningAssessment | null,
       stream: boolean,
     ): Promise<Attempt | null> {
       const started = performance.now();
       const prompt = promptFor(variant);
       const raw = await completeText(
         node.id,
-        retryReasons === null ? prompt : `${buildRetryInstruction(retryReasons)}\n\n${prompt}`,
+        retryFrom === null ? prompt : `${buildRetryInstruction(retryInputOf(retryFrom))}\n\n${prompt}`,
         stream,
       );
       if (raw === null) return null;
       const text = variant === 'example-guided' ? stripExampleLabel(raw) : raw;
-      const meaning = checked ? await assess(node, text, hinted, vectors) : null;
-      if (signal.aborted) return null;
-      const scores = scoreCandidate({ original: node.text, simplified: text, spec, wordSet, meaning });
-      return {
-        text, meaning, variant, scores,
-        retryInstruction: retryReasons !== null,
-        ms: performance.now() - started,
-      };
+      return judge(text, variant, retryFrom !== null, started);
     }
 
     const first = await attempt('standard', null, true);
@@ -732,7 +748,7 @@ export async function runSimplification(
 
     if (checked) {
       const firstPasses = candidatePasses(first);
-      const reasons = firstPasses ? null : first.meaning?.reasons ?? [];
+      const reasons = firstPasses ? null : first.meaning;
       if (extraQuality && (!firstPasses || first.scores.total < QUALITY_THRESHOLD)) {
         for (const variant of EXTRA_VARIANTS.slice(0, MAX_MODEL_CALLS_PER_NODE - 1)) {
           try {
@@ -760,6 +776,22 @@ export async function runSimplification(
       }
     }
 
+    // Last resort: every version echoed the prompt, so drop the echo lines
+    // from the kept one and judge it again (no model call)
+    if (chosen.meaning?.echo) {
+      const echoContext = { original: node.text, entities };
+      const stripped = stripEchoLines(chosen.text, echoContext);
+      const finding = findEcho(stripped, echoContext);
+      if (stripped !== '' && stripped !== chosen.text && finding.lines.length === 0 && !finding.instruction) {
+        const cleaned = await judge(stripped, chosen.variant, chosen.retryInstruction, performance.now());
+        if (cleaned === null) return null;
+        console.log(`[Clarity] Node ${node.id}: removed echo lines from the kept version`);
+        cleaned.echoStripped = true;
+        tried.push(cleaned);
+        chosen = cleaned;
+      }
+    }
+
     const candidates: CandidateLog[] = tried.map(t => ({
       variant: t.variant,
       retryInstruction: t.retryInstruction,
@@ -777,6 +809,7 @@ export async function runSimplification(
       nliMs: roundMs(t.meaning?.nliMs ?? null),
       nliRankMs: roundMs(t.meaning?.nliRankMs ?? null),
       nliScoreMs: roundMs(t.meaning?.nliScoreMs ?? null),
+      ...(t.echoStripped && { echoStripped: true }),
     }));
     return { chosen, candidates };
   }

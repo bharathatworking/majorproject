@@ -29,8 +29,12 @@ import { createWriteQueue } from '../utils/write-queue';
 import type { CachedResult, SimplificationSpec } from '../../types';
 
 export const CACHE_MAX_ENTRIES = 2000;
-/** Format of CachedResult; 2 = with the thesis meaning assessment, 3 = judged by the combined score. */
-export const CACHE_FORMAT = 3;
+/**
+ * Format of CachedResult; 2 = with the thesis meaning assessment, 3 = judged
+ * by the combined score, 4 = new entity line and echo guard (a format-3
+ * Lite entry can hold a copied entity list).
+ */
+export const CACHE_FORMAT = 4;
 const CACHE_PREFIX = 'cache:';
 const CACHE_INDEX_KEY = 'cache:index';
 
