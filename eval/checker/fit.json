@@ -1,0 +1,948 @@
+{
+  "at": "2026-10-19T07:29:07.420Z",
+  "items": 81,
+  "faithful": 42,
+  "seed": 42,
+  "folds": [
+    [
+      0,
+      1,
+      4,
+      7,
+      10,
+      11,
+      12,
+      15,
+      19,
+      20,
+      48,
+      52,
+      59,
+      61,
+      62,
+      63,
+      64
+    ],
+    [
+      2,
+      13,
+      17,
+      18,
+      22,
+      35,
+      37,
+      38,
+      53,
+      54,
+      57,
+      70,
+      73,
+      78,
+      79,
+      80
+    ],
+    [
+      9,
+      23,
+      31,
+      36,
+      39,
+      40,
+      43,
+      46,
+      49,
+      50,
+      51,
+      55,
+      56,
+      69,
+      75,
+      76
+    ],
+    [
+      3,
+      5,
+      6,
+      16,
+      21,
+      27,
+      29,
+      32,
+      33,
+      47,
+      60,
+      65,
+      66,
+      67,
+      71,
+      72
+    ],
+    [
+      8,
+      14,
+      24,
+      25,
+      26,
+      28,
+      30,
+      34,
+      41,
+      42,
+      44,
+      45,
+      58,
+      68,
+      74,
+      77
+    ]
+  ],
+  "current": {
+    "rates": {
+      "n": 81,
+      "nFaithful": 42,
+      "nUnfaithful": 39,
+      "falseFails": 33,
+      "caught": 38,
+      "falseFail": 0.7857142857142857,
+      "catchRate": 0.9743589743589743,
+      "bacc": 0.5943223443223443
+    },
+    "bacc": {
+      "value": 0.5943223443223443,
+      "ci": [
+        0.5292269013199247,
+        0.6590909090909092
+      ]
+    },
+    "catchRate": {
+      "value": 0.9743589743589743,
+      "ci": [
+        0.9117647058823529,
+        1
+      ]
+    },
+    "falseFail": {
+      "value": 0.7857142857142857,
+      "ci": [
+        0.6590909090909091,
+        0.9024390243902439
+      ]
+    },
+    "auc": {
+      "value": 0.5943223443223443,
+      "ci": [
+        0.5292269013199246,
+        0.6590909090909091
+      ]
+    }
+  },
+  "perFold": [
+    {
+      "fold": 1,
+      "n": 17,
+      "current": {
+        "n": 17,
+        "nFaithful": 9,
+        "nUnfaithful": 8,
+        "falseFails": 8,
+        "caught": 8,
+        "falseFail": 0.8888888888888888,
+        "catchRate": 1,
+        "bacc": 0.5555555555555556
+      },
+      "full": {
+        "n": 17,
+        "nFaithful": 9,
+        "nUnfaithful": 8,
+        "falseFails": 9,
+        "caught": 8,
+        "falseFail": 1,
+        "catchRate": 1,
+        "bacc": 0.5
+      },
+      "lite": {
+        "n": 17,
+        "nFaithful": 9,
+        "nUnfaithful": 8,
+        "falseFails": 8,
+        "caught": 8,
+        "falseFail": 0.8888888888888888,
+        "catchRate": 1,
+        "bacc": 0.5555555555555556
+      }
+    },
+    {
+      "fold": 2,
+      "n": 16,
+      "current": {
+        "n": 16,
+        "nFaithful": 9,
+        "nUnfaithful": 7,
+        "falseFails": 6,
+        "caught": 6,
+        "falseFail": 0.6666666666666666,
+        "catchRate": 0.8571428571428571,
+        "bacc": 0.5952380952380952
+      },
+      "full": {
+        "n": 16,
+        "nFaithful": 9,
+        "nUnfaithful": 7,
+        "falseFails": 9,
+        "caught": 7,
+        "falseFail": 1,
+        "catchRate": 1,
+        "bacc": 0.5
+      },
+      "lite": {
+        "n": 16,
+        "nFaithful": 9,
+        "nUnfaithful": 7,
+        "falseFails": 9,
+        "caught": 7,
+        "falseFail": 1,
+        "catchRate": 1,
+        "bacc": 0.5
+      }
+    },
+    {
+      "fold": 3,
+      "n": 16,
+      "current": {
+        "n": 16,
+        "nFaithful": 8,
+        "nUnfaithful": 8,
+        "falseFails": 8,
+        "caught": 8,
+        "falseFail": 1,
+        "catchRate": 1,
+        "bacc": 0.5
+      },
+      "full": {
+        "n": 16,
+        "nFaithful": 8,
+        "nUnfaithful": 8,
+        "falseFails": 7,
+        "caught": 8,
+        "falseFail": 0.875,
+        "catchRate": 1,
+        "bacc": 0.5625
+      },
+      "lite": {
+        "n": 16,
+        "nFaithful": 8,
+        "nUnfaithful": 8,
+        "falseFails": 6,
+        "caught": 7,
+        "falseFail": 0.75,
+        "catchRate": 0.875,
+        "bacc": 0.5625
+      }
+    },
+    {
+      "fold": 4,
+      "n": 16,
+      "current": {
+        "n": 16,
+        "nFaithful": 8,
+        "nUnfaithful": 8,
+        "falseFails": 4,
+        "caught": 8,
+        "falseFail": 0.5,
+        "catchRate": 1,
+        "bacc": 0.75
+      },
+      "full": {
+        "n": 16,
+        "nFaithful": 8,
+        "nUnfaithful": 8,
+        "falseFails": 3,
+        "caught": 5,
+        "falseFail": 0.375,
+        "catchRate": 0.625,
+        "bacc": 0.625
+      },
+      "lite": {
+        "n": 16,
+        "nFaithful": 8,
+        "nUnfaithful": 8,
+        "falseFails": 2,
+        "caught": 4,
+        "falseFail": 0.25,
+        "catchRate": 0.5,
+        "bacc": 0.625
+      }
+    },
+    {
+      "fold": 5,
+      "n": 16,
+      "current": {
+        "n": 16,
+        "nFaithful": 8,
+        "nUnfaithful": 8,
+        "falseFails": 7,
+        "caught": 8,
+        "falseFail": 0.875,
+        "catchRate": 1,
+        "bacc": 0.5625
+      },
+      "full": {
+        "n": 16,
+        "nFaithful": 8,
+        "nUnfaithful": 8,
+        "falseFails": 6,
+        "caught": 8,
+        "falseFail": 0.75,
+        "catchRate": 1,
+        "bacc": 0.625
+      },
+      "lite": {
+        "n": 16,
+        "nFaithful": 8,
+        "nUnfaithful": 8,
+        "falseFails": 8,
+        "caught": 8,
+        "falseFail": 1,
+        "catchRate": 1,
+        "bacc": 0.5
+      }
+    }
+  ],
+  "models": [
+    {
+      "name": "FULL",
+      "frozen": {
+        "id": "full",
+        "features": [
+          "sbert",
+          "entity",
+          "nliMin",
+          "contra",
+          "lenRatio"
+        ],
+        "means": [
+          0.861433,
+          0.826978,
+          0.377698,
+          0.210091,
+          0.693974
+        ],
+        "stds": [
+          0.065517,
+          0.266737,
+          0.423375,
+          0.341966,
+          0.173897
+        ],
+        "weights": [
+          0.075837,
+          0.057485,
+          0.099032,
+          -0.107555,
+          0.095553
+        ],
+        "bias": 0.00375,
+        "threshold": 0.569168
+      },
+      "lambda": 1,
+      "thresholdReached": true,
+      "path": [
+        {
+          "features": [
+            "sbert",
+            "entity",
+            "nliMin",
+            "nliMean",
+            "contra",
+            "mainClaim",
+            "numbers",
+            "lenRatio"
+          ],
+          "bacc": 0.6282051282051282,
+          "removed": null
+        },
+        {
+          "features": [
+            "sbert",
+            "entity",
+            "nliMin",
+            "contra",
+            "mainClaim",
+            "numbers",
+            "lenRatio"
+          ],
+          "bacc": 0.663919413919414,
+          "removed": "nliMean"
+        },
+        {
+          "features": [
+            "sbert",
+            "entity",
+            "nliMin",
+            "contra",
+            "numbers",
+            "lenRatio"
+          ],
+          "bacc": 0.6666666666666667,
+          "removed": "mainClaim"
+        },
+        {
+          "features": [
+            "sbert",
+            "entity",
+            "nliMin",
+            "contra",
+            "lenRatio"
+          ],
+          "bacc": 0.7023809523809523,
+          "removed": "numbers"
+        },
+        {
+          "features": [
+            "sbert",
+            "nliMin",
+            "contra",
+            "lenRatio"
+          ],
+          "bacc": 0.6529304029304029,
+          "removed": "entity"
+        },
+        {
+          "features": [
+            "sbert",
+            "nliMin",
+            "contra"
+          ],
+          "bacc": 0.6410256410256411,
+          "removed": "lenRatio"
+        },
+        {
+          "features": [
+            "sbert",
+            "contra"
+          ],
+          "bacc": 0.6895604395604396,
+          "removed": "nliMin"
+        },
+        {
+          "features": [
+            "sbert"
+          ],
+          "bacc": 0.6272893772893773,
+          "removed": "contra"
+        }
+      ],
+      "cv": {
+        "rates": {
+          "n": 81,
+          "nFaithful": 42,
+          "nUnfaithful": 39,
+          "falseFails": 34,
+          "caught": 36,
+          "falseFail": 0.8095238095238095,
+          "catchRate": 0.9230769230769231,
+          "bacc": 0.5567765567765568
+        },
+        "bacc": {
+          "value": 0.5567765567765568,
+          "ci": [
+            0.4898989898989899,
+            0.625
+          ]
+        },
+        "catchRate": {
+          "value": 0.9230769230769231,
+          "ci": [
+            0.8333333333333334,
+            1
+          ]
+        },
+        "falseFail": {
+          "value": 0.8095238095238095,
+          "ci": [
+            0.6818181818181818,
+            0.9210526315789473
+          ]
+        },
+        "auc": {
+          "value": 0.6929181929181929,
+          "ci": [
+            0.5931623931623932,
+            0.7895114942528736
+          ]
+        }
+      },
+      "apparentOof": {
+        "rates": {
+          "n": 81,
+          "nFaithful": 42,
+          "nUnfaithful": 39,
+          "falseFails": 27,
+          "caught": 36,
+          "falseFail": 0.6428571428571429,
+          "catchRate": 0.9230769230769231,
+          "bacc": 0.6401098901098901
+        },
+        "bacc": {
+          "value": 0.6401098901098901,
+          "ci": [
+            0.5625,
+            0.7195121951219512
+          ]
+        },
+        "catchRate": {
+          "value": 0.9230769230769231,
+          "ci": [
+            0.825,
+            1
+          ]
+        },
+        "falseFail": {
+          "value": 0.6428571428571429,
+          "ci": [
+            0.5,
+            0.7837837837837838
+          ]
+        },
+        "auc": {
+          "value": 0.7216117216117216,
+          "ci": [
+            0.615625,
+            0.8238095238095238
+          ]
+        }
+      },
+      "outerFolds": [
+        {
+          "features": [
+            "sbert",
+            "contra"
+          ],
+          "lambda": 1,
+          "threshold": 0.6446240958466198,
+          "reached": true,
+          "test": [
+            0,
+            1,
+            4,
+            7,
+            10,
+            11,
+            12,
+            15,
+            19,
+            20,
+            48,
+            52,
+            59,
+            61,
+            62,
+            63,
+            64
+          ]
+        },
+        {
+          "features": [
+            "sbert",
+            "contra",
+            "mainClaim"
+          ],
+          "lambda": 1,
+          "threshold": 0.587927841271479,
+          "reached": true,
+          "test": [
+            2,
+            13,
+            17,
+            18,
+            22,
+            35,
+            37,
+            38,
+            53,
+            54,
+            57,
+            70,
+            73,
+            78,
+            79,
+            80
+          ]
+        },
+        {
+          "features": [
+            "sbert",
+            "nliMin",
+            "nliMean",
+            "contra",
+            "mainClaim",
+            "numbers"
+          ],
+          "lambda": 1,
+          "threshold": 0.5721522558865695,
+          "reached": true,
+          "test": [
+            9,
+            23,
+            31,
+            36,
+            39,
+            40,
+            43,
+            46,
+            49,
+            50,
+            51,
+            55,
+            56,
+            69,
+            75,
+            76
+          ]
+        },
+        {
+          "features": [
+            "sbert",
+            "contra"
+          ],
+          "lambda": 1,
+          "threshold": 0.5289463132022739,
+          "reached": true,
+          "test": [
+            3,
+            5,
+            6,
+            16,
+            21,
+            27,
+            29,
+            32,
+            33,
+            47,
+            60,
+            65,
+            66,
+            67,
+            71,
+            72
+          ]
+        },
+        {
+          "features": [
+            "sbert",
+            "nliMean",
+            "contra",
+            "lenRatio"
+          ],
+          "lambda": 1,
+          "threshold": 0.5441018128727019,
+          "reached": true,
+          "test": [
+            8,
+            14,
+            24,
+            25,
+            26,
+            28,
+            30,
+            34,
+            41,
+            42,
+            44,
+            45,
+            58,
+            68,
+            74,
+            77
+          ]
+        }
+      ]
+    },
+    {
+      "name": "LITE",
+      "frozen": {
+        "id": "lite",
+        "features": [
+          "sbert",
+          "entity",
+          "lenRatio"
+        ],
+        "means": [
+          0.861433,
+          0.826978,
+          0.693974
+        ],
+        "stds": [
+          0.065517,
+          0.266737,
+          0.173897
+        ],
+        "weights": [
+          0.080126,
+          0.057627,
+          0.091799
+        ],
+        "bias": 0.001869,
+        "threshold": 0.536117
+      },
+      "lambda": 1,
+      "thresholdReached": true,
+      "path": [
+        {
+          "features": [
+            "sbert",
+            "entity",
+            "numbers",
+            "lenRatio"
+          ],
+          "bacc": 0.6666666666666667,
+          "removed": null
+        },
+        {
+          "features": [
+            "sbert",
+            "entity",
+            "lenRatio"
+          ],
+          "bacc": 0.6913919413919414,
+          "removed": "numbers"
+        },
+        {
+          "features": [
+            "sbert",
+            "lenRatio"
+          ],
+          "bacc": 0.6666666666666667,
+          "removed": "entity"
+        },
+        {
+          "features": [
+            "sbert"
+          ],
+          "bacc": 0.6272893772893773,
+          "removed": "lenRatio"
+        }
+      ],
+      "cv": {
+        "rates": {
+          "n": 81,
+          "nFaithful": 42,
+          "nUnfaithful": 39,
+          "falseFails": 33,
+          "caught": 34,
+          "falseFail": 0.7857142857142857,
+          "catchRate": 0.8717948717948718,
+          "bacc": 0.5430402930402931
+        },
+        "bacc": {
+          "value": 0.5430402930402931,
+          "ci": [
+            0.4634551495016611,
+            0.6208333333333333
+          ]
+        },
+        "catchRate": {
+          "value": 0.8717948717948718,
+          "ci": [
+            0.7307692307692307,
+            0.975
+          ]
+        },
+        "falseFail": {
+          "value": 0.7857142857142857,
+          "ci": [
+            0.65625,
+            0.9
+          ]
+        },
+        "auc": {
+          "value": 0.6605616605616605,
+          "ci": [
+            0.5307950727883539,
+            0.7800569800569801
+          ]
+        }
+      },
+      "apparentOof": {
+        "rates": {
+          "n": 81,
+          "nFaithful": 42,
+          "nUnfaithful": 39,
+          "falseFails": 33,
+          "caught": 36,
+          "falseFail": 0.7857142857142857,
+          "catchRate": 0.9230769230769231,
+          "bacc": 0.5686813186813187
+        },
+        "bacc": {
+          "value": 0.5686813186813187,
+          "ci": [
+            0.5089285714285714,
+            0.6341681574239714
+          ]
+        },
+        "catchRate": {
+          "value": 0.9230769230769231,
+          "ci": [
+            0.8275862068965517,
+            1
+          ]
+        },
+        "falseFail": {
+          "value": 0.7857142857142857,
+          "ci": [
+            0.6486486486486487,
+            0.9
+          ]
+        },
+        "auc": {
+          "value": 0.6758241758241759,
+          "ci": [
+            0.5505050505050505,
+            0.7906976744186046
+          ]
+        }
+      },
+      "outerFolds": [
+        {
+          "features": [
+            "sbert",
+            "entity",
+            "lenRatio"
+          ],
+          "lambda": 1,
+          "threshold": 0.5337468977634153,
+          "reached": true,
+          "test": [
+            0,
+            1,
+            4,
+            7,
+            10,
+            11,
+            12,
+            15,
+            19,
+            20,
+            48,
+            52,
+            59,
+            61,
+            62,
+            63,
+            64
+          ]
+        },
+        {
+          "features": [
+            "numbers",
+            "lenRatio"
+          ],
+          "lambda": 1,
+          "threshold": 0.617114361060003,
+          "reached": true,
+          "test": [
+            2,
+            13,
+            17,
+            18,
+            22,
+            35,
+            37,
+            38,
+            53,
+            54,
+            57,
+            70,
+            73,
+            78,
+            79,
+            80
+          ]
+        },
+        {
+          "features": [
+            "sbert",
+            "lenRatio"
+          ],
+          "lambda": 1,
+          "threshold": 0.5316201835659096,
+          "reached": true,
+          "test": [
+            9,
+            23,
+            31,
+            36,
+            39,
+            40,
+            43,
+            46,
+            49,
+            50,
+            51,
+            55,
+            56,
+            69,
+            75,
+            76
+          ]
+        },
+        {
+          "features": [
+            "sbert",
+            "lenRatio"
+          ],
+          "lambda": 0.1,
+          "threshold": 0.541145235355879,
+          "reached": true,
+          "test": [
+            3,
+            5,
+            6,
+            16,
+            21,
+            27,
+            29,
+            32,
+            33,
+            47,
+            60,
+            65,
+            66,
+            67,
+            71,
+            72
+          ]
+        },
+        {
+          "features": [
+            "sbert",
+            "entity",
+            "lenRatio"
+          ],
+          "lambda": 1,
+          "threshold": 0.5805491691829581,
+          "reached": true,
+          "test": [
+            8,
+            14,
+            24,
+            25,
+            26,
+            28,
+            30,
+            34,
+            41,
+            42,
+            44,
+            45,
+            58,
+            68,
+            74,
+            77
+          ]
+        }
+      ]
+    }
+  ]
+}

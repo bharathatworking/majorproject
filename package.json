@@ -18,7 +18,10 @@
     "bakeoff:check": "node scripts/bakeoff/check-data.mjs",
     "bakeoff:run": "node scripts/bakeoff/run.mjs",
     "bakeoff:export": "node scripts/bakeoff/export.mjs",
-    "bakeoff:unblind": "node scripts/bakeoff/unblind.mjs"
+    "bakeoff:unblind": "node scripts/bakeoff/unblind.mjs",
+    "checker:extract": "node scripts/checker/extract-features.mjs",
+    "checker:fit": "node scripts/checker/fit.mjs",
+    "checker:test": "node scripts/checker/test-heldout.mjs"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.1",

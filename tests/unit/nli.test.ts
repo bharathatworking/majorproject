@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  checkEntailment, createWorkerBackend, hypothesisFor, needsContext, NLI_BENCH_PAIRS, NliClient,
+  checkEntailment, checkMainClaim, createWorkerBackend, hypothesisFor, needsContext, NLI_BENCH_PAIRS, NliClient,
   NliUnavailableError, prepareNli,
   splitSentences, type BenchStore, type NliBackend, type NliPair, type NliProbs, type NliRequest,
   type NliResponse, type WorkerLike,
@@ -555,5 +555,41 @@ describe('NLI benchmark', () => {
       load: async () => { throw new NliUnavailableError('missing'); },
     };
     await expect(prepareNli(new NliClient(backend), CTX, memoryStore())).rejects.toBeInstanceOf(NliUnavailableError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkMainClaim — the original's main claim as the hypothesis
+// ---------------------------------------------------------------------------
+describe('checkMainClaim', () => {
+  it('scores the claim sentence against the simplified sentences and their windows', async () => {
+    const { backend, batches } = fakeBackend();
+    const r = await checkMainClaim(ORIGINAL, 'A treaty was signed in 1919. It ended the war.', [0], new NliClient(backend));
+    expect(r.entailment).toBe(SUPPORTED.entailment);
+    expect(r.weakest).toBe('The Treaty of Versailles was signed in 1919.');
+    // 2 simplified sentences + 1 window = 3 premises, all scored (≤ NLI_TOP_PREMISES)
+    expect(r.pairs).toBe(3);
+    expect(batches.flat().every(p => p.hypothesis === 'The Treaty of Versailles was signed in 1919.')).toBe(true);
+    expect(batches.flat().map(p => p.premise)).toContain('A treaty was signed in 1919. It ended the war.');
+  });
+
+  it('takes the min over claim sentences and names the weakest', async () => {
+    const { backend } = fakeBackend({ 'It ended the war.': NEUTRAL });
+    const r = await checkMainClaim(ORIGINAL, 'The treaty came in 1919.', [0, 1], new NliClient(backend));
+    expect(r.entailment).toBe(NEUTRAL.entailment);
+    expect(r.weakest).toBe('It ended the war.');
+  });
+
+  it('an empty output scores 0 without calling the model', async () => {
+    const { backend } = fakeBackend();
+    const r = await checkMainClaim(ORIGINAL, '   ', [0], new NliClient(backend));
+    expect(r).toMatchObject({ entailment: 0, pairs: 0 });
+    expect(backend.score).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the first sentence for out-of-range indexes', async () => {
+    const { backend } = fakeBackend();
+    const r = await checkMainClaim(ORIGINAL, 'A treaty was signed.', [9], new NliClient(backend));
+    expect(r.weakest).toBe('The Treaty of Versailles was signed in 1919.');
   });
 });

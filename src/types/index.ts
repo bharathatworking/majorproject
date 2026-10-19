@@ -265,6 +265,33 @@ export interface NliBenchRecord {
 }
 
 /**
+ * Candidate features of the combined meaning score (lib/quality/checker.ts):
+ * SBERT cosine, entity keep ratio, min / mean NLI entailment, max
+ * contradiction, entailment of the original's main claim, share of the main
+ * claim's numbers and dates kept, and the output/original word ratio.
+ */
+export type CheckerFeature =
+  | 'sbert' | 'entity' | 'nliMin' | 'nliMean' | 'contra' | 'mainClaim' | 'numbers' | 'lenRatio';
+
+/** One version's feature values; null when the check behind it did not run. */
+export type CheckerFeatures = Record<CheckerFeature, number | null>;
+
+/**
+ * A frozen logistic-regression meaning score (eval/checker/PREREG.md):
+ * score = sigmoid(Σ weights·(x − means)/stds + bias), pass = score ≥ threshold.
+ * 'full' may use NLI features; 'lite' never does.
+ */
+export interface CombinedScoreModel {
+  id: 'full' | 'lite';
+  features: readonly CheckerFeature[];
+  means: readonly number[];
+  stds: readonly number[];
+  weights: readonly number[];
+  bias: number;
+  threshold: number;
+}
+
+/**
  * Combined meaning assessment of one simplified version (thesis standard,
  * lib/quality/meaning.ts): SBERT cosine, entity recall and NLI.
  */

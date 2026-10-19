@@ -50,6 +50,10 @@
  *  - Failures: a model that won't load (missing files, wasm blocked, timeout)
  *    throws NliUnavailableError; the run then falls back to SBERT + entities
  *    and tells the user once. A later call tries to load it again.
+ *  - checkMainClaim is the reverse direction for the combined score's
+ *    mainClaim feature (lib/quality/checker.ts): the original's main-claim
+ *    sentence is the hypothesis, the simplified text's sentences and windows
+ *    the premises, through the same client and pair cache.
  *  - Imported only by the run module (dynamic import), so Transformers.js
  *    stays in the worker chunk and this module out of the main chunk.
  */
@@ -606,4 +610,59 @@ export async function checkEntailment(
     scoreMs,
     ms: performance.now() - started,
   };
+}
+
+// ─── Main claim ───────────────────────────────────────────────────────────────
+
+/** How well the simplified text still says the original's main claim. */
+export interface MainClaimCheck {
+  /** Min over the claim sentences of the max entailment over their premises; 0 for an empty output. */
+  entailment: number;
+  /** The claim sentence with the lowest entailment (null when there is none). */
+  weakest: string | null;
+  pairs: number;
+  ms: number;
+}
+
+/**
+ * The reverse direction of checkEntailment, for the combined score's
+ * mainClaim feature: each main-claim sentence of the original (indexes from
+ * mainClaimIndexes) is the hypothesis, and the simplified text's SummaC
+ * premises (its sentences and 2-sentence windows, top NLI_TOP_PREMISES by
+ * all-minilm, word overlap without it) are the premises. A dropped or
+ * changed main point gives a low value. Throws like checkEntailment.
+ */
+export async function checkMainClaim(
+  original: string,
+  simplified: string,
+  claimIndexes: readonly number[],
+  client: NliClient,
+  options: EntailmentOptions = {},
+): Promise<MainClaimCheck> {
+  const started = performance.now();
+  const originalSentences = splitSentences(original);
+  const claims = [...new Set(claimIndexes)].map(i => originalSentences[i]).filter((s): s is string => !!s);
+  if (claims.length === 0 && originalSentences.length > 0) claims.push(originalSentences[0]);
+  const premises = buildPremises(splitSentences(simplified));
+  if (claims.length === 0 || premises.length === 0) {
+    return { entailment: 0, weakest: claims[0] ?? null, pairs: 0, ms: performance.now() - started };
+  }
+
+  const { top } = await pickPremises(premises, claims, options.embed, options.label ?? '');
+  const pairs = claims.flatMap((hypothesis, i) => top[i].map(j => ({ premise: premises[j], hypothesis })));
+  const { probs } = await client.scorePairs(pairs);
+
+  let offset = 0;
+  let entailment = Infinity;
+  let weakest: string | null = null;
+  claims.forEach((claim, i) => {
+    const own = probs.slice(offset, offset + top[i].length);
+    offset += top[i].length;
+    const e = aggregate(own, NLI_CONTRADICTION_AGG).entailment;
+    if (e < entailment) {
+      entailment = e;
+      weakest = claim;
+    }
+  });
+  return { entailment, weakest, pairs: pairs.length, ms: performance.now() - started };
 }
