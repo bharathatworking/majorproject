@@ -37,7 +37,7 @@ export const PRESET_ID = 'student';
 export async function openApp() {
   const vite = await createAppLoader();
   const load = path => vite.ssrLoadModule(path);
-  const [ner, engine, common, difficult, nodeGrade, resolver, builder, presets, format, hash, similarity, lib] =
+  const [ner, engine, common, difficult, nodeGrade, resolver, builder, presets, format, hash, similarity, think, lib] =
     await Promise.all([
       load('/src/lib/segmentation/ner.ts'),
       load('/src/lib/metrics/engine.ts'),
@@ -50,6 +50,7 @@ export async function openApp() {
       load('/src/lib/render/format-output.ts'),
       load('/src/lib/utils/hash.ts'),
       load('/src/lib/quality/similarity.ts'),
+      load('/src/lib/llm/ollama-think.ts'),
       load('/scripts/bakeoff/lib.ts'),
     ]);
   const wordSet = new Set(common.BASE_COMMON_WORDS);
@@ -99,6 +100,7 @@ export async function openApp() {
     toPlainText: format.toPlainText,
     isEnglishWord: word => common.isCommonWord(word),
     cosineSimilarity: similarity.cosineSimilarity,
+    thinkSetting: think.thinkSetting,
     targetGrade: resolver.resolveTargetGrade(profile),
     close: () => vite.close(),
   };

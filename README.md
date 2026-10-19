@@ -37,11 +37,11 @@ A Chrome extension that rewrites any web page, pasted text, or PDF at **your** r
 
 ```powershell
 # Install Ollama from https://ollama.com, then:
-ollama pull qwen2.5:3b
+ollama pull qwen3:4b-instruct-2507-q4_K_M
 ollama pull all-minilm   # meaning checker (optional, ~46 MB)
 ```
 
-`qwen2.5:3b` is the default chat model. You can switch to any other pulled model in **Settings → AI Model**.
+`qwen3:4b-instruct-2507-q4_K_M` (Qwen3 4B Instruct 2507, Apache 2.0) is the default chat model. It won Clarity's base-model bake-off: it kept the meaning in 85% of 40 blind-labelled paragraphs, against 79.5% for `gemma4:e2b-it-qat` and 50% for `qwen2.5:3b` (see [eval/model-bakeoff/REPORT.md](eval/model-bakeoff/REPORT.md)). You can switch to any other pulled model in **Settings → AI Model**. A model you already chose there is kept; `qwen2.5:3b` still works, but its Qwen Research licence allows non-commercial use only.
 
 `all-minilm` is a small Sentence-BERT embedding model. Clarity uses it to check that each simplified paragraph keeps the original meaning, and retries a paragraph once if it doesn't. Without it, simplification still works, but no meaning scores are shown.
 
@@ -150,7 +150,7 @@ src/
 |---|---|
 | **"Can't reach Ollama at localhost:11434"** | Start Ollama (`ollama serve`) |
 | **"Ollama refused the request (403)"** | Set `OLLAMA_ORIGINS` (see Step 2 above) and **fully restart** Ollama |
-| **"Model not found"** | Run the `ollama pull` command the message names, or pick an installed model in Settings → AI Model |
+| **"… isn't installed in Ollama"** | Run `ollama pull qwen3:4b-instruct-2507-q4_K_M` for the default model (the DevTools console of the Clarity tab logs the exact `ollama pull` command for the selected model), or pick an installed model in Settings → AI Model |
 | **"Install the meaning checker"** banner | Run `ollama pull all-minilm`. The run still finishes without it, just without meaning scores |
 | **No text extracted from PDF** | The PDF is likely a scanned image — only text-based PDFs are supported |
 | **Extension ID changed** | Never remove the `key` field from `src/manifest.ts` |

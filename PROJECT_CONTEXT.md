@@ -10,7 +10,7 @@ Generated from commit `2edaf92` (2026-10-15). If the code and this file disagree
 
 **Clarity** is a Chrome MV3 extension that rewrites web pages, pasted text or PDFs at the user's reading level.
 
-- It runs fully on the device. A **local Ollama** server at `http://localhost:11434` does the rewriting, using the chat model chosen in Settings (default `qwen2.5:3b`) and, optionally, the `all-minilm` embedding model for a meaning check. A bundled NLI cross-encoder (`Xenova/nli-deberta-v3-xsmall`, run with Transformers.js in a Web Worker) checks every simplified sentence.
+- It runs fully on the device. A **local Ollama** server at `http://localhost:11434` does the rewriting, using the chat model chosen in Settings (default `qwen3:4b-instruct-2507-q4_K_M`, Apache 2.0, the bake-off winner: `eval/model-bakeoff/REPORT.md`) and, optionally, the `all-minilm` embedding model for a meaning check. A bundled NLI cross-encoder (`Xenova/nli-deberta-v3-xsmall`, run with Transformers.js in a Web Worker) checks every simplified sentence.
 - There is no backend, no database and no cloud API. The only network targets are Ollama and the captured page itself. The NLI model and the ONNX Runtime wasm ship inside `dist/` (`npm run fetch-models`), never downloaded at runtime.
 - What the user gets: a readability dashboard (eight grade metrics), a streamed paragraph-by-paragraph rewrite with click-to-reveal of the original, reading presets, a dyslexia font, focus mode, a progress chart and a downloadable JSON run report.
 - The research angle (stages 6C and 7): checking that the rewrite keeps the meaning (thesis standard: SBERT similarity ≥ 0.87, every entity kept, and no simplified sentence contradicted or unsupported per NLI), scoring candidate outputs, and A/B-testing prompt variants through the "Extra quality (slower)" toggle.
@@ -50,10 +50,10 @@ scripts/fetch-models.mjs     npm run fetch-models: NLI model (pinned, SHA-256 ch
 scripts/calibrate-nli.mjs    npm run calibrate-nli: ENTAILMENT_MIN table on the calibration set (Node, same model and TS code)
 scripts/meaning-breakdown.mjs npm run meaning-breakdown -- <report.json>: why paragraphs failed, per run
 scripts/calibrate-meaning.mjs npm run calibrate-meaning: SIM_MIN / ENTAILMENT_MIN / paragraph rule on paragraph-items.jsonl (dev choice, test report)
-scripts/make-paragraph-items.mjs  fills missing qwen2.5:3b simplifications and hintedWords in paragraphs.jsonl (app prompt, Ollama)
+scripts/make-paragraph-items.mjs  fills missing DEFAULT_LLM_MODEL simplifications (the existing items are qwen2.5:3b) and hintedWords in paragraphs.jsonl (app prompt, Ollama)
 scripts/add-paragraph-items.mjs   adds the missing #real items (balanced dev/test per source), strips proposed labels, auto-labels injected copies
 scripts/labels.mjs           npm run export-labels / import-labels: blind labels.csv (real outputs, random order) ↔ paragraph-items.jsonl
-scripts/replay-meaning.mjs   node scripts/replay-meaning.mjs <pdf|txt>: a run without Chrome (app split, prompt, qwen2.5:3b, meaning check + retry) and its failure breakdown
+scripts/replay-meaning.mjs   node scripts/replay-meaning.mjs <pdf|txt>: a run without Chrome (app split, prompt, DEFAULT_LLM_MODEL, meaning check + retry) and its failure breakdown
 scripts/lib/nli-node.mjs     shared by the Node scripts: NLI model on onnxruntime-node, all-minilm via Ollama, Vite module loader, Wilson interval
 scripts/bakeoff/             Prompt 9.4 base-model bake-off (eval only; no src/ change):
   lib.ts                     pure logic (cleaning, flags, resume, blind export/unblind, Wilson, McNemar, winner rule); tested
@@ -77,7 +77,7 @@ src/
   lib/
     extraction/   extractor.ts (noise strip -> Readability -> text-density fallback -> DOMPurify -> SHA-256)
     input/        paste.ts, pdf.ts, text-blocks.ts
-    llm/          ollama-provider.ts, ollama-stream.ts
+    llm/          ollama-provider.ts, ollama-stream.ts, ollama-think.ts
     metrics/      engine.ts, syllables.ts, common-words.ts, word-set.ts, node-grade.ts,
                   difficult-words.ts, data/common-words.txt
     profile/      resolver.ts, presets.ts
@@ -144,7 +144,7 @@ tests/
       - **Model:** `detectEntities` (`src/lib/segmentation/ner.ts`, dynamically imported) runs for this node only, then steps 4 to 7 below.
       - The rolling context is the last sentence of the previous node in **document** order, if that node is done.
    4. **Prompt.** `buildPrompt` (`src/lib/prompt-builder/builder.ts`) returns a system prompt plus a user prompt. Reader flags become numbered system rules 7+ via `readerRules`. The user prompt carries a node-type hint, the entities to preserve, the rolling context and a lexical hint: `findDifficultWords` lists up to 8 (`MAX_DIFFICULT_WORDS`) uncommon, non-entity words longer than 3 letters. The hint is left out when `keepTerms` is on or the tier is `none`. The last parameter selects a prompt variant (`standard` adds nothing).
-   5. **Call.** `OllamaProvider.simplifyChunk` POSTs `/api/chat` with `stream: true` and `keep_alive: '10m'`. `parseOllamaStream` (`src/lib/llm/ollama-stream.ts`) buffers lines split across chunks, skips malformed lines with a `[Clarity]` warning, throws on `{"error": ...}` lines and stops at `done: true`. Ollama is stateless, so the "session" is just a stored system prompt (`createBaseSession`).
+   5. **Call.** `createBaseSession` first POSTs `/api/show` for the model once per run: a 404 there is the missing-model path (one banner before any node), and its `capabilities` decide `think` through `thinkSetting` ([ollama-think.ts](src/lib/llm/ollama-think.ts), pure, shared with `scripts/bakeoff/run.mjs`): `think: false` for models listing `thinking` (qwen3, gemma4), no `think` field otherwise. No temperature is sent (each model's Modelfile default; a fixed temperature is Prompt 11). `OllamaProvider.simplifyChunk` POSTs `/api/chat` with `stream: true` and `keep_alive: '10m'`. `parseOllamaStream` (`src/lib/llm/ollama-stream.ts`) buffers lines split across chunks, skips malformed lines with a `[Clarity]` warning, throws on `{"error": ...}` lines and stops at `done: true`. Ollama is stateless, so the "session" is just a stored system prompt (`createBaseSession`).
    6. **Stage 6C: meaning preservation, thesis standard** (`assessMeaning` in `src/lib/quality/meaning.ts`; every constant in `config.ts`). It covers every node except headings and texts under 8 words (`shouldCheckNode`, `MIN_WORDS_FOR_CHECK`). A version **passes** only if all three hold:
       - **SBERT:** `checkMeaning` (`semantic.ts`) embeds original and output in one `/api/embed` call; cosine ≥ `SIMILARITY_THRESHOLD = 0.87`.
       - **Entities:** the entity rule (`entityVerdict` in `verdict.ts`) passes when the share of the original's distinct entities still present is ≥ `ENTITY_RECALL_MIN` (1 = every entity, today's value until calibration) **and** every number, date and time zone of the original's **main claim** is kept (`keyEntityTexts` in `meaning.ts`). The main claim is the original sentence whose all-minilm embedding is closest to the whole paragraph (`mainClaimIndexes` in `premises.ts`, from the node's embedding memo); every sentence of a 1–2 sentence original or of a list item; the first sentence without the embedding model. Key drops are named first in the reasons; other drops only when the share falls below the minimum. The run log records `missingKeyEntities` per candidate and `meaningThresholds.entityRecallMin`. Matching (`findMissingEntities`, case, possessive 's and thousands separators ignored). Names (person, org, place) compare on core tokens (`coreTokens`: a leading in / on / at / the is dropped; letters with diacritics count as letters); failing that, a name is kept when all its capitalised words are in the output (titles like Professor don't count), a person's surname is ("Marie Curie" by "Maria Skłodowska Curie"), or its acronym is, in capitals ("World Health Organization" by "WHO"); a dropped or replaced name ("Cordillera Rumi Cruz" → "a mountain range") still fails. Numbers, dates and time zones compare **by value** (`valueSignature` in `src/lib/quality/values.ts`, compromise-numbers only): every number, number+unit ("21 year", "30 minute", "45 percent"), month, weekday and time zone of the entity must be in the output, and modifiers (next, about, over, aged, age, during, …) don't count. So "for the next 21 years" is kept by "for 21 years", "aged 45" by "at age 45", "three" by "3", "in PST time zone" by "during PST"; "1893" missing or "21 years" → "21 months" fails. An entity without a comparable value can't be checked and counts as kept. In a date with a number the weekday is redundant ("Sunday 2 September 1666" is kept by "Sep 2, 1666"), and NER skips a unit conversion in brackets ("2,300 kilometres (1,400 mi)" keeps 2,300 only). `detectEntities` cleans its matches (each rule removes junk seen in the test plan run): leading brackets/quotes and trailing punctuation, brackets, quotes and dashes are trimmed; a match is cut at a sentence end or an opening bracket ("Team Cal. The other" → "Team Cal"); a date loses a leading in / on / at / the / during; numbers and dates without a value are dropped ("an", "week", "any hours"); inline list markers ("Objectives: 1. Formative") are not numbers; names need a capital letter, and a name directly followed by ":" is a label ("Common Meeting Times:"). A date that is only a time-zone abbreviation (`TIME_ZONES` in `src/lib/segmentation/time-zones.ts`) is typed `timezone`, and a dropped one reads "You dropped the time zone PST." "9am EST" stays a date. `entityRecall` is over distinct entity texts.
@@ -174,7 +174,7 @@ tests/
 - The run lives in `useRunState` at App level, with an `AbortController`, so streaming survives route changes.
 - App keeps `readingDoc` separate from `activeDoc`. A capture during a run shows a toast instead of switching views.
 - Leftover `streaming` results from a crashed run are reset to `pending` when the next run starts.
-- `classifyError` in `simplify.ts` maps a 403 to "set `OLLAMA_ORIGINS`", a 404 to "pull the model", and a fetch `TypeError` to "Ollama not running".
+- `classifyError` in `simplify.ts` maps a 403 to "set `OLLAMA_ORIGINS`", a 404 (from `/api/show` at the start, or `/api/chat` mid-run) to "the model isn't installed" naming the model and `DEFAULT_LLM_MODEL` with no command (the `ollama pull` command goes only to the console, via `missingModelLog`), and a fetch `TypeError` to "Ollama not running".
 - The sidebar status chip polls `/api/tags` every 30 s (`AVAILABILITY_POLL_MS`) and on window focus.
 
 ### Bundle splitting
@@ -190,10 +190,11 @@ The main app chunk is about 286 kB (98 kB gzip). **Never statically import** `pd
 | `src/background/index.ts` | `chrome.action.onClicked`, injection, `EXTRACTION_RESULT`/`EXTRACTION_FAILED` handling, `openOrFocusApp()` |
 | `src/app/App.tsx` | Routing, the Ollama status poll, `handleStartRun`, `readingDoc` vs `activeDoc`, writes session `appTabId` |
 | `src/app/pages/Reading.tsx` | Renders nodes and results, `NodeBlock`, run buttons, run report download |
-| `src/app/pages/Settings.tsx` | Presets, profile fields, AI model dropdown (from `/api/tags`; suggests `LIGHT_LLM_MODEL` `qwen2.5:1.5b` when the saved model isn't installed), Extra quality toggle, Quality mode select (one sentence per mode, plus "Auto currently uses …" from `nli:bench`), custom words, clear data, About (shows the extension ID) |
+| `src/app/pages/Settings.tsx` | Presets, profile fields, AI model dropdown (from `/api/tags`; when the saved model isn't installed it names `DEFAULT_LLM_MODEL` and suggests `LIGHT_LLM_MODEL` `qwen2.5:1.5b`, with no command; the `ollama pull` command is logged to the console), Extra quality toggle, Quality mode select (one sentence per mode, plus "Auto currently uses …" from `nli:bench`), custom words, clear data, About (shows the extension ID) |
 | `src/app/hooks/useRunState.ts` | Lazily loads the run module; holds `liveResults` (with each node's `meaning`), `notices`, cancel |
 | `src/lib/run/simplify.ts` | `runSimplification`, `selectNodesToRun`, `rotateFrom`, `classifyError`, `STORED_TYPE`, `EMBED_MISSING_NOTICE`, `NLI_MISSING_NOTICE` |
-| `src/lib/llm/ollama-provider.ts` | `OllamaProvider` (`simplifyChunk`, `embed`, `/api/tags` checks), `DEFAULT_LLM_MODEL`, `EMBED_MODEL`, `OllamaHttpError`, `chatModelsFromTags` |
+| `src/lib/llm/ollama-provider.ts` | `OllamaProvider` (`createBaseSession` with the `/api/show` lookup, `simplifyChunk`, `embed`, `/api/tags` checks), `DEFAULT_LLM_MODEL`, `EMBED_MODEL`, `OllamaHttpError`, `chatModelsFromTags`, `missingModelLog` |
+| `src/lib/llm/ollama-think.ts` | `thinkSetting` (pure): `think: false` for models whose `/api/show` capabilities list `thinking`, omitted otherwise; used by the app and `scripts/bakeoff/run.mjs` |
 | `src/lib/prompt-builder/builder.ts` | `buildPrompt`, `readerRules`, `hintedWords` (the lexical-hint list, shared with the NLI glossary exemption) |
 | `src/lib/prompt-builder/variants.ts` | `PROMPT_VARIANTS`, `EXTRA_VARIANTS`, `EXAMPLES`, `pickExample`, `stripExampleLabel` |
 | `src/lib/quality/config.ts` | Every quality constant: `SIMILARITY_THRESHOLD` 0.87, `ENTAILMENT_MIN` 0.5 (calibration result in its comment; not frozen yet), `CONTRADICTION_MAX` 0.2, `NLI_TOP_PREMISES` 3, `NLI_CONTRADICTION_AGG` `'best-entailing'`, `AUTO_LITE_PARAGRAPH_MS` 3000, `MIN_WORDS_FOR_CHECK`, `GLOSSARY_EXEMPTION_MAX_RATE`, `MAX_RETRY_REASONS`, `THESIS_COVERAGE_MIN`, the NLI model id, batch, cache, timeouts and `NLI_BUDGET_MS`, and the stage 7 `WEIGHTS`, `QUALITY_THRESHOLD`, `MAX_MODEL_CALLS_PER_NODE`, grade and length constants. Import-free |
@@ -228,7 +229,7 @@ The main app chunk is about 286 kB (98 kB gzip). **Never statically import** `pd
 | `local` | `debug:nliDevice` | Optional; `'wasm'` forces the wasm NLI backend (benchmarking only) |
 | `local` | `progress:weekly` | `WeeklyProgressRecord[]` (`weekStart`, `targetGradeSum`, `sessionCount`), 30-day retention, Monday-aligned — `progress.ts`; survives "Clear documents" |
 | `sync` | `userProfile` | `UserProfile` (includes `preset`); default adult / auto / general / novice / plain |
-| `sync` | `llmModel` | Ollama chat model name; falls back to `qwen2.5:3b` |
+| `sync` | `llmModel` | Ollama chat model name; falls back to `DEFAULT_LLM_MODEL` (`qwen3:4b-instruct-2507-q4_K_M`). A saved value always wins, so a user who saved `qwen2.5:3b` keeps it (no migration) |
 | `sync` | `extraQuality` | Boolean; on only when saved as `true` |
 | `sync` | `qualityMode` | `'auto' \| 'full' \| 'lite'`; `'auto'` unless a valid value is saved |
 | `sync` | `customWords` | Newline- or comma-separated string |
@@ -272,7 +273,7 @@ npx vitest run --coverage --coverage.include="src/lib/**"
 ```
 
 Runtime setup for manual testing:
-1. `ollama pull qwen2.5:3b` and, optionally, `ollama pull all-minilm`. Without the second, the similarity check is skipped with a one-time notice. Without `npm run fetch-models` before the build, the NLI check is skipped with a one-time notice (results `nliChecked: false`, not thesis-grade).
+1. `ollama pull qwen3:4b-instruct-2507-q4_K_M` and, optionally, `ollama pull all-minilm`. Without the second, the similarity check is skipped with a one-time notice. Without `npm run fetch-models` before the build, the NLI check is skipped with a one-time notice (results `nliChecked: false`, not thesis-grade).
 2. Set the user env var `OLLAMA_ORIGINS=chrome-extension://emnnfgmpahidhdpdakmblphimmamckon` and fully restart Ollama. Without it, Ollama returns 403.
 3. Open `chrome://extensions`, turn on Developer mode, use "Load unpacked" on `dist/` (Chrome 138+), click the toolbar icon on an article.
 
@@ -282,13 +283,13 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - Pure modules need no mocks.
 - Code that touches storage uses `installChromeMock()` from `tests/mocks/chrome.ts` (an in-memory `local`/`sync`/`session` store via `vi.stubGlobal`).
 - Only `segmenter.test.ts` uses `// @vitest-environment happy-dom` as its first line.
-- `simplify.test.ts` mocks the segmenter with `vi.mock`, `embed` with `vi.spyOn(OllamaProvider.prototype, 'embed')`, and `lib/quality/nli` with `vi.mock` (`checkEntailment` answers per text; `prepareNli` returns `nliBenchResult`, by default a fast WebGPU benchmark so Auto picks Full; `nliMode` 'unavailable' makes both throw `NliUnavailableError`, 'error' makes `checkEntailment` throw a plain Error), and saves a grade-1 target in `beforeEach`. Quality-mode tests set sync `qualityMode` or local `nli:bench`.
+- `simplify.test.ts` mocks the segmenter with `vi.mock`, `embed` with `vi.spyOn(OllamaProvider.prototype, 'embed')`, and `lib/quality/nli` with `vi.mock` (`checkEntailment` answers per text; `prepareNli` returns `nliBenchResult`, by default a fast WebGPU benchmark so Auto picks Full; `nliMode` 'unavailable' makes both throw `NliUnavailableError`, 'error' makes `checkEntailment` throw a plain Error), routes `/api/show` to a separate `showMock` (`showCapabilities`, `showStatus`) so `fetchMock` counts only `/api/chat` calls, and saves a grade-1 target in `beforeEach`. Quality-mode tests set sync `qualityMode` or local `nli:bench`.
 - `nli.test.ts` never loads the model: `NliClient` gets a fake `NliBackend`, `createWorkerBackend` a fake `WorkerLike`, and `prepareNli` an in-memory `BenchStore`.
 
 ## 8. Current status
 
 - **Done:** phases 1 to 4 (capture and documents, Reading, Progress and Settings, paste and PDF), reading presets, purpose-aware prompt rules and the lexical hint, the stage 6C semantic check, the performance work (skip easy nodes, result cache, start at the visible node, model setting, lazy loading), stage 7 (candidate scoring, prompt variants, run report) and Prompt 9 (the thesis meaning standard: SBERT ≥ 0.87 + entities + local NLI, glossary exemptions, pass rate and coverage).
-- **Health on 2026-10-17:** `npm test` passes (30 files, 623 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
+- **Health on 2026-10-19:** `npm test` passes (30 files, 636 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
 - **NLI premise strategy and speed (decided 2026-10-15).** The Chrome run of the whole-paragraph-premise engine (wasm) measured **13,376 ms of NLI per paragraph** (about 1 s per sentence, budget 500 ms, about 73% of run time) and 0/3 passed at average similarity 0.87. Decision: SummaC sentence premises pruned to the top 3 by all-minilm, one batch per node, WebGPU first with wasm fallback, the stricter glossary rule, and the Auto/Full/Lite quality mode. Not done (by decision): a bigger in-app NLI model, and a contradiction-only check. Multi-threaded wasm (COOP/COEP) is investigated but not applied.
 - **NLI calibration (2026-10-15, `eval/nli-calibration/`, `npm run calibrate-nli`).**
   - **The set:** 15 originals:
@@ -346,7 +347,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - **Calibration rules:**
   - `ENTAILMENT_MIN` is set only from `npm run calibrate-nli` and is then frozen for the benchmark.
   - The calibration paragraphs are never reused in the Ask Gemini benchmark test set or any other test set.
-- **Base-model bake-off (Prompt 9.4, 2026-10-16, `eval/model-bakeoff/`; eval only, the app's default model is unchanged).**
+- **Base-model bake-off (Prompt 9.4, 2026-10-16, `eval/model-bakeoff/`; eval only; its winner became the app default on 2026-10-19).**
   - **Goal:** choose the base model for the Prompt 10 fine-tune from `qwen2.5:3b`, `qwen3:4b-instruct-2507-q4_K_M` and `gemma4:e2b-it-qat`, with blind human meaning labels.
   - **Data:** 40 new **bakeoff-only** paragraphs (24 Wikipedia, 16 ready.gov / weather.gov / nih.gov; 10 lists, 20 with numbers). `npm run bakeoff:check` checks FKGL ≥ 9, not already simple at grade 8, 40–220 words, and no overlap with the calibration set.
   - **Generation:** the app's exact prompt (Student preset, grade 8), each model's default sampling, seed 42, `think: false` where supported, one first-try output; GPU on all 40, CPU-only (`num_gpu: 0`) on 10.
@@ -362,7 +363,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
     - All three are eligible. qwen3 leads gemma4 by 5.5 points, more than the 3-point tie margin, so the CPU tie-break doesn't apply. qwen3 is fine-tunable with Unsloth on a Colab T4 (the Qwen3 (4B) Instruct notebook).
     - **McNemar:** both newer models beat `qwen2.5:3b` (p = 0.001 and 0.003). qwen3 vs gemma4 is not significant (5 vs 3 discordant pairs, p = 0.73).
     - **Target hit:** every model overshoots below grade 8 (mean FKGL after 5.7–6.2), so hits within ±1 are low (15–28%).
-    - The app's default model is unchanged (`qwen2.5:3b`).
+    - **Default switched (2026-10-19):** `DEFAULT_LLM_MODEL` is now `qwen3:4b-instruct-2507-q4_K_M` (Apache 2.0; `qwen2.5:3b`'s Qwen Research licence is non-commercial and blocks a public release). Saved `llmModel` settings are kept. The app now sends `think: false` to it by the bake-off's rule (`thinkSetting`). The cache key includes the model, so earlier cache entries simply miss.
   - **Rule:** the bake-off paragraphs are never reused in the benchmark, the calibration or a training set.
 - **Multi-threaded wasm (investigated, not applied).**
   - **What it would take:** the manifest keys `cross_origin_opener_policy: { value: 'same-origin' }` and `cross_origin_embedder_policy: { value: 'require-corp' }`, which make the app page `crossOriginIsolated`, plus `numThreads > 1` in the worker.

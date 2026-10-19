@@ -72,7 +72,7 @@ const {
 const { DEFAULT_PROFILE } = await import('../../src/lib/storage/settings');
 const { getDocument, upsertDocument, saveDocument } = await import('../../src/lib/storage/documents');
 const { beforeAfterOf, getWeeklyProgress } = await import('../../src/lib/storage/progress');
-const { OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
+const { DEFAULT_LLM_MODEL, OllamaProvider, OllamaHttpError } = await import('../../src/lib/llm/ollama-provider');
 const { MEANING_RETRY_INSTRUCTION, driftReason, unsupportedReason } = await import('../../src/lib/quality/meaning');
 const {
   ENTAILMENT_MIN, MAX_MODEL_CALLS_PER_NODE, NLI_CONTRADICTION_AGG, NLI_PARAGRAPH_RULE, QUALITY_THRESHOLD,
@@ -120,6 +120,20 @@ const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit)
   return ndjson(reply);
 });
 
+/** Capabilities /api/show reports for the run's model (default: no thinking). */
+let showCapabilities: string[];
+/** When set, /api/show answers with this HTTP status (404 = model not pulled). */
+let showStatus: number | null;
+/** /api/show requests; kept apart from fetchMock, which counts only /api/chat calls. */
+const showMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+  showStatus !== null
+    ? new Response('{"error":"model not found"}', { status: showStatus })
+    : new Response(JSON.stringify({ capabilities: showCapabilities }), { status: 200 }));
+
+/** Routes /api/show to showMock and everything else (/api/chat) to fetchMock. */
+const routedFetch = (url: string | URL | Request, init?: RequestInit) =>
+  String(url).endsWith('/api/show') ? showMock(url, init) : fetchMock(url, init);
+
 /** Unit vector whose cosine with [1, 0] is exactly `sim`. */
 const vec = (sim: number) => [sim, Math.sqrt(1 - sim * sim)];
 
@@ -162,12 +176,15 @@ const statuses = (doc: ClarityDocument | null) =>
 beforeEach(async () => {
   mock = installChromeMock();
   await setTargetGrade(1);
-  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('fetch', routedFetch);
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'log').mockImplementation(() => {});
   embedSpy = vi.spyOn(OllamaProvider.prototype, 'embed').mockImplementation(fakeEmbed);
   fetchMock.mockClear();
+  showMock.mockClear();
+  showCapabilities = ['completion'];
+  showStatus = null;
   failing = new Set();
   prompts = [];
   replies = {};
@@ -801,16 +818,73 @@ describe('runSimplification speed paths', () => {
     expect(statuses(await getDocument(doc.id))).toEqual({ n0: 'done', n1: 'done', n2: 'done' });
   });
 
-  it('uses the model from settings and names it when it is missing', async () => {
+  it('uses the model from settings', async () => {
+    await chrome.storage.sync.set({ llmModel: 'llama3.2:1b' });
+
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+
+    expect(JSON.parse(String(showMock.mock.calls[0][1]?.body))).toEqual({ model: 'llama3.2:1b' });
+    expect(models.length).toBe(NODES.length);
+    expect(models.every(m => m === 'llama3.2:1b')).toBe(true);
+  });
+
+  it('stops before any node when the model is not pulled, naming the default but no command', async () => {
+    await chrome.storage.sync.set({ llmModel: 'llama3.2:1b' });
+    showStatus = 404;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const cb = callbacks();
+
+    await runSimplification(await storedDoc(), cb, 'all');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(cb.onBannerError).toHaveBeenCalledTimes(1);
+    const banner = String(cb.onBannerError.mock.calls[0][0]);
+    expect(banner).toContain('llama3.2:1b');
+    expect(banner).toContain(`The default is ${DEFAULT_LLM_MODEL}.`);
+    expect(banner).not.toContain('ollama pull');
+    const logged = log.mock.calls.map(c => String(c[0])).join('\n');
+    expect(logged).toContain('ollama pull llama3.2:1b');
+    expect(logged).toContain(`ollama pull ${DEFAULT_LLM_MODEL}`);
+  });
+
+  it('names only the default model when the default is missing', async () => {
+    showStatus = 404;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const cb = callbacks();
+
+    await runSimplification(await storedDoc(), cb, 'all');
+
+    const banner = String(cb.onBannerError.mock.calls[0][0]);
+    expect(banner).toContain(`The default model ${DEFAULT_LLM_MODEL} isn't installed`);
+    expect(banner).not.toContain('ollama pull');
+    expect(log.mock.calls.some(c => String(c[0]).includes(`ollama pull ${DEFAULT_LLM_MODEL}`))).toBe(true);
+  });
+
+  it('gives the same banner when the chat request 404s mid-run', async () => {
     await chrome.storage.sync.set({ llmModel: 'llama3.2:1b' });
     chatStatus = 404;
     const cb = callbacks();
 
     await runSimplification(await storedDoc(), cb, 'all');
 
-    expect(models.length).toBeGreaterThan(0);
-    expect(models.every(m => m === 'llama3.2:1b')).toBe(true);
-    expect(cb.onBannerError).toHaveBeenCalledWith('Model not found on Ollama. Run: ollama pull llama3.2:1b');
+    const banner = String(cb.onBannerError.mock.calls[0][0]);
+    expect(banner).toContain(`The model llama3.2:1b isn't installed in Ollama.`);
+    expect(banner).not.toContain('ollama pull');
+  });
+
+  it('sends think: false on every chat call to a thinking model, and no think otherwise', async () => {
+    const bodies = () => fetchMock.mock.calls.map(c => JSON.parse(String(c[1]?.body)) as Record<string, unknown>);
+
+    showCapabilities = ['completion', 'thinking'];
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+    expect(bodies().length).toBe(NODES.length);
+    expect(bodies().every(b => b.think === false)).toBe(true);
+
+    fetchMock.mockClear();
+    showCapabilities = ['completion'];
+    await runSimplification(await storedDoc('hash-run-2'), callbacks(), 'all');
+    expect(bodies().length).toBe(NODES.length);
+    expect(bodies().every(b => !('think' in b))).toBe(true);
   });
 
   it('logs per-node timings and a run summary', async () => {
@@ -823,8 +897,9 @@ describe('runSimplification speed paths', () => {
     expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n0 \(skipped, meaning excluded\) \d+\.\d\d s$/));
     expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n1 \(model, meaning excluded\) /));
     expect(lines).toContainEqual(expect.stringMatching(
-      /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 1 skipped, 0 errors; .*model qwen2\.5:3b; quality full; meaning passed n\/a \(0\/0\), coverage n\/a; NLI avg n\/a per paragraph \(backend webgpu nvidia\), truncated pairs 0\/0$/,
+      /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 1 skipped, 0 errors; .*model \S+; quality full; meaning passed n\/a \(0\/0\), coverage n\/a; NLI avg n\/a per paragraph \(backend webgpu nvidia\), truncated pairs 0\/0$/,
     ));
+    expect(lines.find(l => l.startsWith('[Clarity] Run:'))).toContain(`model ${DEFAULT_LLM_MODEL};`);
     expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Quality mode full \(auto: WebGPU, benchmark 40 ms/));
   });
 });
@@ -1134,7 +1209,7 @@ describe('runSimplification run log', () => {
     expect(logs).toHaveLength(1);
     const log = logs![0];
     expect(log).toMatchObject({
-      cancelled: false, mode: 'all', model: 'qwen2.5:3b', extraQuality: false,
+      cancelled: false, mode: 'all', model: DEFAULT_LLM_MODEL, extraQuality: false,
       targetGrade: 4, qualityThreshold: QUALITY_THRESHOLD,
       weights: { meaning: 0.5, readability: 0.3, length: 0.2 },
     });

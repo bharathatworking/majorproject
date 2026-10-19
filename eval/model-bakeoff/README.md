@@ -2,11 +2,11 @@
 
 This picks the base model for the Prompt 10 LoRA fine-tune. Three Ollama models are compared on 40 new paragraphs, and their meaning preservation is labelled blind by a person:
 
-- `qwen2.5:3b`, the app's current default
+- `qwen2.5:3b`, the app's default at the time
 - `qwen3:4b-instruct-2507-q4_K_M`
 - `gemma4:e2b-it-qat`
 
-This is an evaluation only. Nothing in `src/` changes, and the app's default model stays `qwen2.5:3b`.
+This is an evaluation only. Nothing in `src/` changes here, and the app's default model stayed `qwen2.5:3b` during the bake-off (the winner became the default afterwards, in a separate change).
 
 > The paragraphs are **bakeoff-only** (see [SOURCES.md](SOURCES.md)). Never reuse them in the benchmark, the calibration or a training set.
 

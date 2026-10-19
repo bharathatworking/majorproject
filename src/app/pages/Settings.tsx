@@ -6,7 +6,9 @@ import {
 import { clearAllDocuments } from '../../lib/storage/documents';
 import { clearCache } from '../../lib/storage/cache';
 import { getNliBench } from '../../lib/storage/nli-bench';
-import { DEFAULT_LLM_MODEL, LIGHT_LLM_MODEL, OllamaProvider } from '../../lib/llm/ollama-provider';
+import {
+  DEFAULT_LLM_MODEL, LIGHT_LLM_MODEL, missingModelLog, OllamaProvider,
+} from '../../lib/llm/ollama-provider';
 import { chooseQualityMode, evidenceOf } from '../../lib/quality/mode';
 import { resolveTargetGrade } from '../../lib/profile/resolver';
 import { PRESETS, editProfile } from '../../lib/profile/presets';
@@ -89,6 +91,11 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
     ? installed
     : [llmModel, ...(Array.isArray(installed) ? installed : [])];
   const modelMissing = Array.isArray(installed) && !installed.includes(llmModel);
+
+  // The pull command goes to the console, not into the page
+  useEffect(() => {
+    if (modelMissing) console.log(missingModelLog(llmModel));
+  }, [modelMissing, llmModel]);
 
   // ── Profile update ──────────────────────────────────────────────────────────
   // Any field edit means the profile no longer matches a preset → 'custom'.
@@ -280,10 +287,12 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
         )}
         {modelMissing && (
           <p className="settings-hint">
-            This model isn't installed. Run <code>ollama pull {llmModel}</code> or pick another.
+            This model isn't installed in Ollama. Install it (see README.md) or pick another.
+            {llmModel !== DEFAULT_LLM_MODEL && (
+              <> The default is <code>{DEFAULT_LLM_MODEL}</code>.</>
+            )}
             {llmModel !== LIGHT_LLM_MODEL && (
-              <> On a slower computer, <code>{LIGHT_LLM_MODEL}</code> is a lighter
-              option: <code>ollama pull {LIGHT_LLM_MODEL}</code>.</>
+              <> On a slower computer, <code>{LIGHT_LLM_MODEL}</code> is a lighter option.</>
             )}
           </p>
         )}

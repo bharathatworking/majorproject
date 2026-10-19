@@ -83,12 +83,16 @@
  *
  * Error handling:
  *   HTTP 403 → OLLAMA_ORIGINS not set
- *   HTTP 404 → model not pulled
+ *   HTTP 404 → model not pulled (from /api/show at the start of the run, or
+ *              /api/chat if it is removed mid-run). The banner names the
+ *              default model; the pull command goes to the console only.
  *   TypeError ("Failed to fetch") → Ollama not running
  *   All others → surfaced as-is
  */
 
-import { EMBED_MODEL, OllamaHttpError, OllamaProvider } from '../llm/ollama-provider';
+import {
+  DEFAULT_LLM_MODEL, EMBED_MODEL, missingModelLog, OllamaHttpError, OllamaProvider,
+} from '../llm/ollama-provider';
 import { resolveProfile } from '../profile/resolver';
 import { buildPrompt, hintedWords } from '../prompt-builder/builder';
 import { EXTRA_VARIANTS, stripExampleLabel } from '../prompt-builder/variants';
@@ -244,7 +248,13 @@ function classifyError(err: unknown, model: string): string {
     );
   }
   if (status === 404) {
-    return `Model not found on Ollama. Run: ollama pull ${model}`;
+    console.log(missingModelLog(model));
+    const which = model === DEFAULT_LLM_MODEL ? `The default model ${model}` : `The model ${model}`;
+    const fallback = model === DEFAULT_LLM_MODEL ? '' : ` The default is ${DEFAULT_LLM_MODEL}.`;
+    return (
+      `${which} isn't installed in Ollama. Install it, or pick an installed model ` +
+      `in Settings → AI Model.${fallback} See README.md.`
+    );
   }
   return String(err);
 }

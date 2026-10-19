@@ -1,5 +1,5 @@
 /**
- * node scripts/make-paragraph-items.mjs — fills in the real qwen2.5:3b
+ * node scripts/make-paragraph-items.mjs — fills in the real model
  * simplification of every calibration paragraph that has none
  * (eval/nli-calibration/paragraphs.jsonl), exactly as the extension would
  * make it, and records the hinted words the glossary rule uses.
@@ -10,13 +10,14 @@
  *    buildPrompt ('standard', no rolling context) and OllamaProvider, all
  *    loaded from src/ through Vite's ssrLoadModule.
  *  - Profile: the default adult profile with target grade 6, as for the
- *    first 15 paragraphs. Model: qwen2.5:3b (DEFAULT_LLM_MODEL), default
+ *    first 15 paragraphs. Model: DEFAULT_LLM_MODEL (qwen2.5:3b when the
+ *    existing items were made; each records simplificationModel), default
  *    sampling, one attempt, no meaning retry: the calibration needs the
  *    model's first output, faithful or not.
  *  - Existing simplifications are never regenerated, so the labelled items
  *    stay valid; `hintedWords` is (re)computed for every paragraph, because
  *    it depends only on the original and the profile.
- *  - Needs Ollama on localhost:11434 with qwen2.5:3b.
+ *  - Needs Ollama on localhost:11434 with DEFAULT_LLM_MODEL pulled.
  */
 
 import { readFile, writeFile } from 'node:fs/promises';

@@ -13,7 +13,8 @@
  *    uses its Modelfile default (read from /api/show and recorded). Only
  *    options.seed = 42 is added, plus num_gpu = 0 for the CPU-only runs.
  *    think: false is sent only to models whose /api/show capabilities list
- *    'thinking'; <think> blocks are stripped and counted either way.
+ *    'thinking' (thinkSetting in src/lib/llm/ollama-think.ts, the app's own
+ *    rule); <think> blocks are stripped and counted either way.
  *  - Timing: every loaded model (all-minilm included) is unloaded with
  *    keep_alive: 0 before each model and mode, one untimed warm-up call
  *    loads it, and /api/ps then gives its RAM/VRAM size (the file size from
@@ -66,14 +67,14 @@ async function unloadAll() {
   throw new Error('models did not unload within 30 s');
 }
 
-/** Capabilities and the Modelfile's default temperature of a model. */
+/** The `think` value to send (from its capabilities) and the Modelfile's default temperature of a model. */
 async function modelInfo(model) {
   const show = await api('/api/show', { model });
   const params = Object.fromEntries(
     (show.parameters ?? '').split('\n').map(l => l.trim().split(/\s+/)).filter(p => p.length >= 2).map(([k, v]) => [k, v]),
   );
   return {
-    thinking: (show.capabilities ?? []).includes('thinking'),
+    think: app.thinkSetting(show),
     defaultTemperature: params.temperature !== undefined ? Number(params.temperature) : null,
     details: show.details ?? null,
   };
@@ -213,7 +214,7 @@ try {
     const done = existsSync(OUTPUTS) ? await readJsonl(OUTPUTS) : [];
     for (const model of selected) {
       const info = await modelInfo(model);
-      const think = info.thinking ? false : undefined;
+      const { think } = info;
       const { digest, size: diskSize } = tags.find(t => t.name === model);
       for (const mode of modes) {
         const subset = list.filter(p => mode === 'gpu' || p.cpuSubset).slice(0, limit);

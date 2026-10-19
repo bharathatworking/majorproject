@@ -5,14 +5,24 @@
  * lib/storage/settings.ts) and passed to the constructor; DEFAULT_LLM_MODEL
  * applies when nothing is saved. Only localhost:11434 is contacted, which the
  * CSP connect-src and host_permissions already allow.
+ *
+ * createBaseSession reads the model's /api/show once: a 404 there means the
+ * model is not pulled (caught before any node runs), and its capabilities
+ * decide the `think` field (ollama-think.ts). No temperature is sent; each
+ * model uses its Modelfile default.
  */
 
 import type { LLMAvailability } from '../../types';
+import { thinkSetting } from './ollama-think';
 import { parseOllamaStream } from './ollama-stream';
 
 const OLLAMA_BASE_URL = 'http://localhost:11434';
-/** Chat model used until the user picks another one in Settings. */
-export const DEFAULT_LLM_MODEL = 'qwen2.5:3b';
+/**
+ * Chat model used until the user picks another one in Settings. The winner
+ * of the Prompt 9.4 base-model bake-off (eval/model-bakeoff/REPORT.md),
+ * licensed Apache 2.0. A model saved in sync `llmModel` always wins over it.
+ */
+export const DEFAULT_LLM_MODEL = 'qwen3:4b-instruct-2507-q4_K_M';
 /** Lighter chat model Settings suggests for slower computers. */
 export const LIGHT_LLM_MODEL = 'qwen2.5:1.5b';
 /**
@@ -48,10 +58,24 @@ export function chatModelsFromTags(json: unknown): string[] {
   return [...new Set(names)].sort();
 }
 
+// ─── Missing model ────────────────────────────────────────────────────────────
+
+/**
+ * Console line for a chat model that isn't installed, with the pull command
+ * (and the default's when another model is missing). The command goes to the
+ * console and README only, never into text the reader sees.
+ */
+export function missingModelLog(model: string): string {
+  const fallback = model === DEFAULT_LLM_MODEL ? '' : ` (default model: ollama pull ${DEFAULT_LLM_MODEL})`;
+  return `[Clarity] Model ${model} is not installed in Ollama. Run: ollama pull ${model}${fallback}`;
+}
+
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
 export class OllamaProvider {
   private systemPrompt: string = '';
+  /** `think` for /api/chat, set by createBaseSession; undefined = omit the field. */
+  private think: false | undefined;
 
   constructor(readonly model: string = DEFAULT_LLM_MODEL) {}
 
@@ -74,6 +98,17 @@ export class OllamaProvider {
     return chatModelsFromTags(await res.json());
   }
 
+  /** The model's /api/show response. Throws OllamaHttpError (404 = model not pulled). */
+  async show(): Promise<unknown> {
+    const res = await fetch(`${OLLAMA_BASE_URL}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: this.model }),
+    });
+    if (!res.ok) throw new OllamaHttpError(res.status);
+    return res.json();
+  }
+
   async createBaseSession(
     systemText: string,
     _onProgress?: (loaded: number, total: number) => void,
@@ -84,6 +119,7 @@ export class OllamaProvider {
     // _onProgress is accepted for interface compatibility but unused:
     // Ollama models are pulled via `ollama pull` outside the browser.
     this.systemPrompt = systemText;
+    this.think = thinkSetting(await this.show());
   }
 
   async simplifyChunk(userText: string): Promise<AsyncIterable<string>> {
@@ -99,6 +135,7 @@ export class OllamaProvider {
         stream: true,
         keep_alive: '10m',  // keep the model resident so only the first call in a
                             // session pays the cold-load cost, not every call
+        ...(this.think !== undefined && { think: this.think }),
       }),
     });
 
