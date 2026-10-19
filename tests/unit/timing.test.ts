@@ -14,7 +14,7 @@ describe('summarizeRun', () => {
   ];
 
   it('counts nodes by source', () => {
-    expect(summarizeRun(entries, 5000).counts).toEqual({ model: 2, cache: 1, skipped: 1, error: 1 });
+    expect(summarizeRun(entries, 5000).counts).toEqual({ model: 2, cache: 1, heading: 0, skipped: 1, error: 1 });
   });
 
   it('averages over every node and over model nodes only', () => {
@@ -26,7 +26,7 @@ describe('summarizeRun', () => {
 
   it('formats one line', () => {
     expect(summarizeRun(entries, 5000).line).toBe(
-      '5 nodes in 5.00 s — 2 model, 1 cache, 1 skipped, 1 errors; 2.00 s/model node, 1.00 s/node',
+      '5 nodes in 5.00 s — 2 model, 1 cache, 0 headings, 1 skipped, 1 errors; 2.00 s/model node, 1.00 s/node',
     );
   });
 

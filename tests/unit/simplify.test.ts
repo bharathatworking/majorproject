@@ -355,7 +355,8 @@ describe('runSimplification meaning check', () => {
 
     expect(embedSpy).not.toHaveBeenCalled();
     expect(checkEntailmentMock).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    // The heading never reaches the model
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect((await getDocument(doc.id))?.results.every(r => r.similarity === undefined)).toBe(true);
   });
 
@@ -770,6 +771,29 @@ describe('runSimplification thesis meaning standard', () => {
 // runSimplification — speed: skip easy nodes, cache, start at visible node
 // ---------------------------------------------------------------------------
 describe('runSimplification speed paths', () => {
+  it('keeps a heading as written: no model call, not checked, not in the pass rate', async () => {
+    const heading: ContentNode = { id: 'n0', type: 'heading', level: 2, text: 'Etymology and terminology' };
+    nodes = [heading, { ...CURIE, id: 'n1' }];
+    replies = { n1: ['Marie Curie won the Nobel Prize in Physics in 1903 for her work on radiation.'] };
+    const doc = await storedDoc();
+    const cb = callbacks();
+
+    await runSimplification(doc, cb, 'all');
+
+    expect(prompts).toHaveLength(1);
+    // Rolling context for the next paragraph, never a text to rewrite
+    expect(prompts.some(p => p.endsWith('Etymology and terminology'))).toBe(false);
+    expect(cb.onNodeDone).toHaveBeenCalledWith('n0', 'Etymology and terminology', undefined, true);
+    const saved = await getDocument(doc.id);
+    expect(saved?.results.find(r => r.nodeId === 'n0')).toMatchObject({
+      status: 'done', simplifiedText: 'Etymology and terminology', skipped: true, type: 'heading',
+    });
+    const log = saved?.runLogs?.at(-1);
+    expect(log?.nodes[0]).toMatchObject({ source: 'heading', modelCalls: 0, meaningStatus: 'excluded' });
+    expect(log?.summary.counts.heading).toBe(1);
+    expect(log?.summary.meaning).toMatchObject({ excluded: 1, passed: 1 });
+  });
+
   it('keeps an already simple node as is, without the model or the meaning check', async () => {
     nodes = [EASY, NODES[1]];
     await setTargetGrade(4);
@@ -968,7 +992,7 @@ describe('runSimplification speed paths', () => {
     expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n0 \(skipped, meaning excluded\) \d+\.\d\d s$/));
     expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Node n1 \(model, meaning excluded\) /));
     expect(lines).toContainEqual(expect.stringMatching(
-      /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 1 skipped, 0 errors; .*model \S+; quality full; meaning passed n\/a \(0\/0\), coverage n\/a; NLI avg n\/a per paragraph \(backend webgpu nvidia\), truncated pairs 0\/0$/,
+      /^\[Clarity\] Run: 2 nodes in .* 1 model, 0 cache, 0 headings, 1 skipped, 0 errors; .*model \S+; quality full; meaning passed n\/a \(0\/0\), coverage n\/a; NLI avg n\/a per paragraph \(backend webgpu nvidia\), truncated pairs 0\/0$/,
     ));
     expect(lines.find(l => l.startsWith('[Clarity] Run:'))).toContain(`model ${DEFAULT_LLM_MODEL};`);
     expect(lines).toContainEqual(expect.stringMatching(/^\[Clarity\] Quality mode full \(auto: WebGPU, benchmark 40 ms/));
@@ -1092,14 +1116,14 @@ describe('runSimplification extra quality', () => {
     expect(node?.candidates.map(c => c.variant)).toEqual(['standard', 'example-guided']);
   });
 
-  it('gives headings one call', async () => {
+  it('never sends a heading to the model, even with extra quality', async () => {
     await enableExtraQuality();
     nodes = [{ id: 'n0', type: 'heading', level: 2, text: CURIE.text, entities: [] }];
     replies = { n0: [HARD] };
 
     await runSimplification(await storedDoc(), callbacks(), 'all');
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('off: still logs the scored 6C retry, at most 2 calls', async () => {
@@ -1284,7 +1308,7 @@ describe('runSimplification run log', () => {
       targetGrade: 4, qualityThreshold: QUALITY_THRESHOLD,
       weights: { meaning: 0.5, readability: 0.3, length: 0.2 },
     });
-    expect(log.summary.counts).toEqual({ model: 1, cache: 0, skipped: 1, error: 0 });
+    expect(log.summary.counts).toEqual({ model: 1, cache: 0, heading: 0, skipped: 1, error: 0 });
     expect(log.nodes.map(n => [n.nodeId, n.source, n.modelCalls])).toEqual([
       ['n0', 'skipped', 0], ['n1', 'model', 1],
     ]);

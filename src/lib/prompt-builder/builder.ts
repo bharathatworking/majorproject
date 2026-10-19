@@ -93,7 +93,8 @@ export function hintedWords(spec: SimplificationSpec, difficultWords: readonly s
  * OllamaProvider.createBaseSession and sent with every /api/chat request).
  * The user prompt is node-specific and includes:
  *  - A node-type hint so the model knows structural constraints
- *    (headings stay short; list-items stay parallel; etc.)
+ *    (list items stay parallel; blockquotes stay quotes). Headings never
+ *    reach the model (lib/run/simplify.ts keeps them as written).
  *  - An optional entity preservation instruction
  *  - An optional rolling context sentence from the previous node
  *  - An optional lexical hint listing words the common-word list flags as
@@ -138,12 +139,7 @@ ${extraRules}`;
   // Node-type hint — tells the model the structural role of this text so it
   // doesn't, e.g., expand a 3-word heading into a paragraph.
   let typeHint = '';
-  if (node.type === 'heading') {
-    typeHint =
-      `This is a heading (level ${node.level ?? 1}). ` +
-      `Keep it SHORT — do not expand it into a sentence or paragraph. ` +
-      `Preserve its role as a section title.\n\n`;
-  } else if (node.type === 'list-item') {
+  if (node.type === 'list-item') {
     typeHint =
       `This is one item in a list. ` +
       `Keep it parallel in structure and length to a typical list item. ` +

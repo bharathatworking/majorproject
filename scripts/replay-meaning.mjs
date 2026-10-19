@@ -75,7 +75,7 @@ try {
 
   const raw = file.toLowerCase().endsWith('.pdf') ? (await pdfPages(file)).join('\n') : await readFile(file, 'utf8');
   const blocks = textToBlocks(raw);
-  const nodes = blocks.map((b, i) => ({ id: `n${i}`, type: b.kind === 'paragraph' ? 'paragraph' : 'list-item', text: b.text }));
+  const nodes = blocks.map((b, i) => ({ id: `n${i}`, type: b.kind, text: b.text }));
   const wordSet = new Set(BASE_COMMON_WORDS);
   const report = computeReadabilityReport(raw.replace(/\s+/g, ' '), wordSet);
   const spec = resolveProfile({ ...DEFAULT_PROFILE, targetGradeLevel: TARGET_GRADE }, report.estimatedGradeLevel);

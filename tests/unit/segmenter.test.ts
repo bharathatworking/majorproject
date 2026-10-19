@@ -145,10 +145,11 @@ describe('pasted text segmentation', () => {
 describe('example user test plan segmentation', () => {
   const nodes = () => segmentHtml(pdfPagesToHtml(TEST_PLAN_PDF_PAGES), 'example user test plan', 'hash-tp').nodes;
 
-  it('has no heading node, merges the title and keeps deterministic IDs', () => {
+  it('makes the title the only heading and keeps deterministic IDs', () => {
     const n = nodes();
-    expect(n.some(x => x.type === 'heading')).toBe(false);
-    expect(n[0].text.startsWith('User Test Plan Example. Situating Context:')).toBe(true);
+    expect(n.filter(x => x.type === 'heading').map(x => [x.text, x.level])).toEqual([['User Test Plan Example', 2]]);
+    expect(n[0]).toMatchObject({ type: 'heading', text: 'User Test Plan Example' });
+    expect(n[1].text.startsWith('Situating Context: You are consulting')).toBe(true);
     expect(n.map(x => x.id)).toEqual(n.map((_, i) => `n${i}`));
     expect(nodes().map(x => [x.id, x.text])).toEqual(n.map(x => [x.id, x.text]));
   });

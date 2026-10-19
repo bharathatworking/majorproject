@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
-  MAX_NODE_SENTENCES, MAX_NODE_WORDS, blocksToHtml, chunkSentences, isTitleLine, parseListMarker,
+  MAX_NODE_SENTENCES, MAX_NODE_WORDS, blocksToHtml, chunkSentences, isHeadingLine, isTitleLine, parseListMarker,
   proseToHtml, splitInlineList, splitSentences, textToBlocks, wrapWidth, type TextBlock,
 } from '../../src/lib/input/text-blocks';
 import { TEST_PLAN_FLAT, TEST_PLAN_PASTE, TEST_PLAN_PDF_PAGES } from '../mocks/test-plan';
@@ -136,7 +137,7 @@ describe('textToBlocks', () => {
       '- Bring coffee',
     ].join('\n');
     const blocks = textToBlocks(text);
-    expect(blocks.map(b => (b.kind === 'paragraph' ? 'p' : `${b.depth}${b.ordered ? 'o' : 'u'}`))).toEqual([
+    expect(blocks.map(b => (b.kind !== 'list-item' ? 'p' : `${b.depth}${b.ordered ? 'o' : 'u'}`))).toEqual([
       'p', '0o', '1u', '1u', '2u', '0o', '1o', '1o', '2o', '2o', '0u', '0u',
     ]);
     expect(blocks[2]).toEqual({ kind: 'list-item', depth: 1, ordered: false, text: 'Check the calendar' });
@@ -210,15 +211,16 @@ describe('blocksToHtml', () => {
 describe('example user test plan', () => {
   /** Matches a node that ends in a list marker: "… TeamCal. 3." */
   const ENDS_IN_MARKER = /(?:^|\s)(?:\d{1,3}|[a-z]|[ivx]{1,4})[.)]$/;
-  const label = (b: TextBlock) => (b.kind === 'paragraph' ? 'p' : `${b.depth}${b.ordered ? 'o' : 'u'}`);
+  const label = (b: TextBlock) => (b.kind === 'heading' ? 'h' : b.kind === 'paragraph' ? 'p' : `${b.depth}${b.ordered ? 'o' : 'u'}`);
 
   it.each([
     ['PDF lines', () => textToBlocks(TEST_PLAN_PDF_PAGES.join('\n'))],
     ['paste', () => textToBlocks(TEST_PLAN_PASTE)],
-  ])('%s: merges the title, keeps the objectives a list and starts "Users:" anew', (_name, blocks) => {
-    const b = blocks();
+  ])('%s: makes the title a heading, keeps the objectives a list and starts "Users:" anew', (_name, blocks) => {
+    const b = blocks().slice(1);
+    expect(blocks()[0]).toEqual({ kind: 'heading', text: 'User Test Plan Example' });
     expect(b[0]).toMatchObject({ kind: 'paragraph' });
-    expect(b[0].text.startsWith('User Test Plan Example. Situating Context: You are consulting')).toBe(true);
+    expect(b[0].text.startsWith('Situating Context: You are consulting')).toBe(true);
     expect(b[1]).toEqual({ kind: 'paragraph', text: 'Objectives:' });
     expect(b.slice(2, 5).map(label)).toEqual(['0o', '0o', '0o']);
     expect(b[3].text).toBe(
@@ -230,9 +232,9 @@ describe('example user test plan', () => {
     expect(b[5].text.startsWith('Users: 20 managers')).toBe(true);
   });
 
-  it('never makes a title line its own block and never ends a block in a marker', () => {
+  it('never makes a label line its own block and never ends a block in a marker', () => {
     const b = textToBlocks(TEST_PLAN_PASTE);
-    expect(b.some(x => x.text === 'User Test Plan Example' || x.text === 'Situating Context:')).toBe(false);
+    expect(b.some(x => x.text === 'Situating Context:')).toBe(false);
     for (const x of b) expect(x.text).not.toMatch(ENDS_IN_MARKER);
   });
 
@@ -296,5 +298,39 @@ describe('title lines and wrapped text', () => {
   it('detects hard-wrapped text by its line widths', () => {
     expect(wrapWidth(TEST_PLAN_PASTE.split('\n'))).toBeGreaterThan(80);
     expect(wrapWidth(['One long paragraph per line, as Word copies it, and a lot more words here.', 'Short.', 'x'])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Headings (eval/fixtures UK Wikipedia paste)
+// ---------------------------------------------------------------------------
+describe('headings', () => {
+  const UK = readFileSync('eval/fixtures/uk-wiki-paste.txt', 'utf8');
+
+  it('makes "Etymology and terminology" a heading block, kept as written', () => {
+    const b = textToBlocks(UK);
+    expect(b.map(x => x.kind)).toEqual([
+      'paragraph', 'paragraph', 'paragraph', 'paragraph', 'heading', 'paragraph', 'paragraph', 'paragraph',
+    ]);
+    expect(b[4]).toEqual({ kind: 'heading', text: 'Etymology and terminology' });
+    expect(blocksToHtml(b)).toContain('<h2>Etymology and terminology</h2>');
+  });
+
+  it('reads short unpunctuated lines before a longer paragraph as headings', () => {
+    const long = 'The British Isles have been continuously inhabited since the Neolithic period began.';
+    expect(isHeadingLine('Etymology and terminology', long)).toBe(true);
+    expect(isHeadingLine('History', long)).toBe(true);
+    expect(isHeadingLine('2020 results', long)).toBe(true);
+  });
+
+  it('rejects sentences, labels, long lines, lowercase starts and lines before a list or a short line', () => {
+    const long = 'The British Isles have been continuously inhabited since the Neolithic period began.';
+    expect(isHeadingLine('The war ended.', long)).toBe(false);
+    expect(isHeadingLine('Objectives:', long)).toBe(false);
+    expect(isHeadingLine('One Two Three Four Five Six Seven Eight Nine', long)).toBe(false);
+    expect(isHeadingLine('etymology and terminology', long)).toBe(false);
+    expect(isHeadingLine('Shopping list', '- Bring notes and some coffee for everyone at the meeting')).toBe(false);
+    expect(isHeadingLine('Etymology and terminology', 'See also the notes.')).toBe(false);
+    expect(isHeadingLine('- Item one', long)).toBe(false);
   });
 });

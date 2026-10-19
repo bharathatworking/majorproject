@@ -423,7 +423,8 @@ export interface CandidateLog {
 }
 
 /** How a node got its result in a run. */
-export type NodeSource = 'model' | 'cache' | 'skipped' | 'error';
+/** 'heading': kept as written, never sent to the model; 'skipped': already simple. */
+export type NodeSource = 'model' | 'cache' | 'heading' | 'skipped' | 'error';
 
 /** Per-node entry of a run log. */
 export interface NodeRunLog {

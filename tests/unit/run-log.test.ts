@@ -15,7 +15,7 @@ function log(id: string): RunLog {
       nliModel: 'Xenova/nli-deberta-v3-xsmall',
     },
     summary: {
-      nodes: 0, counts: { model: 0, cache: 0, skipped: 0, error: 0 }, totalSeconds: 0,
+      nodes: 0, counts: { model: 0, cache: 0, heading: 0, skipped: 0, error: 0 }, totalSeconds: 0,
       secondsPerNode: null, secondsPerModelNode: null, firstResultSeconds: null,
       meaning: makeRunMeaningSummary(),
     },

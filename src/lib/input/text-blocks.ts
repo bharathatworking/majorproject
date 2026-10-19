@@ -17,12 +17,20 @@
  *    so "Users: 20 managers…" after "3. Formative: … TeamCal." starts a new
  *    paragraph instead of joining list item 3. A long line ending in "." is
  *    only wrapped there, and the block goes on.
- *  - Title lines merge into the paragraph after them: a line of at most
- *    MAX_TITLE_WORDS words without end punctuation, in Title Case or ending
- *    in ":" ("User Test Plan Example", "Situating Context:"), followed (blank
- *    lines allowed) by a line starting with a capital. It never becomes a
- *    node of its own: "Title" + "Text…" reads "Title. Text…". Before a list
- *    marker it stays its own paragraph ("Objectives:").
+ *  - Headings: a line that starts a block, has at most MAX_TITLE_WORDS
+ *    words, starts with a capital or digit, has no ending punctuation
+ *    (. ! ? : ; , …) and is followed (blank lines allowed) by a longer,
+ *    non-list line of more than MAX_TITLE_WORDS words becomes a `heading`
+ *    block (<h2>): "Etymology and terminology" + its section. Headings are
+ *    kept as is and never sent to the model (lib/run/simplify.ts). Before
+ *    this rule, a lowercase section title became a 3-word paragraph that the
+ *    model turned into two bullets (eval/fixtures UK run).
+ *  - Title lines that are not headings merge into the paragraph after them:
+ *    a line of at most MAX_TITLE_WORDS words without end punctuation, in
+ *    Title Case or ending in ":" ("User Test Plan Example" before a short
+ *    label line, "Situating Context:"), followed (blank lines allowed) by a
+ *    line starting with a capital: "Title" + "Text…" reads "Title. Text…".
+ *    Before a list marker it stays its own paragraph ("Objectives:").
  *  - Inline numbered items ("Objectives: 1. Formative: … 2. Summative: …
  *    3. …", as flattened PDF text has them) become list items: a run of at
  *    least 2 markers 1., 2., … at the start, after a sentence end or after
@@ -48,6 +56,7 @@ import { escapeHtml } from '../utils/html';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type TextBlock =
+  | { kind: 'heading'; text: string }
   | { kind: 'paragraph'; text: string }
   | { kind: 'list-item'; depth: number; ordered: boolean; text: string };
 
@@ -101,6 +110,8 @@ const TRAILING_MARKER = /\s((?:[a-z]|[ivx]{1,4})[.)])$/;
 const BLOCK_END = /[.!?:]["'”’)\]]*$/;
 /** Inline list marker "1." / "2)" at the start, after a sentence end or ":", before a capital. */
 const INLINE_MARKER = /(^|[.!?:]["'”’)\]]*\s+)(\d{1,3})[.)]\s+(?=["'“‘(]?[A-Z])/g;
+/** Ends in sentence or label punctuation (closing quotes or brackets allowed): not a heading. */
+const ENDING_PUNCTUATION = /[.!?:;,…]["'”’)\]]*$/;
 /** Short words a Title Case line may keep lowercase. */
 const TITLE_SMALL_WORDS = new Set(['a', 'an', 'the', 'of', 'and', 'or', 'for', 'to', 'in', 'on', 'at', 'by', 'with', 'vs']);
 
@@ -231,6 +242,18 @@ export function isTitleLine(line: string): boolean {
   return words.every((w, i) => /^[A-Z0-9]/.test(w) || (i > 0 && TITLE_SMALL_WORDS.has(w.toLowerCase())));
 }
 
+/**
+ * A heading line (see file header): `next` is the following non-empty line,
+ * which must be a longer paragraph line.
+ */
+export function isHeadingLine(line: string, next: string): boolean {
+  const words = countWords(line);
+  if (words === 0 || words > MAX_TITLE_WORDS || parseListMarker(line)) return false;
+  if (!/^["'“‘(]?[A-Z0-9]/.test(line) || ENDING_PUNCTUATION.test(line)) return false;
+  const nextWords = countWords(next);
+  return nextWords > MAX_TITLE_WORDS && nextWords > words && !parseListMarker(next);
+}
+
 /** "Title" + "Text…" → "Title. Text…"; "Label:" + "Text…" → "Label: Text…". */
 function joinTitle(title: string, text: string): string {
   return title.endsWith(':') ? `${title} ${text}` : `${title}. ${text}`;
@@ -345,6 +368,10 @@ export function textToBlocks(text: string): TextBlock[] {
     prevDepth = -1;
     prevLetter = null;
     const next = lines.slice(i + 1).find(l => l !== '') ?? '';
+    if (pendingTitle === null && isHeadingLine(trimmed, next)) {
+      blocks.push({ kind: 'heading', text: trimmed.replace(/\s+/g, ' ') });
+      return;
+    }
     if (pendingTitle === null && isTitleLine(trimmed) && /^["'“‘(]?[A-Z]/.test(next) && !parseListMarker(next)) {
       pendingTitle = trimmed;
       return;
@@ -372,8 +399,9 @@ export function pdfPagesToHtml(pages: readonly string[]): string {
 // ─── HTML ─────────────────────────────────────────────────────────────────────
 
 /**
- * Escaped HTML for segmentHtml: <p> per paragraph and <li data-depth="d">
- * runs inside <ul> or <ol>; a new list opens whenever `ordered` changes.
+ * Escaped HTML for segmentHtml: <h2> per heading, <p> per paragraph and
+ * <li data-depth="d"> runs inside <ul> or <ol>; a new list opens whenever
+ * `ordered` changes.
  */
 export function blocksToHtml(blocks: readonly TextBlock[]): string {
   const out: string[] = [];
@@ -384,6 +412,11 @@ export function blocksToHtml(blocks: readonly TextBlock[]): string {
   };
 
   for (const block of blocks) {
+    if (block.kind === 'heading') {
+      closeList();
+      out.push(`<h2>${escapeHtml(block.text)}</h2>`);
+      continue;
+    }
     if (block.kind === 'paragraph') {
       closeList();
       out.push(`<p>${escapeHtml(block.text)}</p>`);

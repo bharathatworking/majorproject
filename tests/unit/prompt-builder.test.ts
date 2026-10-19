@@ -108,9 +108,9 @@ describe('buildPrompt user prompt', () => {
     expect(buildPrompt(node, spec(), report).user).not.toContain('Context from previous section');
   });
 
-  it('adds a type hint for headings and list items', () => {
+  it('adds a type hint for list items, and none for headings (they never reach the model)', () => {
     const heading: ContentNode = { id: 'n1', type: 'heading', level: 2, text: 'Mission goals' };
-    expect(buildPrompt(heading, spec(), report).user).toContain('This is a heading (level 2)');
+    expect(buildPrompt(heading, spec(), report).user).not.toContain('This is a heading');
     const item: ContentNode = { id: 'n2', type: 'list-item', text: 'Collect samples' };
     expect(buildPrompt(item, spec(), report).user).toContain('This is one item in a list');
   });

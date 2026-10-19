@@ -41,7 +41,7 @@ export function formatSeconds(ms: number): string {
 }
 
 export function summarizeRun(entries: NodeTiming[], totalMs: number): RunSummary {
-  const counts: Record<NodeSource, number> = { model: 0, cache: 0, skipped: 0, error: 0 };
+  const counts: Record<NodeSource, number> = { model: 0, cache: 0, heading: 0, skipped: 0, error: 0 };
   let modelMs = 0;
   for (const e of entries) {
     counts[e.source]++;
@@ -54,7 +54,8 @@ export function summarizeRun(entries: NodeTiming[], totalMs: number): RunSummary
 
   const line =
     `${entries.length} nodes in ${fmt(totalSeconds)} — ` +
-    `${counts.model} model, ${counts.cache} cache, ${counts.skipped} skipped, ${counts.error} errors; ` +
+    `${counts.model} model, ${counts.cache} cache, ${counts.heading} headings, ${counts.skipped} skipped, ` +
+    `${counts.error} errors; ` +
     `${fmt(secondsPerModelNode)}/model node, ${fmt(secondsPerNode)}/node`;
 
   return { nodes: entries.length, counts, totalSeconds, secondsPerNode, secondsPerModelNode, line };

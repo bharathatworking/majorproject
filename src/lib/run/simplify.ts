@@ -14,6 +14,10 @@
  * so a failure after the last success is not lost.
  *
  * Speed (each node takes the first path that applies):
+ *   0. Heading (h1–h6 of a page, or a short title line of a paste: see
+ *      lib/input/text-blocks.ts): kept as written, stored as `done` with
+ *      `skipped: true` and source 'heading'. Never sent to the model, never
+ *      checked, so never in the pass rate ('excluded').
  *   1. Already simple: the node's estimated grade (lib/metrics/node-grade.ts)
  *      is at or below the target, so the original is stored as `done` with
  *      `skipped: true`. No model call, NER or meaning check.
@@ -430,7 +434,7 @@ export async function runSimplification(
     const ms = now - nodeStartedAt;
     const meaningStatus: MeaningStatus =
       source === 'error' ? 'error'
-      : source === 'skipped' ? 'excluded'
+      : source === 'skipped' || source === 'heading' ? 'excluded'
       : meaningStatusOf(details.meaning);
     timings.push({ nodeId: node.id, source, ms });
     nodeLogs.push({
@@ -854,7 +858,18 @@ export async function runSimplification(
     };
 
     try {
-      // a. Already at or below the target grade: keep the original
+      // a. A heading is kept as written: never simplified, checked or counted
+      if (node.type === 'heading') {
+        callbacks.onNodeDone(node.id, node.text, undefined, true);
+        doneCount++;
+        plainById.set(node.id, toPlainText(node.text));
+        await persist({ ...base, simplifiedText: node.text, status: 'done', skipped: true });
+        callbacks.onProgress(doneCount, toRun.length);
+        finishNode(node, 'heading', nodeStartedAt);
+        continue;
+      }
+
+      // b. Already at or below the target grade: keep the original
       if (isAlreadySimple(node.text, spec.targetGrade, wordSet)) {
         callbacks.onNodeDone(node.id, node.text, undefined, true);
         doneCount++;
@@ -865,7 +880,7 @@ export async function runSimplification(
         continue;
       }
 
-      // b. Cache, then c. the model
+      // c. Cache, then d. the model
       const key = await cacheKey(node.text, spec, model, extraQuality ? 'extra' : 'standard');
       const cached = await lookupCache(key);
       let fullText: string;
