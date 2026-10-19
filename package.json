@@ -22,7 +22,8 @@
     "checker:extract": "node scripts/checker/extract-features.mjs",
     "checker:fit": "node scripts/checker/fit.mjs",
     "checker:test": "node scripts/checker/test-heldout.mjs",
-    "checker:rescale": "node scripts/checker/rescale-quality.mjs"
+    "checker:rescale": "node scripts/checker/rescale-quality.mjs",
+    "checker:discuss": "node scripts/checker/discussion.mjs"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.1",

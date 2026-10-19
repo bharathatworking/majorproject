@@ -1,6 +1,7 @@
 /**
  * Pure fitting and evaluation code for the combined meaning score
- * (scripts/checker/fit.mjs, test-heldout.mjs), tested in
+ * (scripts/checker/fit.mjs, test-heldout.mjs, rescale-quality.mjs and the
+ * exploratory discussion.mjs), tested in
  * tests/unit/checker-fit.test.ts. No new dependencies: logistic regression,
  * CV, threshold choice, metrics and the bootstrap are written out here.
  *
@@ -41,7 +42,7 @@
  *    under the new total as fell below the old threshold under the old one.
  */
 
-import { combinedScore, FEATURES, standardise } from '../../src/lib/quality/checker';
+import { combinedScore, FEATURES, standardise, worstFeature } from '../../src/lib/quality/checker';
 import { COMBINED_SCORE_FULL, WEIGHTS } from '../../src/lib/quality/config';
 import { lengthScore, readabilityScore } from '../../src/lib/quality/score';
 import { toPlainText } from '../../src/lib/render/format-output';
@@ -655,4 +656,84 @@ export function quantileMatchThreshold(
     }
   }
   return { threshold, k, oldShare: k / n, newShare: belowShare(newTotals, threshold) };
+}
+
+// ─── Post-hoc discussion (exploratory) ───────────────────────────────────────
+
+export interface RocPoint {
+  threshold: number;
+  catchRate: number;
+  falseFail: number;
+  caught: number;
+  falseFails: number;
+}
+
+/**
+ * The ROC staircase of a score (pass = score ≥ threshold), in catch /
+ * false-fail terms: every cut point (as in chooseThreshold), reduced to the
+ * points no other point beats on both rates, the lowest threshold kept per
+ * (catch, false-fail) pair; sorted by false-fail, then catch.
+ */
+export function rocPoints(scores: readonly number[], y: readonly (0 | 1)[]): RocPoint[] {
+  const sorted = [...new Set(scores)].sort((a, b) => a - b);
+  if (sorted.length === 0) return [];
+  const cuts = [sorted[0] - 1e-6, ...sorted.slice(1).map((p, i) => (p + sorted[i]) / 2), sorted[sorted.length - 1] + 1e-6];
+  const all = cuts.map(t => {
+    const r = rates(scores.map(s => s >= t), y);
+    return { threshold: t, catchRate: r.catchRate, falseFail: r.falseFail, caught: r.caught, falseFails: r.falseFails };
+  });
+  const dominated = (p: RocPoint) => all.some(q =>
+    q.catchRate >= p.catchRate && q.falseFail <= p.falseFail && (q.catchRate > p.catchRate || q.falseFail < p.falseFail));
+  const seen = new Set<string>();
+  return all
+    .filter(p => !dominated(p))
+    .sort((a, b) => a.falseFail - b.falseFail || a.catchRate - b.catchRate || a.threshold - b.threshold)
+    .filter(p => {
+      const key = `${p.caught}/${p.falseFails}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+/** The point with the highest catch among those with false-fail ≤ maxFalseFail (then lower false-fail); null if none. */
+export function bestCatchAt(points: readonly RocPoint[], maxFalseFail: number): RocPoint | null {
+  const ok = points.filter(p => p.falseFail <= maxFalseFail + 1e-12);
+  ok.sort((a, b) => b.catchRate - a.catchRate || a.falseFail - b.falseFail);
+  return ok[0] ?? null;
+}
+
+/** Mean of every feature over the items (NaN for an empty list). */
+export function featureMeans(items: readonly Pick<Item, 'x'>[], features: readonly CheckerFeature[]): Record<CheckerFeature, number> {
+  return Object.fromEntries(features.map(f => [
+    f,
+    items.length ? items.reduce((a, it) => a + (it.x[f] ?? NaN), 0) / items.length : NaN,
+  ])) as Record<CheckerFeature, number>;
+}
+
+/**
+ * The feature that drove a rejection: the lowest contribution w·z of the
+ * model (checker.ts worstFeature); null when the item passes.
+ */
+export function rejectionDriver(
+  model: Omit<CombinedScoreModel, 'id'>,
+  x: Partial<Record<CheckerFeature, number>>,
+): CheckerFeature | null {
+  const s = combinedScore(model, x);
+  return s.score >= model.threshold ? null : worstFeature(s.contributions);
+}
+
+/** Rejected items per driving feature, most first (ties: FEATURES order). */
+export function rejectionDrivers(
+  model: Omit<CombinedScoreModel, 'id'>,
+  items: readonly Pick<Item, 'x'>[],
+): { feature: CheckerFeature; count: number }[] {
+  const counts = new Map<CheckerFeature, number>();
+  for (const it of items) {
+    const f = rejectionDriver(model, it.x);
+    if (f) counts.set(f, (counts.get(f) ?? 0) + 1);
+  }
+  return [...counts]
+    .map(([feature, count]) => ({ feature, count }))
+    .sort((a, b) => b.count - a.count || FEATURES.indexOf(a.feature) - FEATURES.indexOf(b.feature));
 }

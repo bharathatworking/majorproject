@@ -4,13 +4,15 @@ import { fileURLToPath } from 'node:url';
 import fitSource from '../../scripts/checker/fit.mjs?raw';
 import libSource from '../../scripts/checker/lib.ts?raw';
 import rescaleSource from '../../scripts/checker/rescale-quality.mjs?raw';
+import discussionSource from '../../scripts/checker/discussion.mjs?raw';
 import {
-  assertTrainingPath, auc, balancedWeights, belowShare, chooseLambda, chooseThreshold, clusterBootstrap, fitLogistic,
-  legacyMeaningPart, mulberry32, parsePlainCsv, quantileMatchThreshold, rates, readTrainingFile, RESCALE_FILES, solve,
+  assertTrainingPath, auc, balancedWeights, belowShare, bestCatchAt, chooseLambda, chooseThreshold, clusterBootstrap, fitLogistic,
+  featureMeans, legacyMeaningPart, mulberry32, parsePlainCsv, quantileMatchThreshold, rates, readTrainingFile, rejectionDriver, rejectionDrivers, RESCALE_FILES, rocPoints, solve,
   stage7Totals, standardiser, stratifiedGroupKFold, toPlainCsv, trainModel, predict, TRAINING_FILES, type Item,
 } from '../../scripts/checker/lib';
 import { COMBINED_SCORE_FULL, QUALITY_THRESHOLD, QUALITY_THRESHOLD_OLD_SCALE } from '../../src/lib/quality/config';
 import { combinedScore } from '../../src/lib/quality/checker';
+import type { CheckerFeature } from '../../src/types';
 import { estimateNodeGrade } from '../../src/lib/metrics/node-grade';
 import { BASE_COMMON_WORDS } from '../../src/lib/metrics/common-words';
 
@@ -305,5 +307,52 @@ describe('stage 7 rescale', () => {
     const oldShare = belowShare(totals.map(t => t.oldTotal), QUALITY_THRESHOLD_OLD_SCALE);
     const newShare = belowShare(totals.map(t => t.newTotal), QUALITY_THRESHOLD);
     expect(Math.abs(newShare - oldShare)).toBeLessThanOrEqual(0.05);
+  });
+});
+
+// ─── Post-hoc discussion helpers ──────────────────────────────────────────────
+
+describe('post-hoc discussion helpers', () => {
+  // Faithful (1) items score high, with one faithful item below two unfaithful ones
+  const scores = [0.9, 0.8, 0.3, 0.6, 0.5, 0.1];
+  const y: (0 | 1)[] = [1, 1, 1, 0, 0, 0];
+
+  it('rocPoints: the corners of the catch / false-fail staircase, none dominated', () => {
+    const roc = rocPoints(scores, y);
+    // Every cut gives (caught, false-fails) (0,0) (1,0) (1,1) (2,1) (3,1) (3,2) (3,3); only two are not beaten on both
+    expect(roc.map(p => [p.caught, p.falseFails])).toEqual([[1, 0], [3, 1]]);
+    for (const p of roc) {
+      expect(rates(scores.map(s => s >= p.threshold), y)).toMatchObject({ caught: p.caught, falseFails: p.falseFails });
+    }
+  });
+
+  it('bestCatchAt: highest catch within the false-fail limit', () => {
+    const roc = rocPoints(scores, y);
+    expect(bestCatchAt(roc, 0)?.caught).toBe(1);
+    expect(bestCatchAt(roc, 0.34)?.caught).toBe(3);
+    expect(bestCatchAt([], 0.3)).toBeNull();
+  });
+
+  it('featureMeans: per-feature mean', () => {
+    expect(featureMeans([{ x: { sbert: 0.8, entity: 1 } }, { x: { sbert: 0.6, entity: 0 } }], ['sbert', 'entity']))
+      .toEqual({ sbert: 0.7, entity: 0.5 });
+    expect(featureMeans([], ['sbert']).sbert).toBeNaN();
+  });
+
+  it('rejectionDriver / rejectionDrivers: the lowest contribution of a rejected item', () => {
+    const model = { features: ['sbert', 'lenRatio'] as CheckerFeature[], means: [0.8, 0.7], stds: [0.1, 0.1], weights: [1, 1], bias: 0, threshold: 0.5 };
+    expect(rejectionDriver(model, { sbert: 0.9, lenRatio: 0.8 })).toBeNull();
+    expect(rejectionDriver(model, { sbert: 0.5, lenRatio: 0.75 })).toBe('sbert');
+    expect(rejectionDriver(model, { sbert: 0.85, lenRatio: 0.4 })).toBe('lenRatio');
+    expect(rejectionDrivers(model, [
+      { x: { sbert: 0.5, lenRatio: 0.75 } }, { x: { sbert: 0.6, lenRatio: 0.7 } }, { x: { sbert: 0.85, lenRatio: 0.4 } }, { x: { sbert: 0.9, lenRatio: 0.9 } },
+    ])).toEqual([{ feature: 'sbert', count: 2 }, { feature: 'lenRatio', count: 1 }]);
+  });
+
+  it('discussion.mjs writes only DISCUSSION.md', () => {
+    expect(discussionSource).not.toMatch(/writeFileSync|appendFile|copyFile|rename\(|unlink|rm\(/);
+    expect(discussionSource.match(/\bwriteFile\(/g)).toHaveLength(1);
+    expect(discussionSource).toMatch(/const OUT = join\(DIR, 'DISCUSSION\.md'\);/);
+    expect(discussionSource).toMatch(/await writeFile\(OUT, /);
   });
 });
