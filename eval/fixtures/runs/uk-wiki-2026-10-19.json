@@ -1,0 +1,2197 @@
+{
+  "format": "clarity-run-report/3",
+  "exportedAt": "2026-10-19T09:26:14.822Z",
+  "docId": "059c5201-0db0-4b86-a6ac-b7d4bfc92786",
+  "title": "The United Kingdom of Great Britain and Northern Ireland, commonly known as the ",
+  "source": "paste",
+  "runs": [
+    {
+      "cancelled": false,
+      "depthTier": "aggressive",
+      "extraQuality": false,
+      "finishedAt": 1792401672276,
+      "id": "420307ff-f5a8-476f-a82a-d7b27007f059",
+      "meaningThresholds": {
+        "contradictionAggregation": "best-entailing",
+        "contradictionMax": 0.2,
+        "entailmentMin": 0.5,
+        "entityRecallMin": 1,
+        "glossaryExemptionMaxRate": 0.3,
+        "hypothesisContext": "prev-sentence-if-<7-words-or-referring",
+        "nliModel": "Xenova/nli-deberta-v3-xsmall",
+        "paragraphRule": "A",
+        "premiseStrategy": "summac-sentences+pairs/top3",
+        "scoreModels": {
+          "full": {
+            "bias": 0.00375,
+            "features": [
+              "sbert",
+              "entity",
+              "nliMin",
+              "contra",
+              "lenRatio"
+            ],
+            "id": "full",
+            "means": [
+              0.861433,
+              0.826978,
+              0.377698,
+              0.210091,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.423375,
+              0.341966,
+              0.173897
+            ],
+            "threshold": 0.569168,
+            "weights": [
+              0.075837,
+              0.057485,
+              0.099032,
+              -0.107555,
+              0.095553
+            ]
+          },
+          "lite": {
+            "bias": 0.001869,
+            "features": [
+              "sbert",
+              "entity",
+              "lenRatio"
+            ],
+            "id": "lite",
+            "means": [
+              0.861433,
+              0.826978,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.173897
+            ],
+            "threshold": 0.536117,
+            "weights": [
+              0.080126,
+              0.057627,
+              0.091799
+            ]
+          }
+        },
+        "similarity": 0.87,
+        "verdict": "combined-score"
+      },
+      "mode": "all",
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "nli": null,
+      "nodes": [
+        {
+          "candidates": [
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 4451,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": -0.3085,
+                "lengthRatio": 0.8792,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": true,
+                "similarity": 0.9538,
+                "total": 0.7734
+              },
+              "text": "- United Kingdom of Great Britain, Northern Ireland is called the UK or Britain  \n- The UK is in Northwestern Europe, near the mainland of Europe  \n- It includes England, Scotland, Wales, and Northern Ireland  \n- The UK has over 69 million people in 2025  \n- The UK covers the island of Great Britain and part of the island of Ireland  \n- It has 94,354 square miles of land  \n- The UK shares a border with the Republic of Ireland  \n- The UK is surrounded by the Atlantic Ocean, North Sea, English Channel, Celtic Sea, and Irish Sea  \n- The UK has control over small islands and overseas areas  \n- London is the capital and largest city of England and the UK  \n- Edinburgh is the capital of Scotland  \n- Cardiff is the capital of Wales  \n- Belfast is the capital of Northern Ireland",
+              "variant": "standard"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": null,
+            "failures": [],
+            "lite": true,
+            "nliChecked": false,
+            "nliMs": null,
+            "passed": true,
+            "reasons": [],
+            "score": 0.5621838193326484,
+            "scoreModel": "lite",
+            "similarity": 0.9538
+          },
+          "meaningStatus": "not-fully-checked",
+          "modelCalls": 1,
+          "ms": 4597,
+          "nodeId": "n0",
+          "originalText": "The United Kingdom of Great Britain and Northern Ireland, commonly known as the United Kingdom (UK) or Britain,[l] is a country in Northwestern Europe, off the coast of the continental mainland. It comprises England, Scotland, Wales and Northern Ireland,[m] with a population of over 69 million in 2025. The UK includes the island of Great Britain, the north-eastern part of the island of Ireland, and most of the smaller islands within the British Isles, covering 94,354 square miles (244,376 km2).[e] It shares a land border with the Republic of Ireland and is surrounded by the Atlantic Ocean, the North Sea, the English Channel, the Celtic Sea and the Irish Sea, while maintaining sovereignty over the Crown Dependencies and the British Overseas Territories. The capital and largest city of England and the UK is London; Edinburgh, Cardiff and Belfast are the national capitals of Scotland, Wales and Northern Ireland, respectively.",
+          "retries": 0,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [
+                "entities"
+              ],
+              "missingEntities": [
+                "Roman"
+              ],
+              "missingKeyEntities": [],
+              "ms": 4795,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [
+                "You dropped the name Roman."
+              ],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 0.9545,
+                "gradeGap": -1.5609,
+                "lengthRatio": 0.7761,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": false,
+                "similarity": 0.8859,
+                "total": 0.7238
+              },
+              "text": "- The British Isles have been lived in since ancient times.  \n- In 43, Romans started to take control of Britain.  \n- Romans left between 383 and 410.  \n- Around 450, Anglo-Saxons moved to Britain.  \n- In 1066, Normans took control of England.  \n- During the 17th century, the British king had less power, especially after the English Civil War.  \n- In 1707, England and Scotland joined to form the Kingdom of Great Britain.  \n- In 1800, Ireland joined to form the United Kingdom of Great Britain and Ireland in 1801.  \n- Most of Ireland left the UK in 1922 as the Irish Free State.  \n- In 1927, the UK got its current name.",
+              "variant": "standard"
+            },
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 6960,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 1.2633,
+                "lengthRatio": 1.1119,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": true,
+                "similarity": 0.8979,
+                "total": 0.7246
+              },
+              "text": "- The British Isles have been lived in since the Neolithic.  \n- In 43, Roman soldiers started ruling Britain.  \n- The Romans left between 383 and 410.  \n- Anglo-Saxon people moved in around 450.  \n- In 1066, Normans took over England.  \n- Over the 17th century, the British king had less power, especially after the English Civil War.  \n- In 1707, England and Scotland joined to form the Kingdom of Great Britain.  \n- In 1800, Ireland joined, forming the United Kingdom of Great Britain and Ireland in 1801.  \n- Most of Ireland left the UK in 1922 as the Irish Free State.  \n- In 1927, the Royal and Parliamentary Titles Act created the present United Kingdom.  \n- Roman, Roman, 43, 383, 410, 450, 1066, England, Over the 17th century, 1707, Kingdom of England, Kingdom of Scotland, Kingdom of Great Britain, 1800, Kingdom of Ireland, United Kingdom of Great Britain, Ireland, 1801, Ireland, UK, 1922, Irish Free State, 1927, United Kingdom",
+              "variant": "standard"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": null,
+            "failures": [],
+            "lite": true,
+            "nliChecked": false,
+            "nliMs": null,
+            "passed": true,
+            "reasons": [],
+            "score": 0.5755477142544877,
+            "scoreModel": "lite",
+            "similarity": 0.8979
+          },
+          "meaningStatus": "not-fully-checked",
+          "modelCalls": 2,
+          "ms": 11852,
+          "nodeId": "n1",
+          "originalText": "The British Isles have been continuously inhabited since the Neolithic. In AD 43 the Roman conquest of Britain began. The Roman departure between 383 and 410 was followed by Anglo-Saxon settlement beginning around 450. In 1066 the Normans conquered England. Over the 17th century the role of the British monarchy was reduced, particularly as a result of the English Civil War. In 1707 the Kingdom of England and the Kingdom of Scotland united under the Treaty of Union to create the Kingdom of Great Britain. The Acts of Union 1800 incorporated the Kingdom of Ireland to create the United Kingdom of Great Britain and Ireland in 1801. Most of Ireland seceded from the UK in 1922 as the Irish Free State, and the Royal and Parliamentary Titles Act 1927 created the present United Kingdom.",
+          "retries": 1,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [
+                "entities"
+              ],
+              "missingEntities": [
+                "Second"
+              ],
+              "missingKeyEntities": [],
+              "ms": 4537,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [
+                "You dropped the number Second."
+              ],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 0.8889,
+                "gradeGap": -0.9305,
+                "lengthRatio": 0.8,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": false,
+                "similarity": 0.9063,
+                "total": 0.7425
+              },
+              "text": "- UK was the first country to make heavy industry and trade grow fast.  \n- It was the world’s strongest power most of the 19th and early 20th centuries.  \n- Between 1815 and 1914, it had peace and strong global power called Pax Britannica.  \n- The British Empire was the top economic force in the 19th century.  \n- Its farming and trade were strong.  \n- It had big factories, new tech, and London was the main financial city.  \n- In the 1920s, the empire had about a quarter of Earth’s land and people.  \n- It was the biggest empire ever.  \n- Wars in the 1914 and 1940s hurt Britain’s economy.  \n- Many colonies gained independence, ending the empire.",
+              "variant": "standard"
+            },
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [
+                "entities"
+              ],
+              "missingEntities": [
+                "1920s"
+              ],
+              "missingKeyEntities": [],
+              "ms": 4502,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [
+                "You dropped the number 1920s."
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 0.8889,
+                "gradeGap": -0.7399,
+                "lengthRatio": 0.8667,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": false,
+                "similarity": 0.878,
+                "total": 0.7473
+              },
+              "text": "- The UK was the first country to industrialise.  \n- It was the world's main power in the 19th and early 20th centuries.  \n- This period was called the Pax Britannica, from 1815 to 1914.  \n- The British Empire was the top economic power in the 19th century.  \n- Its farming and trade were strong.  \n- It had big factories and many new technologies.  \n- London was the main financial city in the world during the 19th century.  \n- In the 1s, the empire covered about a quarter of the world's land and people.  \n- It was the largest empire in history.  \n- The First and Second World Wars hurt Britain's economy.  \n- Most colonies became independent after the wars.  \n- Second was used to mean the second war.",
+              "variant": "standard"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 0.8889,
+            "exemptedSentences": [],
+            "exemptionRate": null,
+            "failures": [
+              "entities"
+            ],
+            "lite": true,
+            "nliChecked": false,
+            "nliMs": null,
+            "passed": false,
+            "reasons": [
+              "You dropped the number 1920s."
+            ],
+            "score": 0.5316311333360894,
+            "scoreModel": "lite",
+            "similarity": 0.878
+          },
+          "meaningStatus": "not-fully-checked",
+          "modelCalls": 2,
+          "ms": 9126,
+          "nodeId": "n2",
+          "originalText": "The UK became the first industrialised country and was the world's foremost power for the majority of the 19th and early 20th centuries, particularly during the Pax Britannica between 1815 and 1914. The British Empire was the leading economic power for most of the 19th century, a position supported by its agricultural prosperity, its role as a dominant trading nation, a massive industrial capacity, significant technological achievements, and the rise of 19th-century London as the world's principal financial centre. At its height in the 1920s, the empire encompassed around a quarter of the world's landmass and population, and was the largest in history. However, its involvement in the First World War and in the Second World War damaged Britain's economic power, and a global wave of decolonisation led to the independence of most British colonies.",
+          "retries": 1,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [
+                "similarity"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 3683,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [
+                "The meaning drifted from the original (similarity 0.85)."
+              ],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": -2.0911,
+                "lengthRatio": 0.7226,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": false,
+                "similarity": 0.8528,
+                "total": 0.7032
+              },
+              "text": "- UK has a king and elected leaders.  \n- UK has three areas: England, Wales, Scotland, and Northern Ireland.  \n- Each area has its own government and parliament.  \n- These governments handle some local issues.  \n- UK has a strong economy.  \n- UK is one of the biggest economies in the world.  \n- UK trades a lot with other countries.  \n- UK has a strong army.  \n- UK spends a lot on defence.  \n- UK has one of the strongest militaries in Europe.  \n- British culture is strong worldwide.  \n- British culture is seen in law, politics, books, films, music, media, art, and sports.  \n- UK is part of many global groups.",
+              "variant": "standard"
+            },
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [
+                "similarity"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 4013,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [
+                "The meaning drifted from the original (similarity 0.84)."
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": -2.0591,
+                "lengthRatio": 0.8978,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": false,
+                "similarity": 0.842,
+                "total": 0.7139
+              },
+              "text": "- The UK has a king and a government that works together.  \n- The UK has three parts: England, Wales, Scotland, and Northern Ireland.  \n- England, Wales, and Northern Ireland have their own governments and laws.  \n- These governments handle some local issues, not all.  \n- The UK is rich and has a strong economy.  \n- It is one of the biggest economies in the world.  \n- The UK sells and buys a lot of goods.  \n- The UK has nuclear weapons and spends a lot on defence.  \n- The UK has one of the strongest armies in Europe.  \n- British culture is strong around the world.  \n- It is seen in law, politics, books, movies, music, and sports.  \n- Many old colonies use British rules and ideas.  \n- The UK is in many global groups.",
+              "variant": "standard"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": null,
+            "failures": [
+              "similarity"
+            ],
+            "lite": true,
+            "nliChecked": false,
+            "nliMs": null,
+            "passed": false,
+            "reasons": [
+              "The meaning drifted from the original (similarity 0.84)."
+            ],
+            "score": 0.5307390114776578,
+            "scoreModel": "lite",
+            "similarity": 0.842
+          },
+          "meaningStatus": "not-fully-checked",
+          "modelCalls": 2,
+          "ms": 7740,
+          "nodeId": "n3",
+          "originalText": "The UK is a constitutional monarchy and parliamentary democracy[n] with three distinct jurisdictions: England and Wales, Scotland, and Northern Ireland. Scotland, Wales and Northern Ireland have their own governments and parliaments which control various devolved matters. A developed country with an advanced economy, the UK ranks amongst the largest economies by nominal GDP and is one of the world's largest exporters and importers. As a nuclear state with one of the highest defence budgets, the UK maintains one of the strongest militaries in Europe. British culture is globally influential, notably in the Anglosphere and the Commonwealth; its soft power influence is observable in the legal and political systems of many former colonies, and in its exports of language, literature, theatre, cinema, music, media, art and sport. A great power, the UK is part of numerous international organisations.",
+          "retries": 1,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 686,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 1.1086,
+                "lengthRatio": 4.6667,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": true,
+                "similarity": null,
+                "total": 0.7446
+              },
+              "text": "- Etymology means the origin of words.  \n- Terminology means special words used in a field.",
+              "variant": "standard"
+            }
+          ],
+          "meaningStatus": "excluded",
+          "modelCalls": 1,
+          "ms": 706,
+          "nodeId": "n4",
+          "originalText": "Etymology and terminology",
+          "retries": 0,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 4190,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": -1.1046,
+                "lengthRatio": 0.8898,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": true,
+                "similarity": 0.8876,
+                "total": 0.7442
+              },
+              "text": "- Britain had special words for its places and groups.  \n- In 1707, England and Scotland joined to form one country.  \n- This new country was called the Kingdom of Great Britain.  \n- From 1707 to 1800, it was not called the United Kingdom.  \n- In 1800, Great Britain joined with Ireland to form a bigger group.  \n- Ireland was split into two parts.  \n- One part became independent in 1922.  \n- That part is now called the Irish Free State.  \n- The other part, Northern Ireland, stayed in Britain.  \n- The island of Ireland has two parts today.  \n- In 1927, the name was changed to United Kingdom of Great Britain and Northern Ireland.  \n- \"United Kingdom\" means the group of countries joined together.",
+              "variant": "standard"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": null,
+            "failures": [],
+            "lite": true,
+            "nliChecked": false,
+            "nliMs": null,
+            "passed": true,
+            "reasons": [],
+            "score": 0.5435540333269392,
+            "scoreModel": "lite",
+            "similarity": 0.8876
+          },
+          "meaningStatus": "not-fully-checked",
+          "modelCalls": 1,
+          "ms": 4254,
+          "nodeId": "n5",
+          "originalText": "See also: Britain (place name) and Terminology of the British Isles The Acts of Union 1707 declared that the Kingdom of England and the Kingdom of Scotland were \"United into One Kingdom by the Name of Great Britain\".[o][19] The term \"United Kingdom\" has occasionally been used for the former Kingdom of Great Britain, although its official name from 1707 to 1800 was simply \"Great Britain\".[20] The Acts of Union 1800 formed the United Kingdom of Great Britain and Ireland. Following the partition of Ireland and the independence of the Irish Free State in 1922, which left Northern Ireland as the only part of the island of Ireland within the United Kingdom, the name was changed in 1927 to the \"United Kingdom of Great Britain and Northern Ireland\".[21]",
+          "retries": 0,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 2993,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 1.3721,
+                "lengthRatio": 0.9186,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": true,
+                "similarity": 0.8906,
+                "total": 0.7055
+              },
+              "text": "- United Kingdom is one country made of four parts.  \n- England, Scotland, Wales, and Northern Ireland are often called countries.  \n- The UK Prime Minister’s website says \"countries within a country\".  \n- Some reports call Scotland, Wales, and Northern Ireland \"regions\".  \n- Northern Ireland is also called a \"province\".  \n- The name for Northern Ireland can be controversial.  \n- Using this name shows someone’s political views.  \n- There are twelve NUTS 1 regions.  \n- One part is Northern Ireland.  \n- Scotland, Wales, Northern Ireland, Northern Ireland, Northern Ireland.",
+              "variant": "standard"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": null,
+            "failures": [],
+            "lite": true,
+            "nliChecked": false,
+            "nliMs": null,
+            "passed": true,
+            "reasons": [],
+            "score": 0.5482312777160993,
+            "scoreModel": "lite",
+            "similarity": 0.8906
+          },
+          "meaningStatus": "not-fully-checked",
+          "modelCalls": 1,
+          "ms": 3029,
+          "nodeId": "n6",
+          "originalText": "Although the United Kingdom is a sovereign country, England, Scotland, Wales and Northern Ireland are widely referred to as countries.[22] The UK Prime Minister's website has used the phrase \"countries within a country\" to describe it.[23] Some statistical summaries, such as those for the twelve NUTS 1 regions, refer to Scotland, Wales and Northern Ireland as \"regions\".[24] Northern Ireland is also referred to as a \"province\".[25] With regard to Northern Ireland, the descriptive name used \"can be controversial, with the choice often revealing one's political preferences\".[26]",
+          "retries": 0,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 1798,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 0.6752,
+                "lengthRatio": 0.7903,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": true,
+                "similarity": 0.933,
+                "total": 0.7384
+              },
+              "text": "- \"Great Britain\" usually means the island of Great Britain.  \n- It also means England, Scotland, and Wales together.  \n- Sometimes, \"Great Britain\" is used to mean the whole United Kingdom.  \n- \"England\" is sometimes wrongly used to mean the whole United Kingdom.  \n- This mistake is mostly made by people outside the UK.",
+              "variant": "standard"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": null,
+            "failures": [],
+            "lite": true,
+            "nliChecked": false,
+            "nliMs": null,
+            "passed": true,
+            "reasons": [],
+            "score": 0.5442981229703016,
+            "scoreModel": "lite",
+            "similarity": 0.933
+          },
+          "meaningStatus": "not-fully-checked",
+          "modelCalls": 1,
+          "ms": 1846,
+          "nodeId": "n7",
+          "originalText": "The term \"Great Britain\" conventionally refers to the island of Great Britain, or politically to England, Scotland and Wales in combination.[27] It is sometimes used as a loose synonym for the United Kingdom as a whole.[28] The word England is occasionally used incorrectly to refer to the United Kingdom as a whole, a mistake principally made by people from outside the UK.[29]",
+          "retries": 0,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        }
+      ],
+      "qualityMode": "lite",
+      "qualityModeReason": "set to Lite",
+      "qualitySetting": "lite",
+      "qualityThreshold": 0.718,
+      "startedAt": 1792401629110,
+      "summary": {
+        "counts": {
+          "cache": 0,
+          "error": 0,
+          "model": 8,
+          "skipped": 0
+        },
+        "firstResultSeconds": 4.6113,
+        "meaning": {
+          "avgNliMs": null,
+          "coverage": 0,
+          "excluded": 1,
+          "exemptedSentences": 0,
+          "exemptionRate": null,
+          "failed": 0,
+          "failureBreakdown": {
+            "contradiction": 0,
+            "entities": 0,
+            "failedParagraphs": 0,
+            "similarity": 0,
+            "unsupported": 0
+          },
+          "nliPairs": 0,
+          "notFullyChecked": 7,
+          "passRate": null,
+          "passed": 0,
+          "thesisGrade": false,
+          "truncatedPairs": 0
+        },
+        "nodes": 8,
+        "secondsPerModelNode": 5.3937,
+        "secondsPerNode": 5.3957,
+        "totalSeconds": 43.1658
+      },
+      "targetGrade": 8,
+      "weights": {
+        "length": 0.2,
+        "meaning": 0.5,
+        "readability": 0.3
+      }
+    },
+    {
+      "cancelled": true,
+      "depthTier": "aggressive",
+      "extraQuality": true,
+      "finishedAt": 1792401776992,
+      "id": "1ac8f775-390f-4382-8062-ad1fe9e9e776",
+      "meaningThresholds": {
+        "contradictionAggregation": "best-entailing",
+        "contradictionMax": 0.2,
+        "entailmentMin": 0.5,
+        "entityRecallMin": 1,
+        "glossaryExemptionMaxRate": 0.3,
+        "hypothesisContext": "prev-sentence-if-<7-words-or-referring",
+        "nliModel": "Xenova/nli-deberta-v3-xsmall",
+        "paragraphRule": "A",
+        "premiseStrategy": "summac-sentences+pairs/top3",
+        "scoreModels": {
+          "full": {
+            "bias": 0.00375,
+            "features": [
+              "sbert",
+              "entity",
+              "nliMin",
+              "contra",
+              "lenRatio"
+            ],
+            "id": "full",
+            "means": [
+              0.861433,
+              0.826978,
+              0.377698,
+              0.210091,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.423375,
+              0.341966,
+              0.173897
+            ],
+            "threshold": 0.569168,
+            "weights": [
+              0.075837,
+              0.057485,
+              0.099032,
+              -0.107555,
+              0.095553
+            ]
+          },
+          "lite": {
+            "bias": 0.001869,
+            "features": [
+              "sbert",
+              "entity",
+              "lenRatio"
+            ],
+            "id": "lite",
+            "means": [
+              0.861433,
+              0.826978,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.173897
+            ],
+            "threshold": 0.536117,
+            "weights": [
+              0.080126,
+              0.057627,
+              0.091799
+            ]
+          }
+        },
+        "similarity": 0.87,
+        "verdict": "combined-score"
+      },
+      "mode": "all",
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "nli": {
+        "adapterVendor": "nvidia",
+        "backend": "webgpu",
+        "benchMs": 558,
+        "dtype": "q8",
+        "predictedParagraphMs": 1256
+      },
+      "nodes": [
+        {
+          "candidates": [
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 17564,
+              "nliChecked": true,
+              "nliMs": 9430,
+              "nliRankMs": 555,
+              "nliScoreMs": 8874,
+              "reasons": [
+                "This sentence is not supported by the original: \"The UK has small places it rules, like the Crown Dependencies and Overseas Territories.\""
+              ],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 0.6511,
+                "lengthRatio": 0.7383,
+                "maxContradiction": 0.0651,
+                "minEntailment": 0.1356,
+                "passed": false,
+                "similarity": 0.9294,
+                "total": 0.734
+              },
+              "text": "- United Kingdom of Great Britain, Northern Ireland is a country.\n- It is in Northwestern Europe, near the mainland.\n- It includes England, Scotland, Wales, and Northern Ireland.\n- The population is over 69 million in 2025.\n- The UK has the island of Great Britain and part of the island of Ireland.\n- It covers 94,354 square miles.\n- It shares a border with the Republic of Ireland.\n- It is surrounded by the Atlantic Ocean and other seas.\n- The UK has small places it rules, like the Crown Dependencies and Overseas Territories.\n- London is the biggest city in England and the UK.\n- Edinburgh, Cardiff, and Belfast are the capitals of Scotland, Wales, and Northern Ireland.",
+              "variant": "standard"
+            },
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 17392,
+              "nliChecked": true,
+              "nliMs": 11940,
+              "nliRankMs": 275,
+              "nliScoreMs": 11665,
+              "reasons": [],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": -0.5802,
+                "lengthRatio": 1.0671,
+                "maxContradiction": 0.0144,
+                "minEntailment": 0.1847,
+                "passed": true,
+                "similarity": 0.948,
+                "total": 0.7803
+              },
+              "text": "- The United Kingdom of Great Britain and Northern Ireland is a country in Northwestern Europe.  \n- It is near the mainland of Europe.  \n- The UK has four parts: England, Scotland, Wales, and Northern Ireland.  \n- The UK has 69 million people, as of 2025.  \n- The UK includes the island of Great Britain.  \n- It covers the north-east of the island of Ireland.  \n- It also includes small islands in the British Isles.  \n- The UK has a total land area of 94,354 square miles (244,376 km²).  \n- The UK shares a border with the Republic of Ireland.  \n- The UK is next to the Atlantic Ocean, the North Sea, the English Channel, the Celtic Sea, and the Irish Sea.  \n- The UK has small places it rules, like the Crown Dependencies and the British Overseas Territories.  \n- London is the capital and largest city of England and the UK.  \n- Edinburgh is the capital of Scotland.  \n- Cardiff is the capital of Wales.  \n- Belfast is the capital of Northern Ireland.",
+              "variant": "stepwise"
+            },
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported"
+              ],
+              "missingEntities": [
+                "United Kingdom of Great Britain"
+              ],
+              "missingKeyEntities": [],
+              "ms": 9822,
+              "nliChecked": true,
+              "nliMs": 4992,
+              "nliRankMs": 140,
+              "nliScoreMs": 4852,
+              "reasons": [
+                "This sentence is not supported by the original: \"The UK has small places it rules, like the Crown Dependencies and the British Overseas Territories.\""
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 0.9444,
+                "gradeGap": 0.0518,
+                "lengthRatio": 0.9329,
+                "maxContradiction": 0.0144,
+                "minEntailment": 0.1847,
+                "passed": false,
+                "similarity": 0.9419,
+                "total": 0.7809
+              },
+              "text": "- The UK is a country in Northwestern Europe, near the mainland of Europe.  \n- It has four parts: England, Scotland, Wales, and Northern Ireland.  \n- The UK has a population of over 69 million in 2025.  \n- The UK includes the island of Great Britain, the north-east of the island of Ireland, and many small islands.  \n- The area is 94,354 square miles (244,376 km²).  \n- The UK shares a border with the Republic of Ireland.  \n- The UK is surrounded by the Atlantic Ocean, the North Sea, the English Channel, the Celtic Sea, and the Irish Sea.  \n- The UK has small places it rules, like the Crown Dependencies and the British Overseas Territories.  \n- London is the capital and largest city of England and the UK.  \n- Edinburgh is the capital of Scotland.  \n- Cardiff is the capital of Wales.  \n- Belfast is the capital of Northern Ireland.",
+              "variant": "example-guided"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": 0,
+            "failures": [],
+            "maxContradiction": 0.0144,
+            "minEntailment": 0.1847,
+            "nliChecked": true,
+            "nliMs": 11940,
+            "passed": true,
+            "reasons": [],
+            "score": 0.5897032305759498,
+            "scoreModel": "full",
+            "similarity": 0.948
+          },
+          "meaningStatus": "passed",
+          "modelCalls": 3,
+          "ms": 44849,
+          "nodeId": "n0",
+          "originalText": "The United Kingdom of Great Britain and Northern Ireland, commonly known as the United Kingdom (UK) or Britain,[l] is a country in Northwestern Europe, off the coast of the continental mainland. It comprises England, Scotland, Wales and Northern Ireland,[m] with a population of over 69 million in 2025. The UK includes the island of Great Britain, the north-eastern part of the island of Ireland, and most of the smaller islands within the British Isles, covering 94,354 square miles (244,376 km2).[e] It shares a land border with the Republic of Ireland and is surrounded by the Atlantic Ocean, the North Sea, the English Channel, the Celtic Sea and the Irish Sea, while maintaining sovereignty over the Crown Dependencies and the British Overseas Territories. The capital and largest city of England and the UK is London; Edinburgh, Cardiff and Belfast are the national capitals of Scotland, Wales and Northern Ireland, respectively.",
+          "retries": 2,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "stepwise"
+        }
+      ],
+      "qualityMode": "full",
+      "qualityModeReason": "set to Full",
+      "qualitySetting": "full",
+      "qualityThreshold": 0.718,
+      "startedAt": 1792401703637,
+      "summary": {
+        "counts": {
+          "cache": 0,
+          "error": 0,
+          "model": 1,
+          "skipped": 0
+        },
+        "firstResultSeconds": 44.8611,
+        "meaning": {
+          "avgNliMs": 6270,
+          "coverage": 1,
+          "excluded": 0,
+          "exemptedSentences": 0,
+          "exemptionRate": 0,
+          "failed": 0,
+          "failureBreakdown": {
+            "contradiction": 0,
+            "entities": 0,
+            "failedParagraphs": 0,
+            "similarity": 0,
+            "unsupported": 0
+          },
+          "nliPairs": 213,
+          "notFullyChecked": 0,
+          "passRate": 1,
+          "passed": 1,
+          "thesisGrade": true,
+          "truncatedPairs": 0
+        },
+        "nodes": 1,
+        "secondsPerModelNode": 44.8486,
+        "secondsPerNode": 73.3554,
+        "totalSeconds": 73.3554
+      },
+      "targetGrade": 8,
+      "weights": {
+        "length": 0.2,
+        "meaning": 0.5,
+        "readability": 0.3
+      }
+    },
+    {
+      "cancelled": true,
+      "depthTier": "aggressive",
+      "extraQuality": true,
+      "finishedAt": 1792401780099,
+      "id": "8cab314c-4b69-48a3-bee5-3438f636d5df",
+      "meaningThresholds": {
+        "contradictionAggregation": "best-entailing",
+        "contradictionMax": 0.2,
+        "entailmentMin": 0.5,
+        "entityRecallMin": 1,
+        "glossaryExemptionMaxRate": 0.3,
+        "hypothesisContext": "prev-sentence-if-<7-words-or-referring",
+        "nliModel": "Xenova/nli-deberta-v3-xsmall",
+        "paragraphRule": "A",
+        "premiseStrategy": "summac-sentences+pairs/top3",
+        "scoreModels": {
+          "full": {
+            "bias": 0.00375,
+            "features": [
+              "sbert",
+              "entity",
+              "nliMin",
+              "contra",
+              "lenRatio"
+            ],
+            "id": "full",
+            "means": [
+              0.861433,
+              0.826978,
+              0.377698,
+              0.210091,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.423375,
+              0.341966,
+              0.173897
+            ],
+            "threshold": 0.569168,
+            "weights": [
+              0.075837,
+              0.057485,
+              0.099032,
+              -0.107555,
+              0.095553
+            ]
+          },
+          "lite": {
+            "bias": 0.001869,
+            "features": [
+              "sbert",
+              "entity",
+              "lenRatio"
+            ],
+            "id": "lite",
+            "means": [
+              0.861433,
+              0.826978,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.173897
+            ],
+            "threshold": 0.536117,
+            "weights": [
+              0.080126,
+              0.057627,
+              0.091799
+            ]
+          }
+        },
+        "similarity": 0.87,
+        "verdict": "combined-score"
+      },
+      "mode": "all",
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "nli": null,
+      "nodes": [],
+      "qualityMode": "full",
+      "qualityModeReason": "set to Full",
+      "qualitySetting": "full",
+      "qualityThreshold": 0.718,
+      "startedAt": 1792401776577,
+      "summary": {
+        "counts": {
+          "cache": 0,
+          "error": 0,
+          "model": 0,
+          "skipped": 0
+        },
+        "firstResultSeconds": null,
+        "meaning": {
+          "avgNliMs": null,
+          "coverage": null,
+          "excluded": 0,
+          "exemptedSentences": 0,
+          "exemptionRate": null,
+          "failed": 0,
+          "failureBreakdown": {
+            "contradiction": 0,
+            "entities": 0,
+            "failedParagraphs": 0,
+            "similarity": 0,
+            "unsupported": 0
+          },
+          "nliPairs": 0,
+          "notFullyChecked": 0,
+          "passRate": null,
+          "passed": 0,
+          "thesisGrade": false,
+          "truncatedPairs": 0
+        },
+        "nodes": 0,
+        "secondsPerModelNode": null,
+        "secondsPerNode": null,
+        "totalSeconds": 3.5217
+      },
+      "targetGrade": 8,
+      "weights": {
+        "length": 0.2,
+        "meaning": 0.5,
+        "readability": 0.3
+      }
+    },
+    {
+      "cancelled": true,
+      "depthTier": "aggressive",
+      "extraQuality": true,
+      "finishedAt": 1792401781090,
+      "id": "e14c2c62-fc35-44cc-86de-4c9736a1ce81",
+      "meaningThresholds": {
+        "contradictionAggregation": "best-entailing",
+        "contradictionMax": 0.2,
+        "entailmentMin": 0.5,
+        "entityRecallMin": 1,
+        "glossaryExemptionMaxRate": 0.3,
+        "hypothesisContext": "prev-sentence-if-<7-words-or-referring",
+        "nliModel": "Xenova/nli-deberta-v3-xsmall",
+        "paragraphRule": "A",
+        "premiseStrategy": "summac-sentences+pairs/top3",
+        "scoreModels": {
+          "full": {
+            "bias": 0.00375,
+            "features": [
+              "sbert",
+              "entity",
+              "nliMin",
+              "contra",
+              "lenRatio"
+            ],
+            "id": "full",
+            "means": [
+              0.861433,
+              0.826978,
+              0.377698,
+              0.210091,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.423375,
+              0.341966,
+              0.173897
+            ],
+            "threshold": 0.569168,
+            "weights": [
+              0.075837,
+              0.057485,
+              0.099032,
+              -0.107555,
+              0.095553
+            ]
+          },
+          "lite": {
+            "bias": 0.001869,
+            "features": [
+              "sbert",
+              "entity",
+              "lenRatio"
+            ],
+            "id": "lite",
+            "means": [
+              0.861433,
+              0.826978,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.173897
+            ],
+            "threshold": 0.536117,
+            "weights": [
+              0.080126,
+              0.057627,
+              0.091799
+            ]
+          }
+        },
+        "similarity": 0.87,
+        "verdict": "combined-score"
+      },
+      "mode": "all",
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "nli": null,
+      "nodes": [],
+      "qualityMode": "full",
+      "qualityModeReason": "set to Full",
+      "qualitySetting": "full",
+      "qualityThreshold": 0.718,
+      "startedAt": 1792401780078,
+      "summary": {
+        "counts": {
+          "cache": 0,
+          "error": 0,
+          "model": 0,
+          "skipped": 0
+        },
+        "firstResultSeconds": null,
+        "meaning": {
+          "avgNliMs": null,
+          "coverage": null,
+          "excluded": 0,
+          "exemptedSentences": 0,
+          "exemptionRate": null,
+          "failed": 0,
+          "failureBreakdown": {
+            "contradiction": 0,
+            "entities": 0,
+            "failedParagraphs": 0,
+            "similarity": 0,
+            "unsupported": 0
+          },
+          "nliPairs": 0,
+          "notFullyChecked": 0,
+          "passRate": null,
+          "passed": 0,
+          "thesisGrade": false,
+          "truncatedPairs": 0
+        },
+        "nodes": 0,
+        "secondsPerModelNode": null,
+        "secondsPerNode": null,
+        "totalSeconds": 1.0116
+      },
+      "targetGrade": 8,
+      "weights": {
+        "length": 0.2,
+        "meaning": 0.5,
+        "readability": 0.3
+      }
+    },
+    {
+      "cancelled": false,
+      "depthTier": "aggressive",
+      "extraQuality": true,
+      "finishedAt": 1792401968061,
+      "id": "298992f6-6b9b-41ca-852c-cd556307439a",
+      "meaningThresholds": {
+        "contradictionAggregation": "best-entailing",
+        "contradictionMax": 0.2,
+        "entailmentMin": 0.5,
+        "entityRecallMin": 1,
+        "glossaryExemptionMaxRate": 0.3,
+        "hypothesisContext": "prev-sentence-if-<7-words-or-referring",
+        "nliModel": "Xenova/nli-deberta-v3-xsmall",
+        "paragraphRule": "A",
+        "premiseStrategy": "summac-sentences+pairs/top3",
+        "scoreModels": {
+          "full": {
+            "bias": 0.00375,
+            "features": [
+              "sbert",
+              "entity",
+              "nliMin",
+              "contra",
+              "lenRatio"
+            ],
+            "id": "full",
+            "means": [
+              0.861433,
+              0.826978,
+              0.377698,
+              0.210091,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.423375,
+              0.341966,
+              0.173897
+            ],
+            "threshold": 0.569168,
+            "weights": [
+              0.075837,
+              0.057485,
+              0.099032,
+              -0.107555,
+              0.095553
+            ]
+          },
+          "lite": {
+            "bias": 0.001869,
+            "features": [
+              "sbert",
+              "entity",
+              "lenRatio"
+            ],
+            "id": "lite",
+            "means": [
+              0.861433,
+              0.826978,
+              0.693974
+            ],
+            "stds": [
+              0.065517,
+              0.266737,
+              0.173897
+            ],
+            "threshold": 0.536117,
+            "weights": [
+              0.080126,
+              0.057627,
+              0.091799
+            ]
+          }
+        },
+        "similarity": 0.87,
+        "verdict": "combined-score"
+      },
+      "mode": "all",
+      "model": "qwen3:4b-instruct-2507-q4_K_M",
+      "nli": {
+        "adapterVendor": "nvidia",
+        "backend": "webgpu",
+        "benchMs": 558,
+        "dtype": "q8",
+        "predictedParagraphMs": 1256
+      },
+      "nodes": [
+        {
+          "candidates": [
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 13987,
+              "nliChecked": true,
+              "nliMs": 6799,
+              "nliRankMs": 176,
+              "nliScoreMs": 6622,
+              "reasons": [],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 0.471,
+                "lengthRatio": 0.906,
+                "maxContradiction": 0.0661,
+                "minEntailment": 0.7342,
+                "passed": true,
+                "similarity": 0.9424,
+                "total": 0.7734
+              },
+              "text": "- United Kingdom of Great Britain, Northern Ireland is a country in Northwestern Europe.  \n- It is off the coast of the continental mainland.  \n- It includes England, Scotland, Wales, and Northern Ireland.  \n- The population is over 69 million in 2025.  \n- The UK has the island of Great Britain.  \n- It also has the north-eastern part of the island of Ireland.  \n- It covers 94,354 square miles (244,376 km2).  \n- It shares a border with the Republic of Ireland.  \n- It is surrounded by the Atlantic Ocean, North Sea, English Channel, Celtic Sea, and Irish Sea.  \n- The UK has small areas it controls, like the Crown Dependencies and British Overseas Territories.  \n- London is the capital and biggest city of England and the UK.  \n- Edinburgh is the capital of Scotland.  \n- Cardiff is the capital of Wales.  \n- Belfast is the capital of Northern Ireland.",
+              "variant": "standard"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": 0,
+            "failures": [],
+            "maxContradiction": 0.0661,
+            "minEntailment": 0.7342,
+            "nliChecked": true,
+            "nliMs": 6799,
+            "passed": true,
+            "reasons": [],
+            "score": 0.5938618076694253,
+            "scoreModel": "full",
+            "similarity": 0.9424
+          },
+          "meaningStatus": "passed",
+          "modelCalls": 1,
+          "ms": 14049,
+          "nodeId": "n0",
+          "originalText": "The United Kingdom of Great Britain and Northern Ireland, commonly known as the United Kingdom (UK) or Britain,[l] is a country in Northwestern Europe, off the coast of the continental mainland. It comprises England, Scotland, Wales and Northern Ireland,[m] with a population of over 69 million in 2025. The UK includes the island of Great Britain, the north-eastern part of the island of Ireland, and most of the smaller islands within the British Isles, covering 94,354 square miles (244,376 km2).[e] It shares a land border with the Republic of Ireland and is surrounded by the Atlantic Ocean, the North Sea, the English Channel, the Celtic Sea and the Irish Sea, while maintaining sovereignty over the Crown Dependencies and the British Overseas Territories. The capital and largest city of England and the UK is London; Edinburgh, Cardiff and Belfast are the national capitals of Scotland, Wales and Northern Ireland, respectively.",
+          "retries": 0,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "similarity",
+                "entities"
+              ],
+              "missingEntities": [
+                "Roman",
+                "Over the 17th century",
+                "Kingdom of England",
+                "Kingdom of Scotland",
+                "Kingdom of Great Britain",
+                "Kingdom of Ireland",
+                "United Kingdom of Great Britain",
+                "1801"
+              ],
+              "missingKeyEntities": [],
+              "ms": 6589,
+              "nliChecked": true,
+              "nliMs": 2749,
+              "nliRankMs": 358,
+              "nliScoreMs": 2390,
+              "reasons": [
+                "You left out too much of the original (your version has 60% of its words).",
+                "You dropped the name Roman.",
+                "You dropped the date Over the 17th century.",
+                "You dropped the place Kingdom of England.",
+                "You dropped the place Kingdom of Scotland.",
+                "You dropped the place Kingdom of Great Britain.",
+                "You dropped the place Kingdom of Ireland.",
+                "You dropped the place United Kingdom of Great Britain.",
+                "You dropped the date 1801.",
+                "The meaning drifted from the original (similarity 0.85)."
+              ],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 0.6364,
+                "gradeGap": -2.613,
+                "lengthRatio": 0.6045,
+                "maxContradiction": 0.0028,
+                "minEntailment": 0.9234,
+                "passed": false,
+                "similarity": 0.8456,
+                "total": 0.6957
+              },
+              "text": "- Britain and Ireland have been lived in since ancient times.  \n- Romans came in 43 and left between 383 and 410.  \n- Anglo-Saxons arrived around 450.  \n- Normans took over England in 1066.  \n- In the 1600s, the king’s power grew smaller.  \n- In 1707, England and Scotland joined to form Great Britain.  \n- In 1800, Ireland joined to form the UK of Great Britain and Ireland.  \n- In 1922, most of Ireland left to form the Irish Free State.  \n- In 1927, the UK got its current name.",
+              "variant": "standard"
+            },
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported",
+                "contradiction"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 10048,
+              "nliChecked": true,
+              "nliMs": 4102,
+              "nliRankMs": 136,
+              "nliScoreMs": 3966,
+              "reasons": [
+                "This sentence contradicts the original: \"Roman, Roman, 43, 383, 410, 450, 1066, England, Over the 17th century, 1707, Kingdom of England, Kingdom of Scotland, Kingdom of Great Britain, 1800, Kingdom of Ireland, United Kingdom of Great Britain, Ireland, 1801, Ireland, UK, 1922, Irish Free State, 1927, United Kingdom.\"",
+                "This sentence is not supported by the original: \"Roman, Roman, 43, 383, 410, 450, 1066, England, Over the 17th century, 1707, Kingdom of England, Kingdom of Scotland, Kingdom of Great Britain, 1800, Kingdom of Ireland, United Kingdom of Great Britain, Ireland, 1801, Ireland, UK, 1922, Irish Free State, 1927, United Kingdom.\""
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 0.1425,
+                "lengthRatio": 1.0597,
+                "maxContradiction": 0.3458,
+                "minEntailment": 0.2199,
+                "passed": false,
+                "similarity": 0.8719,
+                "total": 0.7646
+              },
+              "text": "- The British Isles have been lived in since ancient times.  \n- In 43, Rome started to rule Britain.  \n- Rome left between 383 and 410.  \n- Anglo-Saxons settled around 450.  \n- In 1066, Normans took over England.  \n- Over the 17th century, the British king had less power, especially after the English Civil War.  \n- In 1707, England and Scotland joined to form the Kingdom of Great Britain.  \n- In 1800, Ireland joined to form the United Kingdom of Great Britain and Ireland in 1801.  \n- Most of Ireland left the UK in 1922 as the Irish Free State.  \n- In 1927, the UK got its current name.  \n- Roman, Roman, 43, 383, 410, 450, 1066, England, Over the 17th century, 1707, Kingdom of England, Kingdom of Scotland, Kingdom of Great Britain, 1800, Kingdom of Ireland, United Kingdom of Great Britain, Ireland, 1801, Ireland, UK, 1922, Irish Free State, 1927, United Kingdom",
+              "variant": "stepwise"
+            },
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported",
+                "contradiction"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 10039,
+              "nliChecked": true,
+              "nliMs": 3537,
+              "nliRankMs": 118,
+              "nliScoreMs": 3418,
+              "reasons": [
+                "This sentence is not supported by the original: \"The UK now includes England, Scotland, Wales, and Northern Ireland.\"",
+                "This sentence contradicts the original: \"Roman, 43, 383, 410, 450, 1066, England, Over the 17th century, 1707, Kingdom of England, Kingdom of Scotland, Kingdom of Great Britain, 1800, Kingdom of Ireland, United Kingdom of Great Britain, Ireland, 1801, Ireland, UK, 1922, Irish Free State, 1927, United Kingdom.\""
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 0.3216,
+                "lengthRatio": 1.2313,
+                "maxContradiction": 0.3141,
+                "minEntailment": 0.0036,
+                "passed": false,
+                "similarity": 0.8658,
+                "total": 0.7615
+              },
+              "text": "- The British Isles have been lived in since ancient times.  \n- In 43, Roman soldiers started to take control of Britain.  \n- The Romans left between 383 and 410.  \n- Around 450, Anglo-Saxon people moved to Britain.  \n- In 1066, Normans took over England.  \n- Over the 17th century, the British king had less power, especially after the English Civil War.  \n- In 1707, England and Scotland joined to form the Kingdom of Great Britain.  \n- In 1800, Ireland joined to form the United Kingdom of Great Britain and Ireland.  \n- In 1801, the new UK was formed with Ireland.  \n- In 1922, most of Ireland left to form the Irish Free State.  \n- In 1927, the name of the UK was changed.  \n- The UK now includes England, Scotland, Wales, and Northern Ireland.  \n- Roman, 43, 383, 410, 450, 1066, England, Over the 17th century, 1707, Kingdom of England, Kingdom of Scotland, Kingdom of Great Britain, 1800, Kingdom of Ireland, United Kingdom of Great Britain, Ireland, 1801, Ireland, UK, 1922, Irish Free State, 1927, United Kingdom",
+              "variant": "example-guided"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": 0,
+            "failures": [
+              "unsupported",
+              "contradiction"
+            ],
+            "maxContradiction": 0.3458,
+            "minEntailment": 0.2199,
+            "nliChecked": true,
+            "nliMs": 4102,
+            "passed": false,
+            "reasons": [
+              "This sentence contradicts the original: \"Roman, Roman, 43, 383, 410, 450, 1066, England, Over the 17th century, 1707, Kingdom of England, Kingdom of Scotland, Kingdom of Great Britain, 1800, Kingdom of Ireland, United Kingdom of Great Britain, Ireland, 1801, Ireland, UK, 1922, Irish Free State, 1927, United Kingdom.\"",
+              "This sentence is not supported by the original: \"Roman, Roman, 43, 383, 410, 450, 1066, England, Over the 17th century, 1707, Kingdom of England, Kingdom of Scotland, Kingdom of Great Britain, 1800, Kingdom of Ireland, United Kingdom of Great Britain, Ireland, 1801, Ireland, UK, 1922, Irish Free State, 1927, United Kingdom.\""
+            ],
+            "score": 0.5435180847832659,
+            "scoreModel": "full",
+            "similarity": 0.8719
+          },
+          "meaningStatus": "failed",
+          "modelCalls": 3,
+          "ms": 26714,
+          "nodeId": "n1",
+          "originalText": "The British Isles have been continuously inhabited since the Neolithic. In AD 43 the Roman conquest of Britain began. The Roman departure between 383 and 410 was followed by Anglo-Saxon settlement beginning around 450. In 1066 the Normans conquered England. Over the 17th century the role of the British monarchy was reduced, particularly as a result of the English Civil War. In 1707 the Kingdom of England and the Kingdom of Scotland united under the Treaty of Union to create the Kingdom of Great Britain. The Acts of Union 1800 incorporated the Kingdom of Ireland to create the United Kingdom of Great Britain and Ireland in 1801. Most of Ireland seceded from the UK in 1922 as the Irish Free State, and the Royal and Parliamentary Titles Act 1927 created the present United Kingdom.",
+          "retries": 2,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "stepwise"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported"
+              ],
+              "missingEntities": [
+                "Second"
+              ],
+              "missingKeyEntities": [],
+              "ms": 10646,
+              "nliChecked": true,
+              "nliMs": 6904,
+              "nliRankMs": 622,
+              "nliScoreMs": 6282,
+              "reasons": [
+                "This sentence is not supported by the original: \"UK was the first country to grow industries quickly.\"",
+                "This sentence is not supported by the original: \"It was the top power for most of the 19th and early 20th centuries.\"",
+                "This sentence is not supported by the original: \"From 1815 to 1914, it had peace and strength, called Pax Britannica.\"",
+                "This sentence is not supported by the original: \"Its farms worked well and brought growth.\"",
+                "This sentence is not supported by the original: \"It traded widely and had strong shipping.\"",
+                "This sentence is not supported by the original: \"It made many new machines and tools.\""
+              ],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 0.8889,
+                "gradeGap": -1.3611,
+                "lengthRatio": 0.8148,
+                "maxContradiction": 0.1892,
+                "minEntailment": 0.0039,
+                "passed": false,
+                "similarity": 0.9187,
+                "total": 0.7246
+              },
+              "text": "- UK was the first country to grow industries quickly.  \n- It was the top power for most of the 19th and early 20th centuries.  \n- From 1815 to 1914, it had peace and strength, called Pax Britannica.  \n- The British Empire was the main economic force in the 19th century.  \n- Its farms worked well and brought growth.  \n- It traded widely and had strong shipping.  \n- It made many new machines and tools.  \n- London became the world's main money centre in the 19th century.  \n- In the 1920s, the empire covered a quarter of Earth's land and people.  \n- It was the largest empire ever.  \n- World Wars hurt Britain's economy.  \n- Many colonies became free, ending the empire.",
+              "variant": "standard"
+            },
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported",
+                "contradiction"
+              ],
+              "missingEntities": [
+                "Second"
+              ],
+              "missingKeyEntities": [],
+              "ms": 18181,
+              "nliChecked": true,
+              "nliMs": 11041,
+              "nliRankMs": 6217,
+              "nliScoreMs": 4823,
+              "reasons": [
+                "This sentence is not supported by the original: \"UK was the first country to grow factories quickly.\"",
+                "This sentence is not supported by the original: \"Its farms and trade helped make the UK strong.\"",
+                "This sentence contradicts the original: \"From 1815 to 1914, the UK had peace and strength, called Pax Britannica.\""
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 0.8889,
+                "gradeGap": -1.0891,
+                "lengthRatio": 0.7926,
+                "maxContradiction": 0.2964,
+                "minEntailment": 0.0075,
+                "passed": false,
+                "similarity": 0.8806,
+                "total": 0.7202
+              },
+              "text": "- UK was the first country to grow factories quickly.  \n- UK was strong in trade and industry for most of the 19th and early 20th centuries.  \n- From 1815 to 1914, the UK had peace and strength, called Pax Britannica.  \n- UK had the biggest economy in the world for most of the 19th century.  \n- Its farms and trade helped make the UK strong.  \n- London was the main place for money and business in the world.  \n- In the 1920s, the empire covered about a quarter of Earth’s land and people.  \n- The empire was the largest in history.  \n- World wars hurt the UK’s economy.  \n- Many colonies became independent after the wars.",
+              "variant": "stepwise"
+            },
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported",
+                "contradiction"
+              ],
+              "missingEntities": [
+                "Second"
+              ],
+              "missingKeyEntities": [],
+              "ms": 21581,
+              "nliChecked": true,
+              "nliMs": 12640,
+              "nliRankMs": 4609,
+              "nliScoreMs": 8032,
+              "reasons": [
+                "This sentence contradicts the original: \"From 1815 to 1914, the UK had peace and strength, called Pax Britannica.\"",
+                "This sentence contradicts the original: \"In the 1920s, the empire had about one in four of Earth’s land and people.\"",
+                "This sentence is not supported by the original: \"The UK was the first country to start making factories quickly.\"",
+                "This sentence is not supported by the original: \"Its farms were strong and helped the country grow.\"",
+                "This sentence is not supported by the original: \"It made many new technologies.\""
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 0.8889,
+                "gradeGap": -1.7862,
+                "lengthRatio": 0.9778,
+                "maxContradiction": 0.789,
+                "minEntailment": 0.0031,
+                "passed": false,
+                "similarity": 0.8974,
+                "total": 0.6985
+              },
+              "text": "- The UK was the first country to start making factories quickly.  \n- The UK was a top power during the 19th and early 20th centuries.  \n- From 1815 to 1914, the UK had peace and strength, called Pax Britannica.  \n- The British Empire was the main economic force in the 19th century.  \n- Its farms were strong and helped the country grow.  \n- The UK was a main trading nation.  \n- It had a large factory system.  \n- It made many new technologies.  \n- London was the main place for money in the world during the 19th century.  \n- In the 1920s, the empire had about one in four of Earth’s land and people.  \n- The empire was the biggest in history.  \n- World War One and World War Two hurt the UK’s economy.  \n- A global movement led most colonies to become free.",
+              "variant": "example-guided"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 0.8889,
+            "exemptedSentences": [],
+            "exemptionRate": 0,
+            "failures": [
+              "unsupported"
+            ],
+            "maxContradiction": 0.1892,
+            "minEntailment": 0.0039,
+            "nliChecked": true,
+            "nliMs": 6904,
+            "passed": false,
+            "reasons": [
+              "This sentence is not supported by the original: \"UK was the first country to grow industries quickly.\"",
+              "This sentence is not supported by the original: \"It was the top power for most of the 19th and early 20th centuries.\"",
+              "This sentence is not supported by the original: \"From 1815 to 1914, it had peace and strength, called Pax Britannica.\"",
+              "This sentence is not supported by the original: \"Its farms worked well and brought growth.\"",
+              "This sentence is not supported by the original: \"It traded widely and had strong shipping.\"",
+              "This sentence is not supported by the original: \"It made many new machines and tools.\""
+            ],
+            "score": 0.5172092666350361,
+            "scoreModel": "full",
+            "similarity": 0.9187
+          },
+          "meaningStatus": "failed",
+          "modelCalls": 3,
+          "ms": 50443,
+          "nodeId": "n2",
+          "originalText": "The UK became the first industrialised country and was the world's foremost power for the majority of the 19th and early 20th centuries, particularly during the Pax Britannica between 1815 and 1914. The British Empire was the leading economic power for most of the 19th century, a position supported by its agricultural prosperity, its role as a dominant trading nation, a massive industrial capacity, significant technological achievements, and the rise of 19th-century London as the world's principal financial centre. At its height in the 1920s, the empire encompassed around a quarter of the world's landmass and population, and was the largest in history. However, its involvement in the First World War and in the Second World War damaged Britain's economic power, and a global wave of decolonisation led to the independence of most British colonies.",
+          "retries": 2,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "similarity",
+                "unsupported"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 6468,
+              "nliChecked": true,
+              "nliMs": 3807,
+              "nliRankMs": 321,
+              "nliScoreMs": 3485,
+              "reasons": [
+                "The meaning drifted from the original (similarity 0.77).",
+                "This sentence is not supported by the original: \"UK has a king, but power is shared.\"",
+                "This sentence is not supported by the original: \"UK uses laws made by elected leaders.\"",
+                "This sentence is not supported by the original: \"These laws cover local issues only.\"",
+                "This sentence is not supported by the original: \"UK is a strong economy.\"",
+                "You left out too much of the original (your version has 58% of its words)."
+              ],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": -2.9468,
+                "lengthRatio": 0.5766,
+                "maxContradiction": 0.1114,
+                "minEntailment": 0.005,
+                "passed": false,
+                "similarity": 0.7711,
+                "total": 0.6534
+              },
+              "text": "- UK has a king, but power is shared.\n- UK uses laws made by elected leaders.\n- Three parts: England, Wales, Scotland, Northern Ireland.\n- Each part has its own government and laws.\n- These laws cover local issues only.\n- UK is a strong economy.\n- UK has a big military and spends a lot on defence.\n- UK is one of Europe’s strongest militaries.\n- UK culture is strong worldwide.\n- UK’s laws and arts are used in many countries.\n- UK works with many global groups.",
+              "variant": "standard"
+            },
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "similarity",
+                "unsupported"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 7670,
+              "nliChecked": true,
+              "nliMs": 4082,
+              "nliRankMs": 161,
+              "nliScoreMs": 3920,
+              "reasons": [
+                "This sentence is not supported by the original: \"The UK has a king, but real power comes from elected leaders.\"",
+                "The meaning drifted from the original (similarity 0.80)."
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": -1.8437,
+                "lengthRatio": 0.8029,
+                "maxContradiction": 0.0238,
+                "minEntailment": 0.0122,
+                "passed": false,
+                "similarity": 0.8024,
+                "total": 0.7046
+              },
+              "text": "- The UK has a king, but real power comes from elected leaders.  \n- The UK has three parts: England, Wales, Scotland, and Northern Ireland.  \n- Each part has its own government and parliament.  \n- These governments handle some local issues.  \n- The UK is a rich country with a strong economy.  \n- It has one of the biggest economies in the world.  \n- The UK is a major exporter and importer.  \n- The UK has a powerful military.  \n- It spends a lot on defence.  \n- The UK has one of the strongest militaries in Europe.  \n- British culture is strong around the world.  \n- It is seen in law, politics, and arts.  \n- The UK is part of many global groups.",
+              "variant": "stepwise"
+            },
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported",
+                "contradiction"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 9866,
+              "nliChecked": true,
+              "nliMs": 4649,
+              "nliRankMs": 183,
+              "nliScoreMs": 4466,
+              "reasons": [
+                "This sentence contradicts the original: \"The UK has laws made by elected leaders.\"",
+                "This sentence contradicts the original: \"England and Wales share one government.\"",
+                "This sentence is not supported by the original: \"But power is shared among leaders.\""
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": -1.8652,
+                "lengthRatio": 1.2628,
+                "maxContradiction": 0.9611,
+                "minEntailment": 0.0118,
+                "passed": false,
+                "similarity": 0.8646,
+                "total": 0.7078
+              },
+              "text": "- The UK has a king. But power is shared among leaders.  \n- The UK has laws made by elected leaders.  \n- The UK has three parts: England, Wales, Scotland, and Northern Ireland.  \n- England and Wales share one government.  \n- Scotland has its own government and parliament.  \n- Wales has its own government and parliament.  \n- Northern Ireland has its own government and parliament.  \n- These parts manage some local issues.  \n- The UK is a big country with a strong economy.  \n- The UK has a large economy. It is one of the biggest in the world.  \n- The UK is one of the largest importers and exporters.  \n- The UK has nuclear weapons.  \n- The UK spends a lot on defence.  \n- The UK has one of the strongest militaries in Europe.  \n- British culture is strong around the world.  \n- British culture is seen in the Anglosphere and Commonwealth.  \n- Many former colonies use UK laws and culture.  \n- The UK shares its culture in law, politics, art, music, media, and sport.  \n- The UK is a major world power.  \n- The UK is part of many global groups.",
+              "variant": "example-guided"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": 0,
+            "failures": [
+              "unsupported",
+              "contradiction"
+            ],
+            "maxContradiction": 0.9611,
+            "minEntailment": 0.0118,
+            "nliChecked": true,
+            "nliMs": 4649,
+            "passed": false,
+            "reasons": [
+              "This sentence contradicts the original: \"The UK has laws made by elected leaders.\"",
+              "This sentence contradicts the original: \"England and Wales share one government.\"",
+              "This sentence is not supported by the original: \"But power is shared among leaders.\""
+            ],
+            "score": 0.5088613285989474,
+            "scoreModel": "full",
+            "similarity": 0.8646
+          },
+          "meaningStatus": "failed",
+          "modelCalls": 3,
+          "ms": 24022,
+          "nodeId": "n3",
+          "originalText": "The UK is a constitutional monarchy and parliamentary democracy[n] with three distinct jurisdictions: England and Wales, Scotland, and Northern Ireland. Scotland, Wales and Northern Ireland have their own governments and parliaments which control various devolved matters. A developed country with an advanced economy, the UK ranks amongst the largest economies by nominal GDP and is one of the world's largest exporters and importers. As a nuclear state with one of the highest defence budgets, the UK maintains one of the strongest militaries in Europe. British culture is globally influential, notably in the Anglosphere and the Commonwealth; its soft power influence is observable in the legal and political systems of many former colonies, and in its exports of language, literature, theatre, cinema, music, media, art and sport. A great power, the UK is part of numerous international organisations.",
+          "retries": 2,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "example-guided"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": null,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 769,
+              "nliChecked": false,
+              "nliMs": null,
+              "nliRankMs": null,
+              "nliScoreMs": null,
+              "reasons": [],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 1.1086,
+                "lengthRatio": 4.6667,
+                "maxContradiction": null,
+                "minEntailment": null,
+                "passed": true,
+                "similarity": null,
+                "total": 0.7446
+              },
+              "text": "- Etymology means the origin of words.  \n- Terminology means special words used in a field.",
+              "variant": "standard"
+            }
+          ],
+          "meaningStatus": "excluded",
+          "modelCalls": 1,
+          "ms": 780,
+          "nodeId": "n4",
+          "originalText": "Etymology and terminology",
+          "retries": 0,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported",
+                "contradiction"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 11085,
+              "nliChecked": true,
+              "nliMs": 7301,
+              "nliRankMs": 0,
+              "nliScoreMs": 7300,
+              "reasons": [
+                "This sentence contradicts the original: \"That part is called Northern Ireland.\"",
+                "This sentence contradicts the original: \"\"United Kingdom\" is the name used today.\"",
+                "This sentence is not supported by the original: \"Britain used special words in old times.\"",
+                "This sentence is not supported by the original: \"From 1707 to 1800, it was not called United Kingdom.\"",
+                "This sentence is not supported by the original: \"The other part stayed in Britain.\"",
+                "This sentence is not supported by the original: \"The island of Ireland has two parts now.\""
+              ],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": -1.1868,
+                "lengthRatio": 0.8898,
+                "maxContradiction": 0.7063,
+                "minEntailment": 0.0073,
+                "passed": false,
+                "similarity": 0.8952,
+                "total": 0.7135
+              },
+              "text": "- Britain used special words in old times.  \n- In 1707, England and Scotland joined to form one country.  \n- This new country was called Kingdom of Great Britain.  \n- From 1707 to 1800, it was not called United Kingdom.  \n- In 1800, the country added Ireland and became United Kingdom of Great Britain and Ireland.  \n- Ireland was split into two parts.  \n- One part became independent in 1922.  \n- That part is now called Irish Free State.  \n- The other part stayed in Britain.  \n- That part is called Northern Ireland.  \n- The island of Ireland has two parts now.  \n- In 1927, the country’s name changed to United Kingdom of Great Britain and Northern Ireland.  \n- \"United Kingdom\" is the name used today.",
+              "variant": "standard"
+            },
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported",
+                "contradiction"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 10554,
+              "nliChecked": true,
+              "nliMs": 6129,
+              "nliRankMs": 0,
+              "nliScoreMs": 6128,
+              "reasons": [
+                "This sentence contradicts the original: \"One part became the Irish Free State in 1922.\"",
+                "This sentence contradicts the original: \"Britain, Scotland, England, and Ireland were all part of the United Kingdom at different times.\"",
+                "This sentence contradicts the original: \"The United Kingdom is the name used today.\"",
+                "This sentence is not supported by the original: \"The United Kingdom is the name used today.\""
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 0.402,
+                "lengthRatio": 0.937,
+                "maxContradiction": 0.8208,
+                "minEntailment": 0.021,
+                "passed": false,
+                "similarity": 0.9037,
+                "total": 0.7234
+              },
+              "text": "- In 1707, England and Scotland joined to form one country called Great Britain.  \n- From 1707 to 1800, the country was named Great Britain.  \n- In 1800, Great Britain joined with Ireland to form the United Kingdom of Great Britain and Ireland.  \n- Ireland was split into two parts.  \n- One part became the Irish Free State in 1922.  \n- Only Northern Ireland stayed in the United Kingdom.  \n- In 1927, the name became United Kingdom of Great Britain and Northern Ireland.  \n- Britain, Scotland, England, and Ireland were all part of the United Kingdom at different times.  \n- The United Kingdom is the name used today.  \n- Northern Ireland is part of the island of Ireland.  \n- The name \"United Kingdom\" was used for Great Britain before 1800.",
+              "variant": "stepwise"
+            },
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "unsupported",
+                "contradiction"
+              ],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 9745,
+              "nliChecked": true,
+              "nliMs": 4564,
+              "nliRankMs": 0,
+              "nliScoreMs": 4564,
+              "reasons": [
+                "This sentence contradicts the original: \"The part of Ireland that stayed with the UK is called Northern Ireland.\"",
+                "This sentence contradicts the original: \"The island of Ireland includes both Northern Ireland and the rest of Ireland.\"",
+                "This sentence contradicts the original: \"\"United Kingdom\" is the name used today.\"",
+                "This sentence contradicts the original: \"Britain, Kingdom of England, Kingdom of Scotland, One Kingdom, Kingdom of Great Britain, from 1707 to 1800, 1800, United Kingdom of Great Britain, Ireland, Ireland, Irish Free State, 1922, Northern Ireland, island of Ireland, United Kingdom, 1927, United Kingdom of Great Britain and Northern Ireland.\"",
+                "This sentence is not supported by the original: \"The island of Ireland includes both Northern Ireland and the rest of Ireland.\""
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 2.5062,
+                "lengthRatio": 1.1417,
+                "maxContradiction": 0.9223,
+                "minEntailment": 0.0208,
+                "passed": false,
+                "similarity": 0.9045,
+                "total": 0.6284
+              },
+              "text": "- In 1707, England and Scotland joined to form one country named Great Britain.  \n- From 1707 to 1800, the country was called Great Britain.  \n- In 1800, Great Britain joined with Ireland to form the United Kingdom of Great Britain and Ireland.  \n- Ireland was split into two parts. One part became independent in 1922.  \n- The part of Ireland that stayed with the UK is called Northern Ireland.  \n- In 1927, the name was changed to United Kingdom of Great Britain and Northern Ireland.  \n- The island of Ireland includes both Northern Ireland and the rest of Ireland.  \n- \"United Kingdom\" is the name used today.  \n- Britain, Kingdom of England, Kingdom of Scotland, One Kingdom, Kingdom of Great Britain, from 1707 to 1800, 1800, United Kingdom of Great Britain, Ireland, Ireland, Irish Free State, 1922, Northern Ireland, island of Ireland, United Kingdom, 1927, United Kingdom of Great Britain and Northern Ireland.",
+              "variant": "example-guided"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": 0,
+            "failures": [
+              "unsupported",
+              "contradiction"
+            ],
+            "maxContradiction": 0.8208,
+            "minEntailment": 0.021,
+            "nliChecked": true,
+            "nliMs": 6129,
+            "passed": false,
+            "reasons": [
+              "This sentence contradicts the original: \"One part became the Irish Free State in 1922.\"",
+              "This sentence contradicts the original: \"Britain, Scotland, England, and Ireland were all part of the United Kingdom at different times.\"",
+              "This sentence contradicts the original: \"The United Kingdom is the name used today.\"",
+              "This sentence is not supported by the original: \"The United Kingdom is the name used today.\""
+            ],
+            "score": 0.4869919698204499,
+            "scoreModel": "full",
+            "similarity": 0.9037
+          },
+          "meaningStatus": "failed",
+          "modelCalls": 3,
+          "ms": 31414,
+          "nodeId": "n5",
+          "originalText": "See also: Britain (place name) and Terminology of the British Isles The Acts of Union 1707 declared that the Kingdom of England and the Kingdom of Scotland were \"United into One Kingdom by the Name of Great Britain\".[o][19] The term \"United Kingdom\" has occasionally been used for the former Kingdom of Great Britain, although its official name from 1707 to 1800 was simply \"Great Britain\".[20] The Acts of Union 1800 formed the United Kingdom of Great Britain and Ireland. Following the partition of Ireland and the independence of the Irish Free State in 1922, which left Northern Ireland as the only part of the island of Ireland within the United Kingdom, the name was changed in 1927 to the \"United Kingdom of Great Britain and Northern Ireland\".[21]",
+          "retries": 2,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "stepwise"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "similarity"
+              ],
+              "missingEntities": [
+                "twelve"
+              ],
+              "missingKeyEntities": [
+                "twelve"
+              ],
+              "ms": 3885,
+              "nliChecked": true,
+              "nliMs": 1912,
+              "nliRankMs": 1,
+              "nliScoreMs": 1911,
+              "reasons": [
+                "You left out too much of the original (your version has 65% of its words)."
+              ],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 0.8333,
+                "gradeGap": 1.7159,
+                "lengthRatio": 0.6512,
+                "maxContradiction": 0.0867,
+                "minEntailment": 0.5869,
+                "passed": false,
+                "similarity": 0.8886,
+                "total": 0.6768
+              },
+              "text": "- United Kingdom is one country.\n- England, Scotland, Wales, and Northern Ireland are often called countries.\n- The UK Prime Minister's website says \"countries within a country\".\n- Some reports call Scotland, Wales, and Northern Ireland \"regions\".\n- Northern Ireland is sometimes called a \"province\".\n- The name for Northern Ireland can be controversial.\n- Using the name shows someone's political views.",
+              "variant": "standard"
+            },
+            {
+              "chosen": false,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "similarity",
+                "unsupported"
+              ],
+              "missingEntities": [
+                "twelve"
+              ],
+              "missingKeyEntities": [
+                "twelve"
+              ],
+              "ms": 2814,
+              "nliChecked": true,
+              "nliMs": 961,
+              "nliRankMs": 0,
+              "nliScoreMs": 961,
+              "reasons": [
+                "This sentence is not supported by the original: \"England, Scotland, Wales and Northern Ireland are called countries.\"",
+                "This sentence is not supported by the original: \"Northern Ireland is also called a \"province\".\"",
+                "You left out too much of the original (your version has 65% of its words)."
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 0.8333,
+                "gradeGap": 1.1262,
+                "lengthRatio": 0.6512,
+                "maxContradiction": 0.0558,
+                "minEntailment": 0.0343,
+                "passed": false,
+                "similarity": 0.8883,
+                "total": 0.6913
+              },
+              "text": "- The United Kingdom is one country.  \n- England, Scotland, Wales and Northern Ireland are called countries.  \n- The UK Prime Minister's website says \"countries within a country\".  \n- Some reports call Scotland, Wales and Northern Ireland \"regions\".  \n- Northern Ireland is also called a \"province\".  \n- The name for Northern Ireland can be controversial.  \n- Using the name shows someone's political views.",
+              "variant": "stepwise"
+            },
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [
+                "similarity",
+                "unsupported"
+              ],
+              "missingEntities": [
+                "twelve"
+              ],
+              "missingKeyEntities": [
+                "twelve"
+              ],
+              "ms": 2488,
+              "nliChecked": true,
+              "nliMs": 809,
+              "nliRankMs": 0,
+              "nliScoreMs": 808,
+              "reasons": [
+                "This sentence is not supported by the original: \"Northern Ireland is also called a \"province\".\"",
+                "You left out too much of the original (your version has 65% of its words)."
+              ],
+              "retryInstruction": true,
+              "scores": {
+                "entityRecall": 0.8333,
+                "gradeGap": 1.1669,
+                "lengthRatio": 0.6512,
+                "maxContradiction": 0.0558,
+                "minEntailment": 0.22,
+                "passed": false,
+                "similarity": 0.893,
+                "total": 0.6954
+              },
+              "text": "- The United Kingdom is one country.  \n- England, Scotland, Wales and Northern Ireland are often called countries.  \n- The UK Prime Minister’s website says \"countries within a country\".  \n- Some reports call Scotland, Wales and Northern Ireland \"regions\".  \n- Northern Ireland is also called a \"province\".  \n- The name for Northern Ireland can be controversial.  \n- Using it shows someone’s political views.",
+              "variant": "example-guided"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 0.8333,
+            "exemptedSentences": [],
+            "exemptionRate": 0,
+            "failures": [
+              "similarity",
+              "unsupported"
+            ],
+            "maxContradiction": 0.0558,
+            "minEntailment": 0.22,
+            "nliChecked": true,
+            "nliMs": 809,
+            "passed": false,
+            "reasons": [
+              "This sentence is not supported by the original: \"Northern Ireland is also called a \"province\".\"",
+              "You left out too much of the original (your version has 65% of its words)."
+            ],
+            "score": 0.5074530317656096,
+            "scoreModel": "full",
+            "similarity": 0.893
+          },
+          "meaningStatus": "failed",
+          "modelCalls": 3,
+          "ms": 9209,
+          "nodeId": "n6",
+          "originalText": "Although the United Kingdom is a sovereign country, England, Scotland, Wales and Northern Ireland are widely referred to as countries.[22] The UK Prime Minister's website has used the phrase \"countries within a country\" to describe it.[23] Some statistical summaries, such as those for the twelve NUTS 1 regions, refer to Scotland, Wales and Northern Ireland as \"regions\".[24] Northern Ireland is also referred to as a \"province\".[25] With regard to Northern Ireland, the descriptive name used \"can be controversial, with the choice often revealing one's political preferences\".[26]",
+          "retries": 2,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "example-guided"
+        },
+        {
+          "candidates": [
+            {
+              "chosen": true,
+              "exemptedSentences": [],
+              "exemptionRate": 0,
+              "failures": [],
+              "missingEntities": [],
+              "missingKeyEntities": [],
+              "ms": 2354,
+              "nliChecked": true,
+              "nliMs": 887,
+              "nliRankMs": 0,
+              "nliScoreMs": 886,
+              "reasons": [],
+              "retryInstruction": false,
+              "scores": {
+                "entityRecall": 1,
+                "gradeGap": 0.172,
+                "lengthRatio": 0.7903,
+                "maxContradiction": 0.0047,
+                "minEntailment": 0.9088,
+                "passed": true,
+                "similarity": 0.933,
+                "total": 0.7866
+              },
+              "text": "- \"Great Britain\" usually means the island of Great Britain.  \n- It also means England, Scotland, and Wales together.  \n- Some people use \"Great Britain\" to mean the whole United Kingdom.  \n- \"England\" is sometimes wrongly used to mean the whole United Kingdom.  \n- This mistake is mostly made by people outside the UK.",
+              "variant": "standard"
+            }
+          ],
+          "meaning": {
+            "entityRecall": 1,
+            "exemptedSentences": [],
+            "exemptionRate": 0,
+            "failures": [],
+            "maxContradiction": 0.0047,
+            "minEntailment": 0.9088,
+            "nliChecked": true,
+            "nliMs": 887,
+            "passed": true,
+            "reasons": [],
+            "score": 0.5903989450487885,
+            "scoreModel": "full",
+            "similarity": 0.933
+          },
+          "meaningStatus": "passed",
+          "modelCalls": 1,
+          "ms": 2376,
+          "nodeId": "n7",
+          "originalText": "The term \"Great Britain\" conventionally refers to the island of Great Britain, or politically to England, Scotland and Wales in combination.[27] It is sometimes used as a loose synonym for the United Kingdom as a whole.[28] The word England is occasionally used incorrectly to refer to the United Kingdom as a whole, a mistake principally made by people from outside the UK.[29]",
+          "retries": 0,
+          "source": "model",
+          "type": "paragraph",
+          "variantUsed": "standard"
+        }
+      ],
+      "qualityMode": "full",
+      "qualityModeReason": "set to Full",
+      "qualitySetting": "full",
+      "qualityThreshold": 0.718,
+      "startedAt": 1792401809039,
+      "summary": {
+        "counts": {
+          "cache": 0,
+          "error": 0,
+          "model": 8,
+          "skipped": 0
+        },
+        "firstResultSeconds": 14.0625,
+        "meaning": {
+          "avgNliMs": 4875,
+          "coverage": 1,
+          "excluded": 1,
+          "exemptedSentences": 0,
+          "exemptionRate": 0,
+          "failed": 5,
+          "failureBreakdown": {
+            "contradiction": 3,
+            "entities": 0,
+            "failedParagraphs": 5,
+            "similarity": 1,
+            "unsupported": 5
+          },
+          "nliPairs": 512,
+          "notFullyChecked": 0,
+          "passRate": 0.2857,
+          "passed": 2,
+          "thesisGrade": true,
+          "truncatedPairs": 0
+        },
+        "nodes": 8,
+        "secondsPerModelNode": 19.8759,
+        "secondsPerNode": 19.8777,
+        "totalSeconds": 159.0218
+      },
+      "targetGrade": 8,
+      "weights": {
+        "length": 0.2,
+        "meaning": 0.5,
+        "readability": 0.3
+      }
+    }
+  ]
+}

@@ -72,6 +72,7 @@ scripts/checker/             combined meaning score (Prompt 9.5): fit on calibra
 eval/nli-calibration/        paragraphs.jsonl (67 originals), pairs.jsonl (60 labelled sentences), paragraph-items.jsonl, labels.csv, SOURCES.md, README.md
 eval/model-bakeoff/          bakeoff-only paragraphs.jsonl (40), SOURCES.md, README.md, outputs.jsonl, labels_bakeoff.csv (labelled), blind_key.json, models.json (licences, Unsloth evidence), REPORT.md
 eval/checker/                features_calib.csv (81), features_bakeoff.csv (119), fit.json, PREREG.md (frozen values), REPORT.md (held-out test), DISCUSSION.md (post-hoc, exploratory)
+eval/fixtures/               DEV regression fixtures only, excluded from every benchmark, calibration, bake-off and training set: uk-wiki-paste.txt (8 UK Wikipedia paragraphs), runs/uk-wiki-2026-10-19.json (its run report), README.md
 public/models/, public/ort/  git-ignored; copied by Vite into dist/models/ and dist/ort/
 src/
   manifest.ts                MV3 manifest (defineManifest); holds the pinned `key`
