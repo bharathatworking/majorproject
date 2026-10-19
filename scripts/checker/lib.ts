@@ -31,10 +31,20 @@
  *    percentile 2.5–97.5; resamples where a metric is undefined are skipped.
  *  - The fit may read only TRAINING_FILES (readTrainingFile, with the reader
  *    injected so this file stays free of node: imports); any other path,
- *    the held-out set included, throws before anything is read.
+ *    the held-out set included, throws before anything is read. The stage 7
+ *    rescale reads RESCALE_FILES (calibration data only) the same way.
+ *  - Stage 7 rescale: the candidate total (score.ts) on the calibration
+ *    items under the old meaning part (entity × sbert × nliMin, the
+ *    meaningScore before the combined score) and the new one (the FULL
+ *    combined score); readability and length are the same in both. The new
+ *    QUALITY_THRESHOLD is the quantile match: as many items fall below it
+ *    under the new total as fell below the old threshold under the old one.
  */
 
-import { combinedScore, standardise } from '../../src/lib/quality/checker';
+import { combinedScore, FEATURES, standardise } from '../../src/lib/quality/checker';
+import { COMBINED_SCORE_FULL, WEIGHTS } from '../../src/lib/quality/config';
+import { lengthScore, readabilityScore } from '../../src/lib/quality/score';
+import { toPlainText } from '../../src/lib/render/format-output';
 import type { CheckerFeature, CombinedScoreModel } from '../../src/types';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -49,6 +59,15 @@ export const MIN_CATCH = 0.9;
 export const BOOTSTRAP_RESAMPLES = 2000;
 /** The only files the fit may read (repo-relative, forward slashes). */
 export const TRAINING_FILES: readonly string[] = ['eval/checker/features_calib.csv'];
+/**
+ * What the stage 7 rescale (scripts/checker/rescale-quality.mjs) may read:
+ * the calibration features plus the calibration outputs and originals.
+ */
+export const RESCALE_FILES: readonly string[] = [
+  'eval/checker/features_calib.csv',
+  'eval/nli-calibration/paragraph-items.jsonl',
+  'eval/nli-calibration/paragraphs.jsonl',
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -91,30 +110,32 @@ function normalisePath(path: string): string {
 
 /**
  * The absolute path of a training file; throws unless `path` (absolute, or
- * relative to `root`) is one of TRAINING_FILES once normalised.
+ * relative to `root`) is one of `allowed` (TRAINING_FILES) once normalised.
  */
-export function assertTrainingPath(root: string, path: string): string {
+export function assertTrainingPath(root: string, path: string, allowed: readonly string[] = TRAINING_FILES): string {
   const r = normalisePath(root);
   const p = normalisePath(path);
   const absolute = /^(?:[a-zA-Z]:)?[\\/]/.test(path);
   const rel = absolute && p.toLowerCase().startsWith(`${r.toLowerCase()}/`) ? p.slice(r.length + 1) : p;
-  if (absolute && rel === p) throw new Error(`[Clarity] the fit may read only ${TRAINING_FILES.join(', ')}; refused: ${path}`);
-  if (!TRAINING_FILES.includes(rel)) {
-    throw new Error(`[Clarity] the fit may read only ${TRAINING_FILES.join(', ')}; refused: ${rel}`);
+  if (absolute && rel === p) throw new Error(`[Clarity] this script may read only ${allowed.join(', ')}; refused: ${path}`);
+  if (!allowed.includes(rel)) {
+    throw new Error(`[Clarity] this script may read only ${allowed.join(', ')}; refused: ${rel}`);
   }
   return `${root.replace(/[\\/]+$/, '')}/${rel}`;
 }
 
 /**
- * Reads a training file with `read` (fs.readFile in fit.mjs); any other
- * path is refused before `read` is called (assertTrainingPath).
+ * Reads a training file with `read` (fs.readFile in fit.mjs); any path not
+ * in `allowed` (TRAINING_FILES for the fit) is refused before `read` is
+ * called (assertTrainingPath).
  */
 export async function readTrainingFile(
   root: string,
   path: string,
   read: (absolutePath: string) => Promise<string>,
+  allowed: readonly string[] = TRAINING_FILES,
 ): Promise<string> {
-  return read(assertTrainingPath(root, path));
+  return read(assertTrainingPath(root, path, allowed));
 }
 
 // ─── CSV (plain: no field may hold a comma, quote or line break) ─────────────
@@ -542,4 +563,96 @@ export function evaluate(
     falseFail: { value: r.falseFail, ci: ci(idx => rates(sub(passes, idx), sub(y, idx)).falseFail) },
     auc: { value: auc(scores, y), ci: ci(idx => auc(sub(scores, idx), sub(y, idx))) },
   };
+}
+
+// ─── Stage 7 rescale ──────────────────────────────────────────────────────────
+
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+
+/** The stage 7 meaning part before the combined score: entity recall × similarity × minimum entailment. */
+export function legacyMeaningPart(x: Partial<Record<CheckerFeature, number>>): number {
+  return (x.entity ?? 1) * clamp01(x.sbert ?? 1) * clamp01(x.nliMin ?? 1);
+}
+
+export interface Stage7Total {
+  id: string;
+  /** Total with the old meaning part (legacyMeaningPart). */
+  oldTotal: number;
+  /** Total with the new meaning part (FULL combined score). */
+  newTotal: number;
+}
+
+/**
+ * The stage 7 total (score.ts scoreCandidate) of every feature row under the
+ * old and the new meaning part. `gradeOf` is the node grade of a plain text
+ * (estimateNodeGrade with the word set); the grade gap is to the item's
+ * target grade, and an empty output scores 0 for readability, as in the app.
+ */
+export function stage7Totals(
+  rows: readonly Record<string, string>[],
+  simplifiedById: ReadonlyMap<string, string>,
+  targetGradeById: ReadonlyMap<string, number>,
+  gradeOf: (plain: string) => number,
+): Stage7Total[] {
+  return rows.map(r => {
+    const simplified = simplifiedById.get(r.id);
+    const target = targetGradeById.get(r.id);
+    if (simplified === undefined || target === undefined) throw new Error(`[Clarity] ${r.id}: no simplified text or target grade`);
+    const x = Object.fromEntries(FEATURES.map(f => [f, Number(r[f])])) as Record<CheckerFeature, number>;
+    const plain = toPlainText(simplified);
+    const hasWords = plain.trim().split(/\s+/).filter(Boolean).length > 0;
+    const rest = WEIGHTS.readability * (hasWords ? readabilityScore(gradeOf(plain) - target) : 0)
+      + WEIGHTS.length * lengthScore(x.lenRatio);
+    return {
+      id: r.id,
+      oldTotal: WEIGHTS.meaning * legacyMeaningPart(x) + rest,
+      newTotal: WEIGHTS.meaning * combinedScore(COMBINED_SCORE_FULL, x).score + rest,
+    };
+  });
+}
+
+/** Share of totals strictly below `threshold` (the "Extra quality" trigger, total < QUALITY_THRESHOLD). */
+export function belowShare(totals: readonly number[], threshold: number): number {
+  return totals.length ? totals.filter(t => t < threshold).length / totals.length : NaN;
+}
+
+export interface QuantileMatch {
+  threshold: number;
+  /** Items below the old threshold under the old totals. */
+  k: number;
+  oldShare: number;
+  /** Share below `threshold` under the new totals (equals oldShare unless ties prevent it). */
+  newShare: number;
+}
+
+/**
+ * The new threshold with as many new totals below it as old totals fell
+ * below `oldThreshold`: the shortest decimal (1–6 places) in
+ * (sortedNew[k−1], sortedNew[k]]. With k = 0 it is the lowest new total; with
+ * k = n just above the highest. A tie at the boundary makes an exact match
+ * impossible; newShare then says what was reached.
+ */
+export function quantileMatchThreshold(
+  oldTotals: readonly number[],
+  newTotals: readonly number[],
+  oldThreshold: number,
+): QuantileMatch {
+  if (oldTotals.length !== newTotals.length || oldTotals.length === 0) throw new Error('[Clarity] quantile match needs two equal, non-empty lists');
+  const n = newTotals.length;
+  const k = oldTotals.filter(t => t < oldThreshold).length;
+  const sorted = [...newTotals].sort((a, b) => a - b);
+  const lo = k === 0 ? -Infinity : sorted[k - 1];
+  const hi = k === n ? Infinity : sorted[k];
+  let threshold: number;
+  if (k === 0) threshold = sorted[0];
+  else if (k === n) threshold = sorted[n - 1] + 1e-6;
+  else {
+    const mid = (lo + hi) / 2;
+    threshold = mid;
+    for (let d = 1; d <= 6; d++) {
+      const x = Math.round(mid * 10 ** d) / 10 ** d;
+      if (x > lo && x <= hi) { threshold = x; break; }
+    }
+  }
+  return { threshold, k, oldShare: k / n, newShare: belowShare(newTotals, threshold) };
 }

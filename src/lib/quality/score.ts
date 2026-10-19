@@ -24,14 +24,14 @@
  *                        LENGTH_MIN (the model dropped content or stopped
  *                        early) and LENGTH_MAX (it padded or explained
  *                        itself). Empty output scores 0.
- *  - QUALITY_THRESHOLD (0.75) decides when "Extra quality" tries the other
- *    variants. Worked examples with a good length: similarity 0.90 and a
- *    1-grade gap give 0.45 + 0.25 + 0.20 = 0.90 (kept); similarity 0.85 and a
- *    3-grade gap give 0.425 + 0.15 + 0.20 = 0.775 (kept, just); similarity
- *    0.85 with a 5-grade gap gives 0.425 + 0.05 + 0.20 = 0.675 (retried).
- *    (These examples predate the combined score and use similarity as the
- *    meaning part.) A version that fails
- *    the stage 6C checks is retried whatever its total.
+ *  - QUALITY_THRESHOLD (0.718) decides when "Extra quality" tries the other
+ *    variants. It was 0.75 for the old meaning part and was rescaled for the
+ *    combined score by quantile matching on the calibration items (config.ts,
+ *    npm run checker:rescale), so the same share of versions is retried.
+ *    Worked examples with a good length: combined score 0.65 and a 1-grade
+ *    gap give 0.325 + 0.25 + 0.20 = 0.775 (kept); 0.55 and a 2-grade gap
+ *    give 0.275 + 0.20 + 0.20 = 0.675 (retried). A version that fails the
+ *    stage 6C checks is retried whatever its total.
  *  - Pure and synchronous: the run loop runs assessMeaning and passes the
  *    assessment in. All constants live in config.ts.
  *  - Imports the metrics engine and, through meaning.ts, compromise, so only

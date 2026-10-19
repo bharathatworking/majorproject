@@ -188,8 +188,24 @@ export const AUTO_LITE_PARAGRAPH_MS = 3000;
 /** Weights of the three parts of the candidate total; they sum to 1. */
 export const WEIGHTS = { meaning: 0.5, readability: 0.3, length: 0.2 } as const;
 
-/** Below this total, "Extra quality" tries the other prompt variants. */
-export const QUALITY_THRESHOLD = 0.75;
+/**
+ * QUALITY_THRESHOLD before the rescale, when the meaning part was entity
+ * recall × similarity × minimum entailment. Not used by the app: it is the
+ * anchor of the quantile match below (npm run checker:rescale).
+ */
+export const QUALITY_THRESHOLD_OLD_SCALE = 0.75;
+
+/**
+ * Below this total, "Extra quality" tries the other prompt variants.
+ * Rescaled 2026-10-19 for the combined meaning score (npm run
+ * checker:rescale): quantile matching on the 81 calibration items only
+ * (eval/checker/features_calib.csv + the calibration outputs in
+ * eval/nli-calibration/, FULL score, base word list, stored target grade 6).
+ * Under the old total, 67/81 = 82.7% of items were below 0.75; under the new
+ * total, 67/81 = 82.7% are below 0.718 (and 93.8% would be below 0.75). Only
+ * the scale changed: the trigger share on calibration is the same.
+ */
+export const QUALITY_THRESHOLD = 0.718;
 
 /** Never more model calls than this for one node (first attempt included). */
 export const MAX_MODEL_CALLS_PER_NODE = 3;

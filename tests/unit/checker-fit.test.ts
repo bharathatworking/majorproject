@@ -1,11 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import fitSource from '../../scripts/checker/fit.mjs?raw';
 import libSource from '../../scripts/checker/lib.ts?raw';
+import rescaleSource from '../../scripts/checker/rescale-quality.mjs?raw';
 import {
-  assertTrainingPath, auc, balancedWeights, chooseLambda, chooseThreshold, clusterBootstrap, fitLogistic,
-  mulberry32, parsePlainCsv, rates, readTrainingFile, solve, standardiser, stratifiedGroupKFold, toPlainCsv,
-  trainModel, predict, TRAINING_FILES, type Item,
+  assertTrainingPath, auc, balancedWeights, belowShare, chooseLambda, chooseThreshold, clusterBootstrap, fitLogistic,
+  legacyMeaningPart, mulberry32, parsePlainCsv, quantileMatchThreshold, rates, readTrainingFile, RESCALE_FILES, solve,
+  stage7Totals, standardiser, stratifiedGroupKFold, toPlainCsv, trainModel, predict, TRAINING_FILES, type Item,
 } from '../../scripts/checker/lib';
+import { COMBINED_SCORE_FULL, QUALITY_THRESHOLD, QUALITY_THRESHOLD_OLD_SCALE } from '../../src/lib/quality/config';
+import { combinedScore } from '../../src/lib/quality/checker';
+import { estimateNodeGrade } from '../../src/lib/metrics/node-grade';
+import { BASE_COMMON_WORDS } from '../../src/lib/metrics/common-words';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -58,6 +65,28 @@ describe('training-file guard', () => {
     for (const src of [fitSource, libSource]) {
       expect(src).not.toMatch(/model-bakeoff|labels_bakeoff|features_bakeoff|blind_key|\/bakeoff\//);
     }
+  });
+
+  it('the rescale may read the calibration outputs, never the bake-off set', async () => {
+    expect(RESCALE_FILES).toContain('eval/checker/features_calib.csv');
+    expect(assertTrainingPath(ROOT, 'eval/nli-calibration/paragraph-items.jsonl', RESCALE_FILES))
+      .toBe('C:\\repo/eval/nli-calibration/paragraph-items.jsonl');
+    // The fit's own list is unchanged by the rescale's
+    expect(() => assertTrainingPath(ROOT, 'eval/nli-calibration/paragraph-items.jsonl')).toThrow(/may read only/);
+    const read = vi.fn(async () => '');
+    for (const path of [
+      'eval/model-bakeoff/labels_bakeoff.csv', 'eval/checker/features_bakeoff.csv', 'eval/model-bakeoff/blind_key.json',
+      'eval/model-bakeoff/outputs.jsonl', 'eval/nli-calibration/../model-bakeoff/paragraphs.jsonl',
+    ]) {
+      await expect(readTrainingFile(ROOT, path, read, RESCALE_FILES)).rejects.toThrow(/may read only/);
+    }
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('rescale-quality.mjs reads files only through readTrainingFile with RESCALE_FILES', () => {
+    expect(rescaleSource).not.toMatch(/model-bakeoff|labels_bakeoff|features_bakeoff|blind_key|\/bakeoff\/|readFileSync|readJsonl|writeFile/);
+    expect(rescaleSource.match(/\breadFile\(/g)).toHaveLength(1);
+    expect(rescaleSource).toMatch(/readTrainingFile\(ROOT, path, p => readFile\(p, 'utf8'\), lib\.RESCALE_FILES\)/);
   });
 
   it('fit.mjs reads files only through readTrainingFile', () => {
@@ -215,5 +244,66 @@ describe('plain CSV', () => {
     const text = toPlainCsv(['id', 'v'], [['a#real', 0.5], ['b', null]]);
     expect(parsePlainCsv(text)).toEqual([{ id: 'a#real', v: '0.5' }, { id: 'b', v: '' }]);
     expect(() => toPlainCsv(['id'], [['a,b']])).toThrow();
+  });
+});
+
+// ─── Stage 7 rescale ──────────────────────────────────────────────────────────
+
+describe('stage 7 rescale', () => {
+  it('legacyMeaningPart is entity × sbert × nliMin, clamped', () => {
+    expect(legacyMeaningPart({ entity: 0.5, sbert: 0.9, nliMin: 0.8 })).toBeCloseTo(0.36);
+    expect(legacyMeaningPart({ entity: 1, sbert: 1.2, nliMin: -0.1 })).toBe(0);
+  });
+
+  it('belowShare counts strictly below', () => {
+    expect(belowShare([0.1, 0.5, 0.5, 0.9], 0.5)).toBe(0.25);
+    expect(belowShare([], 0.5)).toBeNaN();
+  });
+
+  it('quantileMatchThreshold puts exactly k new totals below the shortest decimal in the gap', () => {
+    const old = [0.6, 0.7, 0.8, 0.9];
+    const neu = [0.41, 0.52, 0.63, 0.74];
+    const m = quantileMatchThreshold(old, neu, 0.75);
+    expect(m.k).toBe(2);
+    expect(m.threshold).toBe(0.6);
+    expect(m.newShare).toBe(m.oldShare);
+    expect(quantileMatchThreshold(old, neu, 0.5)).toMatchObject({ k: 0, threshold: 0.41, newShare: 0 });
+    expect(quantileMatchThreshold(old, neu, 1)).toMatchObject({ k: 4, newShare: 1 });
+    // A tie at the boundary: no exact match, newShare says what was reached
+    const tie = quantileMatchThreshold([0.1, 0.9], [0.5, 0.5], 0.5);
+    expect(tie.k).toBe(1);
+    expect(tie.newShare).not.toBe(tie.oldShare);
+  });
+
+  it('stage7Totals: the same readability and length, only the meaning part differs', () => {
+    const row = { id: 'a', sbert: '0.9', entity: '1', nliMin: '0.8', nliMean: '0.8', contra: '0.1', mainClaim: '0.8', numbers: '1', lenRatio: '0.8' };
+    const [t] = stage7Totals([row], new Map([['a', 'The cat sat.']]), new Map([['a', 6]]), () => 6);
+    // readability 1 (gap 0) and length 1 (ratio inside the ideal band) in both totals
+    const x = Object.fromEntries(Object.entries(row).filter(([k]) => k !== 'id').map(([k, v]) => [k, Number(v)]));
+    expect(t.oldTotal).toBeCloseTo(0.5 * 0.72 + 0.3 + 0.2);
+    expect(t.newTotal).toBeCloseTo(0.5 * combinedScore(COMBINED_SCORE_FULL, x).score + 0.3 + 0.2);
+    expect(() => stage7Totals([row], new Map(), new Map(), () => 6)).toThrow(/no simplified text/);
+  });
+
+  it('QUALITY_THRESHOLD keeps the calibration trigger share within 5 points of the old one', async () => {
+    const root = fileURLToPath(new URL('../..', import.meta.url));
+    const read = (path: string) => readTrainingFile(root, path, p => readFile(p, 'utf8'), RESCALE_FILES);
+    const jsonl = (text: string) => text.split(/\r?\n/).filter(l => l.trim() !== '').map(l => JSON.parse(l));
+    const rows = parsePlainCsv(await read('eval/checker/features_calib.csv'));
+    const items: { id: string; paragraphId: string; simplified: string }[] = jsonl(await read('eval/nli-calibration/paragraph-items.jsonl'));
+    const paragraphs = new Map<string, { targetGrade: number }>(
+      jsonl(await read('eval/nli-calibration/paragraphs.jsonl')).map((p: { id: string; targetGrade: number }) => [p.id, p]),
+    );
+    const wordSet = new Set(BASE_COMMON_WORDS);
+    const totals = stage7Totals(
+      rows,
+      new Map(items.map(i => [i.id, i.simplified])),
+      new Map(items.map(i => [i.id, paragraphs.get(i.paragraphId)?.targetGrade as number])),
+      plain => estimateNodeGrade(plain, wordSet),
+    );
+    expect(totals).toHaveLength(81);
+    const oldShare = belowShare(totals.map(t => t.oldTotal), QUALITY_THRESHOLD_OLD_SCALE);
+    const newShare = belowShare(totals.map(t => t.newTotal), QUALITY_THRESHOLD);
+    expect(Math.abs(newShare - oldShare)).toBeLessThanOrEqual(0.05);
   });
 });
