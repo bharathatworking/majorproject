@@ -40,12 +40,19 @@
  *    and its threshold are unchanged: pass = score ≥ threshold AND no echo.
  *  - meaningScore is the combined score: it picks between a first attempt
  *    and its retry, and is the meaning part of the stage 7 candidate total.
+ *  - Retry policy (shouldRetry, constants in config.ts): a failing version
+ *    whose only failure is 'unsupported', with no contradiction above the
+ *    limit and every entity kept, is not retried; it stays "Not verified".
+ *    Entities, contradiction, similarity and echo failures are retried.
  */
 
 import { toPlainText } from '../render/format-output';
 import { checkerFeatures, combinedScore, harmfulFeatures, lengthRatioOf, worstFeature } from './checker';
 import { findEcho } from './echo';
-import { COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, MAX_RETRY_REASONS } from './config';
+import {
+  COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, MAX_RETRY_REASONS, RETRY_SKIP_MAX_CONTRADICTION, RETRY_SKIP_MIN_ENTITY_RECALL,
+  RETRY_SKIP_UNSUPPORTED_ONLY,
+} from './config';
 import { mainClaimIndexes, splitSentences } from './premises';
 import { findMissingEntities } from './semantic';
 import { entityVerdict, MEANING_FAILURES } from './verdict';
@@ -391,6 +398,19 @@ export async function assessMeaning(
 /** Meaning part (0–1) of the candidate score: the combined score. */
 export function meaningScore(a: MeaningAssessment): number {
   return a.score;
+}
+
+/**
+ * Whether a failing version is worth a retry (see file header): false only
+ * for an unsupported-only failure with low contradiction and every entity
+ * kept.
+ */
+export function shouldRetry(a: Pick<MeaningAssessment, 'failures' | 'maxContradiction' | 'entityRecall'>): boolean {
+  if (!RETRY_SKIP_UNSUPPORTED_ONLY) return true;
+  const unsupportedOnly = a.failures.length === 1 && a.failures[0] === 'unsupported';
+  return !(unsupportedOnly
+    && a.maxContradiction !== null && a.maxContradiction < RETRY_SKIP_MAX_CONTRADICTION
+    && a.entityRecall >= RETRY_SKIP_MIN_ENTITY_RECALL);
 }
 
 /** A version passes when it was checked and passed, or was not checked at all. */

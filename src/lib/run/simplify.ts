@@ -51,7 +51,13 @@
  * (checkMainClaim) runs only if the frozen FULL model uses it. Embeddings are memoized per node, so the
  * original's premise vectors are computed once across retries and variants. A failing node is retried once with a retry
  * instruction naming the specific reasons, and the better version is kept;
- * its assessment (similarity, entityRecall, minEntailment, maxContradiction,
+ * A failure whose only kind is 'unsupported', with no contradiction above
+ * CONTRADICTION_MAX and every entity kept, is not retried (shouldRetry,
+ * RETRY_SKIP_* in config.ts): it stays "Not verified" and the node log says
+ * `retrySkipped: 'unsupported-only'`. With "Extra quality" such a failure
+ * no longer triggers the variants either; a total below QUALITY_THRESHOLD
+ * still does.
+ * Its assessment (similarity, entityRecall, minEntailment, maxContradiction,
  * nliChecked, passed, reasons, score, scoreModel) is stored on the result.
  * The retry instruction is prose built from the failed assessment
  * (buildRetryInstruction(retryInputOf(…)): missing items in quotes, never a
@@ -132,7 +138,7 @@ import { recordSession } from '../storage/progress';
 import { toPlainText } from '../render/format-output';
 import { checkMeaning, shouldCheckNode } from '../quality/semantic';
 import {
-  assessMeaning, buildRetryInstruction, candidatePasses, pickBetterVersion, retryInputOf, toStoredMeaning,
+  assessMeaning, buildRetryInstruction, candidatePasses, pickBetterVersion, retryInputOf, shouldRetry, toStoredMeaning,
 } from '../quality/meaning';
 import { findEcho, stripEchoLines } from '../quality/echo';
 import { pickBestCandidate, scoreCandidate, type ScoredCandidate } from '../quality/score';
@@ -314,6 +320,8 @@ interface Attempt extends ScoredCandidate {
 interface Generated {
   chosen: Attempt;
   candidates: CandidateLog[];
+  /** No retry: the first version failed on unsupported sentences only. */
+  retrySkipped?: 'unsupported-only';
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -427,8 +435,11 @@ export async function runSimplification(
   const timings: NodeTiming[] = [];
   const nodeLogs: NodeRunLog[] = [];
   let firstResultMs: number | null = null;
-  // NLI time of every assessed version, and the kept versions' sentence counts
+  // NLI time of every assessed version (and its ranking / scoring parts), and
+  // the kept versions' sentence counts
   const nliTimes: number[] = [];
+  const nliRankTimes: number[] = [];
+  const nliScoreTimes: number[] = [];
   let nliPairs = 0;
   let truncatedPairs = 0;
   let keptNliSentences = 0;
@@ -451,7 +462,7 @@ export async function runSimplification(
     source: NodeSource,
     nodeStartedAt: number,
     finalText: string | null,
-    details: Partial<Pick<NodeRunLog, 'variantUsed' | 'candidates' | 'meaning'>> = {},
+    details: Partial<Pick<NodeRunLog, 'variantUsed' | 'candidates' | 'meaning' | 'retrySkipped'>> = {},
   ) {
     const now = performance.now();
     const ms = now - nodeStartedAt;
@@ -471,6 +482,7 @@ export async function runSimplification(
       retries: Math.max(0, nodeCalls - 1),
       ms: Math.round(ms),
       candidates: details.candidates ?? [],
+      ...(details.retrySkipped && { retrySkipped: details.retrySkipped }),
       fkglBefore: fkgl(nodeModelInput || node.text),
       fkglAfter: finalText === null ? null : fkgl(toPlainText(finalText)),
       meaningStatus,
@@ -628,6 +640,8 @@ export async function runSimplification(
         ...(embedAvailable && { embed: (texts: string[]) => embedWith(memo, texts) }),
       });
       nliTimes.push(result.ms);
+      nliRankTimes.push(result.rankMs);
+      nliScoreTimes.push(result.scoreMs);
       nliPairs += result.pairs;
       truncatedPairs += result.truncatedPairs;
       console.log(
@@ -776,10 +790,12 @@ export async function runSimplification(
     const tried: Attempt[] = [first];
     let chosen = first;
 
+    let retrySkipped: Generated['retrySkipped'];
     if (checked) {
       const firstPasses = candidatePasses(first);
-      const reasons = firstPasses ? null : first.meaning;
-      if (extraQuality && (!firstPasses || first.scores.total < QUALITY_THRESHOLD)) {
+      // A failure worth fixing; an unsupported-only one is kept as "Not verified"
+      const reasons = !firstPasses && first.meaning && shouldRetry(first.meaning) ? first.meaning : null;
+      if (extraQuality && (reasons !== null || first.scores.total < QUALITY_THRESHOLD)) {
         for (const variant of EXTRA_VARIANTS.slice(0, MAX_MODEL_CALLS_PER_NODE - 1)) {
           try {
             const next = await attempt(variant, reasons, false);
@@ -792,7 +808,7 @@ export async function runSimplification(
           }
         }
         chosen = pickBestCandidate(tried);
-      } else if (!extraQuality && !firstPasses) {
+      } else if (!extraQuality && reasons !== null) {
         try {
           const retry = await attempt('standard', reasons, true);
           if (retry === null) return null;
@@ -803,6 +819,10 @@ export async function runSimplification(
           // The first version is still usable; don't fail the node over the retry
           console.warn('[Clarity] Meaning retry failed for node', node.id, err);
         }
+      }
+      if (!firstPasses && reasons === null && tried.length === 1) {
+        retrySkipped = 'unsupported-only';
+        console.log(`[Clarity] Node ${node.id}: no retry (unsupported sentences only, no contradiction, every entity kept)`);
       }
     }
 
@@ -841,7 +861,7 @@ export async function runSimplification(
       nliScoreMs: roundMs(t.meaning?.nliScoreMs ?? null),
       ...(t.echoStripped && { echoStripped: true }),
     }));
-    return { chosen, candidates };
+    return { chosen, candidates, ...(retrySkipped && { retrySkipped }) };
   }
 
   /**
@@ -936,6 +956,7 @@ export async function runSimplification(
         details = {
           variantUsed: chosen.variant,
           candidates: generated.candidates,
+          ...(generated.retrySkipped && { retrySkipped: generated.retrySkipped }),
           ...(chosen.meaning && { meaning: meaningLog(chosen.meaning, lite) }),
         };
         if (chosen.meaning) {
@@ -1022,6 +1043,16 @@ export async function runSimplification(
       (meaning.liteFailed > 0 ? ` (${formatFailureBreakdown(meaning.liteFailureBreakdown)})` : ''),
     );
   }
+  const mean = (xs: number[]) => (xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const measuredScoreMs = mean(nliScoreTimes);
+  const measuredRankMs = mean(nliRankTimes);
+  if (bench && meaning.avgNliMs !== null) {
+    console.log(
+      `[Clarity] NLI predicted ${Math.round(bench.predictedParagraphMs)} ms vs measured ` +
+      `${Math.round(meaning.avgNliMs)} ms per paragraph (scoring ${Math.round(measuredScoreMs ?? 0)} ms, ` +
+      `premise ranking ${Math.round(measuredRankMs ?? 0)} ms)`,
+    );
+  }
   if (meaning.coverage !== null && !meaning.thesisGrade) {
     console.warn(
       `[Clarity] Meaning coverage ${pct(meaning.coverage)} is below ${pct(THESIS_COVERAGE_MIN)}: ` +
@@ -1057,6 +1088,9 @@ export async function runSimplification(
       dtype: bench.dtype ?? 'q8',
       benchMs: Math.round(bench.ms),
       predictedParagraphMs: Math.round(bench.predictedParagraphMs),
+      measuredParagraphMs: roundMs(meaning.avgNliMs),
+      measuredScoreMs: roundMs(measuredScoreMs),
+      measuredRankMs: roundMs(measuredRankMs),
     },
     targetGrade: spec.targetGrade,
     depthTier: spec.depthTier,

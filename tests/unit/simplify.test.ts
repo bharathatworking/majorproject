@@ -571,13 +571,51 @@ describe('runSimplification thesis meaning standard', () => {
     expect(prompts[0]).toContain(`briefly explain them: ${(hinted as string[]).join(', ')}\n`);
   });
 
-  it('retries an unsupported sentence, naming it in the prompt', async () => {
+  it('does not retry a version whose only failure is an unsupported sentence: kept as Not verified', async () => {
     const first = 'Marie Curie won the Nobel Prize in 1903. She was born in Paris.';
     nodes = [CURIE];
     replies = { n0: [first, GOOD_CURIE] };
     scores = { [first]: 0.9, [GOOD_CURIE]: 0.92 };
     nliResults = {
+      [first]: makeEntailment({ minEntailment: 0.04, maxContradiction: 0.05, unsupportedSentences: ['She was born in Paris.'] }),
+    };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const saved = (await getDocument(doc.id))?.results[0];
+    expect(saved).toMatchObject({ simplifiedText: first, passed: false, failures: ['unsupported'] });
+    const node = (await lastLog(doc.id))?.nodes[0];
+    expect(node).toMatchObject({ retrySkipped: 'unsupported-only', modelCalls: 1, retries: 0, meaningStatus: 'failed' });
+  });
+
+  it('still retries an unsupported sentence when an entity is missing too', async () => {
+    const first = 'She won the Nobel Prize in 1903. She was born in Paris.';
+    nodes = [CURIE];
+    replies = { n0: [first, GOOD_CURIE] };
+    scores = { [first]: 0.95, [GOOD_CURIE]: 0.92 };
+    nliResults = {
       [first]: makeEntailment({ minEntailment: 0.04, unsupportedSentences: ['She was born in Paris.'] }),
+    };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await lastLog(doc.id))?.nodes[0].retrySkipped).toBeUndefined();
+  });
+
+  it('retries an unsupported sentence that is also contradicted, naming it in the prompt', async () => {
+    const first = 'Marie Curie won the Nobel Prize in 1903. She was born in Paris.';
+    nodes = [CURIE];
+    replies = { n0: [first, GOOD_CURIE] };
+    scores = { [first]: 0.9, [GOOD_CURIE]: 0.92 };
+    nliResults = {
+      [first]: makeEntailment({
+        minEntailment: 0.04, maxContradiction: 0.6,
+        unsupportedSentences: ['She was born in Paris.'],
+      }),
     };
     const doc = await storedDoc();
 
@@ -1211,8 +1249,8 @@ describe('runSimplification quality mode', () => {
   const GOOD_CURIE = 'Marie Curie won the Nobel Prize in 1903.';
   const DRIFT = 'Marie Curie liked science in 1903.';
   const SLOW_WASM: NliBenchRecord = {
-    backend: 'wasm', adapterVendor: null, ms: 2000, predictedParagraphMs: 4500,
-    version: 'dev', webgpuAdapter: false, device: 'auto', at: 1,
+    backend: 'wasm', adapterVendor: null, ms: 4500, predictedParagraphMs: 4500,
+    version: 'dev', webgpuAdapter: false, device: 'auto', at: 1, benchFormat: 2,
   };
   const lastLog = async (docId: string) => (await getDocument(docId))?.runLogs?.at(-1);
   const setMode = (qualityMode: string) => chrome.storage.sync.set({ qualityMode });
@@ -1311,6 +1349,20 @@ describe('runSimplification quality mode', () => {
     expect((await getDocument(doc.id))?.runLogs?.at(-1)?.nli).toMatchObject({ backend: 'webgpu', dtype: 'fp16' });
     expect(vi.mocked(console.log).mock.calls.map(c => String(c[0])))
       .toContainEqual(expect.stringMatching(/\(backend webgpu fp16 nvidia\)/));
+  });
+
+  it('reports the predicted NLI time next to what the run measured', async () => {
+    await setMode('full');
+    replies = { n0: [GOOD_CURIE] };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect((await lastLog(doc.id))?.nli).toMatchObject({
+      predictedParagraphMs: 90, measuredParagraphMs: 100, measuredScoreMs: 100, measuredRankMs: 0,
+    });
+    expect(vi.mocked(console.log).mock.calls.map(c => String(c[0])))
+      .toContainEqual('[Clarity] NLI predicted 90 ms vs measured 100 ms per paragraph (scoring 100 ms, premise ranking 0 ms)');
   });
 
   it('Auto decides from a matching stored benchmark without loading the model', async () => {

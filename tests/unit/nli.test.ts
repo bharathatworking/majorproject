@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  checkEntailment, checkMainClaim, createWorkerBackend, hypothesisFor, needsContext, NLI_BENCH_PAIRS, NliClient,
-  NliUnavailableError, prepareNli,
+  benchPairs, checkEntailment, checkMainClaim, createWorkerBackend, entailmentPairs, hypothesisFor, needsContext,
+  NLI_BENCH_PARAGRAPH, NliClient, NliUnavailableError, prepareNli,
   splitSentences, type BenchStore, type NliBackend, type NliPair, type NliProbs, type NliRequest,
   type NliResponse, type WorkerLike,
 } from '../../src/lib/quality/nli';
 import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_CONTRADICTION_AGG, NLI_TOP_PREMISES,
+  CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_BATCH_SIZE_WASM, NLI_CONTRADICTION_AGG, NLI_TOP_PREMISES, NLI_TYPICAL_SENTENCES,
 } from '../../src/lib/quality/config';
+import { BENCH_FORMAT, BENCH_PAIRS } from '../../src/lib/quality/mode';
 import type { NliBackendName, NliBenchRecord, NliDtype } from '../../src/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -488,7 +489,7 @@ describe('NLI benchmark', () => {
   const CTX = { version: '1.0.0', webgpuAdapter: true, device: 'auto' as const };
   const STORED: NliBenchRecord = {
     backend: 'webgpu', adapterVendor: 'nvidia', ms: 40, predictedParagraphMs: 90,
-    version: '1.0.0', webgpuAdapter: true, device: 'auto', at: 1,
+    version: '1.0.0', webgpuAdapter: true, device: 'auto', at: 1, benchFormat: BENCH_FORMAT,
   };
 
   function memoryStore(initial: NliBenchRecord | null = null) {
@@ -510,13 +511,34 @@ describe('NLI benchmark', () => {
     };
   }
 
-  it('times one batch after an untimed warm-up, bypassing the cache', async () => {
+  it('benchmarks a realistic paragraph: ~150 words, 6 simplified sentences, 18 pairs', () => {
+    const words = NLI_BENCH_PARAGRAPH.original.split(/\s+/).length;
+    expect(words).toBeGreaterThanOrEqual(140);
+    expect(words).toBeLessThanOrEqual(160);
+    expect(splitSentences(NLI_BENCH_PARAGRAPH.original)).toHaveLength(6);
+    expect(splitSentences(NLI_BENCH_PARAGRAPH.simplified)).toHaveLength(NLI_TYPICAL_SENTENCES);
+    expect(benchPairs()).toHaveLength(BENCH_PAIRS);
+    expect(BENCH_PAIRS).toBe(18);
+  });
+
+  it('builds the same pairs checkEntailment scores without embeddings', async () => {
     const backend = loadingBackend('wasm');
     const client = new NliClient(backend);
-    await client.scorePairs([...NLI_BENCH_PAIRS]);
-    expect(await client.bench([...NLI_BENCH_PAIRS])).toBeGreaterThanOrEqual(0);
-    expect(backend.score).toHaveBeenCalledTimes(3);
-    expect(NLI_BENCH_PAIRS).toHaveLength(8);
+    await checkEntailment(NLI_BENCH_PARAGRAPH.original, NLI_BENCH_PARAGRAPH.simplified, [], client);
+    const scored = backend.score.mock.calls.flatMap(c => c[0]);
+    expect(scored).toEqual(entailmentPairs(NLI_BENCH_PARAGRAPH.original, NLI_BENCH_PARAGRAPH.simplified));
+  });
+
+  it('times the pairs in the backend batch size after an untimed warm-up, bypassing the cache', async () => {
+    const backend = loadingBackend('wasm');
+    const client = new NliClient(backend);
+    await client.load();
+    const pairs = benchPairs();
+    await client.scorePairs(pairs);
+    backend.score.mockClear();
+    expect(await client.bench(pairs)).toBeGreaterThanOrEqual(0);
+    // wasm batches of 8: 18 pairs = 3 calls per pass, warm-up + timed pass
+    expect(backend.score).toHaveBeenCalledTimes(2 * Math.ceil(pairs.length / NLI_BATCH_SIZE_WASM));
   });
 
   it('loads, benchmarks and stores a fresh record', async () => {
@@ -525,7 +547,9 @@ describe('NLI benchmark', () => {
     const record = await prepareNli(new NliClient(loadingBackend('webgpu')), CTX, store);
     expect(record).toMatchObject({
       backend: 'webgpu', adapterVendor: 'nvidia', dtype: 'q8', version: '1.0.0', webgpuAdapter: true, device: 'auto',
+      benchFormat: BENCH_FORMAT,
     });
+    expect(record.predictedParagraphMs).toBe(record.ms);
     expect(record.predictedParagraphMs).toBeGreaterThanOrEqual(0);
     expect(store.save).toHaveBeenCalledWith(record);
   });
@@ -536,6 +560,15 @@ describe('NLI benchmark', () => {
     expect(await prepareNli(new NliClient(backend), CTX, store)).toEqual(STORED);
     expect(backend.score).not.toHaveBeenCalled();
     expect(store.save).not.toHaveBeenCalled();
+  });
+
+  it('benchmarks again over a stored record of the old 8-pair format', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const backend = loadingBackend('webgpu');
+    const { benchFormat: _old, ...oldFormat } = STORED;
+    const record = await prepareNli(new NliClient(backend), CTX, memoryStore(oldFormat));
+    expect(backend.score).toHaveBeenCalled();
+    expect(record.benchFormat).toBe(BENCH_FORMAT);
   });
 
   it('benchmarks again when the actual backend or the version changed', async () => {

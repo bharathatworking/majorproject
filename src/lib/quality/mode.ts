@@ -6,15 +6,19 @@
  *
  * Design decisions:
  *  - Auto measures instead of guessing from hardware: when the NLI model
- *    first loads, 8 fixed sentence pairs are timed (lib/quality/nli.ts
- *    prepareNli) and stored as `nli:bench`. Auto picks Lite only when there
+ *    first loads, a realistic paragraph is timed (lib/quality/nli.ts
+ *    prepareNli: NLI_BENCH_PARAGRAPH, ~150 words and 6 simplified sentences,
+ *    the 18 pairs the check would score for it, in the backend's batch
+ *    size) and stored as `nli:bench`. The old 8 short pairs, multiplied up,
+ *    predicted 1256 ms per paragraph where real runs measured 4875 ms (UK
+ *    run, WebGPU). Auto picks Lite only when there
  *    is no WebGPU AND that benchmark predicts more than
  *    AUTO_LITE_PARAGRAPH_MS of NLI per paragraph; otherwise Full. Without a
  *    benchmark (NLI model not loadable) it picks Full, and the run's NLI
  *    fallback then applies as before.
  *  - The benchmark is re-run when the extension version, the page's WebGPU
- *    adapter or the requested NLI device changes (isBenchStale), so a stored
- *    result from another setup never decides.
+ *    adapter, the requested NLI device or the benchmark format changes
+ *    (isBenchStale), so a stored result from another setup never decides.
  *  - Lite results are stored with nliChecked: false, so the existing thesis
  *    coverage rule keeps them out of the pass rate.
  *  - Pure apart from hasWebGpuAdapter, and import-light (config + types), so
@@ -31,8 +35,11 @@ import type { NliBenchRecord, NliDevice, QualityMode, QualityModeSetting } from 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-/** Pairs in the speed benchmark (lib/quality/nli.ts NLI_BENCH_PAIRS). */
-export const BENCH_PAIRS = 8;
+/** Pairs in the speed benchmark: NLI_TOP_PREMISES per sentence of the benchmark paragraph. */
+export const BENCH_PAIRS = NLI_TOP_PREMISES * NLI_TYPICAL_SENTENCES;
+
+/** Format of NliBenchRecord; 2 = the realistic paragraph. Older records are stale. */
+export const BENCH_FORMAT = 2;
 
 export interface QualityDecision {
   mode: QualityMode;
@@ -57,16 +64,17 @@ export interface BenchContext {
 // ─── Prediction ───────────────────────────────────────────────────────────────
 
 /**
- * NLI ms per typical paragraph from one benchmark batch: the per-pair time
- * times NLI_TOP_PREMISES pairs per sentence times NLI_TYPICAL_SENTENCES.
+ * NLI ms per typical paragraph: the benchmark already scores a typical
+ * paragraph (BENCH_PAIRS pairs), so it is the measured time itself.
  */
 export function predictParagraphMs(benchMs: number): number {
-  return (benchMs / BENCH_PAIRS) * NLI_TOP_PREMISES * NLI_TYPICAL_SENTENCES;
+  return benchMs;
 }
 
-/** True when `stored` was measured on another version, adapter state or device. */
+/** True when `stored` was measured on another version, adapter state, device or benchmark format. */
 export function isBenchStale(stored: NliBenchRecord, ctx: BenchContext): boolean {
-  return stored.version !== ctx.version
+  return (stored.benchFormat ?? 1) !== BENCH_FORMAT
+    || stored.version !== ctx.version
     || stored.webgpuAdapter !== ctx.webgpuAdapter
     || stored.device !== ctx.device;
 }

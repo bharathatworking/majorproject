@@ -119,6 +119,20 @@ export const GLOSSARY_EXEMPTION_MAX_RATE = 0.3;
 export const MAX_RETRY_REASONS = 3;
 
 /**
+ * Retry policy (meaning.ts shouldRetry): a failing version is NOT retried
+ * when its only failure is 'unsupported', its highest contradiction is below
+ * RETRY_SKIP_MAX_CONTRADICTION and its entity recall is at least
+ * RETRY_SKIP_MIN_ENTITY_RECALL. It is kept as "Not verified" (still failed
+ * in the pass rate). The frozen checker fails most faithful paragraphs on
+ * NLI support alone (eval/checker/REPORT.md), so such a retry costs a model
+ * call and an NLI pass for little gain (UK run: 19.9 s per model node).
+ * Retries still happen for entities, contradiction, similarity and echo.
+ */
+export const RETRY_SKIP_UNSUPPORTED_ONLY = true;
+export const RETRY_SKIP_MAX_CONTRADICTION = CONTRADICTION_MAX;
+export const RETRY_SKIP_MIN_ENTITY_RECALL = 1;
+
+/**
  * Echo guard (lib/quality/echo.ts): an output line is a copied list, not a
  * sentence, when it splits at commas into at least ECHO_MIN_PARTS parts, at
  * least ECHO_MIN_SOURCE_SHARE of them are entities or numbers from the
@@ -189,7 +203,10 @@ export const NLI_BUDGET_MS = 1000;
 
 // ─── Quality mode (lib/quality/mode.ts) ──────────────────────────────────────
 
-/** Simplified sentences in a typical paragraph, for the benchmark prediction. */
+/**
+ * Simplified sentences in a typical paragraph: the benchmark paragraph
+ * (lib/quality/nli.ts NLI_BENCH_PARAGRAPH) has this many.
+ */
 export const NLI_TYPICAL_SENTENCES = 6;
 
 /**

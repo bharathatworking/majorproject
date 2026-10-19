@@ -44,9 +44,13 @@
  *    512 tokens (scored truncated), and the check counts them. One client
  *    (and worker) lives per app tab; module state is fine here (this is an
  *    extension page, not the service worker).
- *  - Speed benchmark (prepareNli): after the model loads, 8 fixed pairs are
- *    timed once and stored (`nli:bench`) for the Auto quality mode
- *    (lib/quality/mode.ts); re-run when the version, adapter or device changes.
+ *  - Speed benchmark (prepareNli): after the model loads, the pairs of a
+ *    realistic paragraph (NLI_BENCH_PARAGRAPH: ~150 words, 6 simplified
+ *    sentences, 18 pairs built by entailmentPairs exactly as the check
+ *    builds them, word-overlap ranking) are timed once in the backend's
+ *    batch size and stored (`nli:bench`) for the Auto quality mode
+ *    (lib/quality/mode.ts); re-run when the version, adapter, device or
+ *    benchmark format changes.
  *  - Failures: a model that won't load (missing files, wasm blocked, timeout)
  *    throws NliUnavailableError; the run then falls back to SBERT + entities
  *    and tells the user once. A later call tries to load it again.
@@ -66,7 +70,7 @@ import {
   NLI_LOAD_TIMEOUT_MS, NLI_MODEL_ID, NLI_SCORE_TIMEOUT_MS, NLI_TOP_PREMISES,
 } from './config';
 import { selectExemptions, stripParentheticalDefinitions } from './glossary';
-import { isBenchStale, predictParagraphMs, type BenchContext } from './mode';
+import { BENCH_FORMAT, isBenchStale, predictParagraphMs, type BenchContext } from './mode';
 import { aggregate, buildPremises, lexicalRank, rankPremises, splitSentences } from './premises';
 import { nliVerdict } from './verdict';
 import type { EmbedFn } from './semantic';
@@ -351,13 +355,18 @@ export class NliClient {
   }
 
   /**
-   * ms for one batch of `pairs`, after an untimed warm-up batch (WebGPU
-   * compiles its shaders on the first run). Bypasses the cache.
+   * ms to score `pairs` in batches of the current batch size, as scorePairs
+   * would, after an untimed warm-up pass (WebGPU compiles its shaders on the
+   * first run). Bypasses the cache.
    */
   async bench(pairs: NliPair[]): Promise<number> {
-    await this.backend.score(pairs);
+    const size = this.currentBatchSize;
+    const pass = async () => {
+      for (let i = 0; i < pairs.length; i += size) await this.backend.score(pairs.slice(i, i + size));
+    };
+    await pass();
     const started = performance.now();
-    await this.backend.score(pairs);
+    await pass();
     return performance.now() - started;
   }
 
@@ -435,19 +444,54 @@ export function getNliClient(): NliClient {
 // ─── Benchmark ────────────────────────────────────────────────────────────────
 
 /**
- * Fixed pairs timed by the speed benchmark: sentence-length premises and
- * simplified hypotheses, like the pairs the check sends.
+ * The paragraph the speed benchmark scores: a made-up ~150-word, 6-sentence
+ * original and a 6-sentence simplification, written for the benchmark (not
+ * from the calibration, bake-off or benchmark sets), sized like a real node.
  */
-export const NLI_BENCH_PAIRS: readonly NliPair[] = [
-  ['The Treaty of Versailles was signed in June 1919 and formally ended the First World War.', 'The treaty that ended the First World War was signed in 1919.'],
-  ['Photosynthesis converts light energy into chemical energy stored in glucose molecules.', 'Plants use light to make sugar they can store.'],
-  ['The central bank raised interest rates by half a percentage point to slow inflation.', 'The bank made borrowing more expensive to fight rising prices.'],
-  ['Patients should take the medication twice daily with food unless a doctor advises otherwise.', 'Take the medicine two times a day with a meal.'],
-  ['The river flows north for 6,650 kilometres before emptying into the Mediterranean Sea.', 'The river is 6,650 kilometres long and ends in the sea.'],
-  ['Volcanic eruptions can release ash clouds that disrupt air travel across entire continents.', 'Ash from volcanoes can stop planes from flying.'],
-  ['The software update fixes a security flaw that allowed attackers to read stored passwords.', 'The update closes a hole that let hackers see passwords.'],
-  ['Applicants must submit the completed form and two forms of identification before the deadline.', 'You need to send the form and two IDs before the deadline.'],
-].map(([premise, hypothesis]) => ({ premise, hypothesis }));
+export const NLI_BENCH_PARAGRAPH = {
+  original:
+    'The city council approved a plan in March to renovate the central library, which first opened in 1962 ' +
+    'and has not been modernised since the late 1980s. The project will cost about 14 million euros, most of ' +
+    'which will come from a national cultural fund rather than from local taxes. During the two years of ' +
+    'construction, the building will close completely, and a smaller temporary branch will operate from a ' +
+    'former school on the east side of the river. Architects plan to replace the old heating system, add a ' +
+    'glass reading room on the roof, and make every floor accessible to wheelchair users. The renovated ' +
+    'library is expected to hold around 250,000 books, roughly a fifth more than today, along with a new ' +
+    'collection of digital media. Some residents have criticised the plan, arguing that the money would be ' +
+    'better spent on extending opening hours at the smaller neighbourhood branches.',
+  simplified:
+    'In March, the city council agreed to renovate the central library, which opened in 1962. ' +
+    'The work will cost about 14 million euros, mostly paid by a national culture fund. ' +
+    'The library will close for two years, and a small branch will open in an old school east of the river. ' +
+    'The plan adds a new heating system, a glass reading room on the roof, and wheelchair access on every floor. ' +
+    'The new library will hold about 250,000 books, a fifth more than now, plus digital media. ' +
+    'Some people say the money should go to longer opening hours at smaller branches instead.',
+} as const;
+
+/**
+ * The premise/hypothesis pairs checkEntailment scores for `simplified`
+ * without embeddings: the same hypotheses (sentences, parenthetical
+ * definitions removed, context for short or referring ones) and premises
+ * (SummaC sentences and pairs), each hypothesis against its
+ * NLI_TOP_PREMISES premises by word overlap.
+ */
+export function entailmentPairs(original: string, simplified: string, hintedWords: readonly string[] = []): NliPair[] {
+  const sentences = splitSentences(simplified)
+    .map(s => stripParentheticalDefinitions(s, hintedWords))
+    .filter(s => s !== '');
+  const premises = buildPremises(splitSentences(original));
+  if (premises.length === 0) premises.push(original.trim());
+  const hypotheses = sentences.map((_, i) => hypothesisFor(sentences, i));
+  const top = premises.length <= NLI_TOP_PREMISES
+    ? hypotheses.map(() => premises.map((_, i) => i))
+    : lexicalRank(premises, hypotheses);
+  return hypotheses.flatMap((hypothesis, i) => top[i].map(j => ({ premise: premises[j], hypothesis })));
+}
+
+/** The benchmark's pairs (BENCH_PAIRS of them). */
+export function benchPairs(): NliPair[] {
+  return entailmentPairs(NLI_BENCH_PARAGRAPH.original, NLI_BENCH_PARAGRAPH.simplified);
+}
 
 /** Where prepareNli reads and writes the stored benchmark. */
 export interface BenchStore {
@@ -472,12 +516,14 @@ export async function prepareNli(
   const stored = await store.get().catch(() => null);
   if (stored && !isBenchStale(stored, ctx) && stored.backend === info.backend) return stored;
 
-  const ms = await client.bench([...NLI_BENCH_PAIRS]);
+  const pairs = benchPairs();
+  const ms = await client.bench(pairs);
   const record: NliBenchRecord = {
     backend: info.backend,
     adapterVendor: info.adapter?.vendor || null,
     dtype: info.dtype ?? 'q8',
     ms,
+    benchFormat: BENCH_FORMAT,
     predictedParagraphMs: predictParagraphMs(ms),
     version: ctx.version,
     webgpuAdapter: ctx.webgpuAdapter,
@@ -485,7 +531,7 @@ export async function prepareNli(
     at: Date.now(),
   };
   console.log(
-    `[Clarity] NLI benchmark on ${describeBackend(info)}: ${Math.round(ms)} ms for ${NLI_BENCH_PAIRS.length} pairs ` +
+    `[Clarity] NLI benchmark on ${describeBackend(info)}: ${Math.round(ms)} ms for a ${pairs.length}-pair paragraph ` +
     `→ about ${Math.round(record.predictedParagraphMs)} ms per paragraph`,
   );
   await store.save(record).catch(err => console.warn('[Clarity] NLI benchmark save failed', err));

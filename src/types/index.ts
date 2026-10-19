@@ -275,8 +275,14 @@ export interface NliBenchRecord {
   adapterVendor: string | null;
   /** Weights the benchmark ran with (absent in records from before the fp16 experiment: q8). */
   dtype?: NliDtype;
-  /** ms for one batch of the 8 benchmark pairs (after a warm-up). */
+  /**
+   * ms to score the benchmark paragraph's pairs (format 2: the 18 pairs of
+   * NLI_BENCH_PARAGRAPH in the backend's batch size; format 1: one batch of 8
+   * short pairs), after a warm-up.
+   */
   ms: number;
+  /** Benchmark format (absent: 1, the 8-pair benchmark; such records are stale). */
+  benchFormat?: number;
   /** Predicted NLI ms per paragraph (lib/quality/mode.ts predictParagraphMs). */
   predictedParagraphMs: number;
   /** Extension version the benchmark ran on. */
@@ -453,6 +459,12 @@ export interface NodeRunLog {
    */
   fkglBefore?: number;
   fkglAfter?: number | null;
+  /**
+   * The first version failed only on unsupported sentences (low
+   * contradiction, every entity kept), so no retry was made (meaning.ts
+   * shouldRetry). Absent otherwise.
+   */
+  retrySkipped?: 'unsupported-only';
   /** Thesis category of the kept version (see MeaningSummary). */
   meaningStatus: MeaningStatus;
   /** Meaning check of the kept version (model or cache); absent when not checked. */
@@ -542,6 +554,15 @@ export interface RunLog {
     dtype?: NliDtype;
     benchMs: number;
     predictedParagraphMs: number;
+    /**
+     * What this run measured, to compare with the prediction (absent in logs
+     * before clarity-run-report/4; null when NLI never scored): mean NLI ms
+     * per scored version (premise ranking included), and of that the pair
+     * scoring and the premise ranking (all-minilm through Ollama).
+     */
+    measuredParagraphMs?: number | null;
+    measuredScoreMs?: number | null;
+    measuredRankMs?: number | null;
   } | null;
   targetGrade: number;
   depthTier: SimplificationSpec['depthTier'];

@@ -3,13 +3,13 @@ import prereg from '../../eval/checker/PREREG.md?raw';
 import {
   assessMeaning, buildRetryInstruction, candidatePasses, contradictionReason, driftReason,
   droppedEntityReason, echoLineReason, INSTRUCTION_ECHO_REASON, keyEntityTexts, lengthReason, mainPointReason,
-  meaningScore, MEANING_RETRY_INSTRUCTION, NO_SENTENCES_REASON, pickBetterVersion, RETRY_OPENING, retryInputOf,
+  meaningScore, MEANING_RETRY_INSTRUCTION, NO_SENTENCES_REASON, pickBetterVersion, RETRY_OPENING, retryInputOf, shouldRetry,
   SCORE_MODELS, toStoredMeaning, unsupportedReason,
   type MeaningDeps, type ScoreModels,
 } from '../../src/lib/quality/meaning';
 import { NLI_FEATURES, sigmoid } from '../../src/lib/quality/checker';
 import { RETRY_ECHO_PHRASES } from '../../src/lib/quality/echo';
-import { COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, MAX_RETRY_REASONS } from '../../src/lib/quality/config';
+import { COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, CONTRADICTION_MAX, MAX_RETRY_REASONS } from '../../src/lib/quality/config';
 import { makeAssessment, makeEntailment } from '../mocks/fixtures';
 import type { EntailmentCheck, Entity, MeaningCandidate } from '../../src/types';
 
@@ -362,6 +362,28 @@ describe('buildRetryInstruction', () => {
       'your last version', 'work them into your existing sentences', 'never output a list',
       'output only the rewritten text', 'do not list them separately',
     ]));
+  });
+});
+
+describe('shouldRetry', () => {
+  const failing = (over: Partial<import('../../src/types').MeaningAssessment>) =>
+    makeAssessment({ passed: false, failures: ['unsupported'], maxContradiction: 0.05, entityRecall: 1, ...over });
+
+  it('skips an unsupported-only failure with low contradiction and every entity kept', () => {
+    expect(shouldRetry(failing({}))).toBe(false);
+  });
+
+  it('retries when contradiction reaches the limit, an entity is missing, or NLI did not run', () => {
+    expect(shouldRetry(failing({ maxContradiction: CONTRADICTION_MAX }))).toBe(true);
+    expect(shouldRetry(failing({ entityRecall: 0.9 }))).toBe(true);
+    expect(shouldRetry(failing({ maxContradiction: null }))).toBe(true);
+  });
+
+  it('retries entities, contradiction, similarity and echo failures', () => {
+    for (const kind of ['entities', 'contradiction', 'similarity', 'echo'] as const) {
+      expect(shouldRetry(failing({ failures: [kind] }))).toBe(true);
+      expect(shouldRetry(failing({ failures: ['unsupported', kind] }))).toBe(true);
+    }
   });
 });
 

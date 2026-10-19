@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  BENCH_PAIRS, chooseQualityMode, evidenceOf, hasWebGpuAdapter, isBenchStale, predictParagraphMs,
+  BENCH_FORMAT, BENCH_PAIRS, chooseQualityMode, evidenceOf, hasWebGpuAdapter, isBenchStale, predictParagraphMs,
   resetWebGpuAdapterCache,
   type SpeedEvidence,
 } from '../../src/lib/quality/mode';
@@ -10,17 +10,17 @@ import { extensionVersion, getNliBench, getNliDevice, saveNliBench } from '../..
 import { installChromeMock } from '../mocks/chrome';
 import type { NliBenchRecord } from '../../src/types';
 
-/** Speed evidence from a fake benchmark time (ms for the 8 pairs). */
+/** Speed evidence from a fake benchmark time (ms for the benchmark paragraph). */
 function measured(benchMs: number, webgpu: boolean): SpeedEvidence {
   return { webgpu, benchMs, predictedParagraphMs: predictParagraphMs(benchMs) };
 }
 
-/** Benchmark ms that predicts exactly `paragraphMs`. */
-const benchFor = (paragraphMs: number) => (paragraphMs / (NLI_TOP_PREMISES * NLI_TYPICAL_SENTENCES)) * BENCH_PAIRS;
+/** Benchmark ms that predicts exactly `paragraphMs` (the benchmark is one typical paragraph). */
+const benchFor = (paragraphMs: number) => paragraphMs;
 
 const RECORD: NliBenchRecord = {
   backend: 'wasm', adapterVendor: null, ms: 900, predictedParagraphMs: predictParagraphMs(900),
-  version: '1.0.0', webgpuAdapter: false, device: 'auto', at: 1,
+  version: '1.0.0', webgpuAdapter: false, device: 'auto', at: 1, benchFormat: BENCH_FORMAT,
 };
 
 afterEach(() => {
@@ -31,9 +31,10 @@ afterEach(() => {
 // predictParagraphMs
 // ---------------------------------------------------------------------------
 describe('predictParagraphMs', () => {
-  it('scales the per-pair time to top premises × typical sentences', () => {
-    expect(predictParagraphMs(800)).toBe(100 * NLI_TOP_PREMISES * NLI_TYPICAL_SENTENCES);
+  it('is the measured time: the benchmark already scores a typical paragraph', () => {
+    expect(predictParagraphMs(800)).toBe(800);
     expect(predictParagraphMs(0)).toBe(0);
+    expect(BENCH_PAIRS).toBe(NLI_TOP_PREMISES * NLI_TYPICAL_SENTENCES);
   });
 });
 
@@ -93,6 +94,11 @@ describe('isBenchStale', () => {
 
   it('is stale when the requested device changed', () => {
     expect(isBenchStale(RECORD, { ...ctx, device: 'wasm' })).toBe(true);
+  });
+
+  it('is stale for a record of the old 8-pair benchmark (no benchFormat)', () => {
+    const { benchFormat: _old, ...oldRecord } = RECORD;
+    expect(isBenchStale(oldRecord, ctx)).toBe(true);
   });
 });
 

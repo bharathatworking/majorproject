@@ -29,7 +29,7 @@
 import pairsRaw from '../../../eval/nli-calibration/pairs.jsonl?raw';
 import paragraphsRaw from '../../../eval/nli-calibration/paragraphs.jsonl?raw';
 import { OllamaProvider } from '../llm/ollama-provider';
-import { checkEntailment, createNliClient, NLI_BENCH_PAIRS, type NliClient } from './nli';
+import { benchPairs, checkEntailment, createNliClient, type NliClient } from './nli';
 import type { EntailmentCheck, NliDevice } from '../../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -136,7 +136,7 @@ async function runDtype(
   embed: ((texts: string[]) => Promise<number[][]>) | undefined,
 ): Promise<DtypeRun> {
   const info = await client.load();
-  await client.bench([...NLI_BENCH_PAIRS]);  // warm-up: shaders compiled, caches filled
+  await client.bench(benchPairs());  // warm-up: shaders compiled, caches filled
 
   const run: DtypeRun = {
     device,
