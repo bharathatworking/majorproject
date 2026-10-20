@@ -1,0 +1,57 @@
+{
+  "_comment": "Shared by tests/unit/train-data.test.ts (TS matcher) and `python training/prepare/dedupe.py --self-test` (Python matcher), so the two cannot drift. Normalise = NFKC, lowercase, remove Unicode punctuation (P*) and symbols (S*), collapse whitespace. A text matches a reserved source when it equals a reserved text after normalising, or when the share of its 8-grams found in that source, or the share of one reserved item's 8-grams found in it, is >= 0.5.",
+  "normalise": [
+    { "in": "  The Cat,  sat — on the MAT! ", "out": "the cat sat on the mat" },
+    { "in": "Don't stop: it's 1,000 km² (approx.)", "out": "dont stop its 1000 km2 approx" },
+    { "in": "Café\tdéjà\nvu", "out": "café déjà vu" },
+    { "in": "ﬁne Ｆｕｌｌ width", "out": "fine full width" }
+  ],
+  "match": [
+    {
+      "why": "exact after normalising",
+      "reserved": [{ "source": "asset-test", "text": "The cat sat on the mat." }],
+      "text": "the CAT sat on the mat",
+      "expected": ["asset-test"]
+    },
+    {
+      "why": "short texts below 8 words only match exactly",
+      "reserved": [{ "source": "asset-test", "text": "The cat sat on the mat." }],
+      "text": "The cat sat on the mat today.",
+      "expected": []
+    },
+    {
+      "why": "a reserved sentence inside a longer training paragraph (reserved-side share 1.0)",
+      "reserved": [{ "source": "model-bakeoff", "text": "one two three four five six seven eight nine ten" }],
+      "text": "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu one two three four five six seven eight nine ten nu xi omicron pi rho sigma tau upsilon phi chi psi omega",
+      "expected": ["model-bakeoff"]
+    },
+    {
+      "why": "a training sentence inside a reserved paragraph (training-side share 1.0)",
+      "reserved": [{ "source": "nli-calibration", "text": "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu one two three four five six seven eight nine ten nu xi omicron pi rho sigma tau upsilon phi chi psi omega" }],
+      "text": "one two three four five six seven eight nine ten",
+      "expected": ["nli-calibration"]
+    },
+    {
+      "why": "exactly half of the training text's 8-grams (3 of 6) is the threshold and matches",
+      "reserved": [{ "source": "turk-val", "text": "w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12" }],
+      "text": "w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 x1 x2 x3",
+      "expected": ["turk-val"]
+    },
+    {
+      "why": "below half on both sides (2 of 6 training 8-grams, 2 of 15 reserved) does not match",
+      "reserved": [{ "source": "turk-val", "text": "w1 w2 w3 w4 w5 w6 w7 w8 w9 q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12 q13" }],
+      "text": "w1 w2 w3 w4 w5 w6 w7 w8 w9 x1 x2 x3 x4",
+      "expected": []
+    },
+    {
+      "why": "every source that matches is reported",
+      "reserved": [
+        { "source": "asset-val", "text": "Paris is the capital and largest city of France." },
+        { "source": "turk-val", "text": "Paris is the capital and largest city of France" },
+        { "source": "fixtures", "text": "Something else entirely, about the United Kingdom and its four countries." }
+      ],
+      "text": "Paris is the capital and largest city of France.",
+      "expected": ["asset-val", "turk-val"]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+# Local Python 3.11 venv for Prompt 10 (training/.venv). Not used on Colab:
+# the notebook installs its own pinned Unsloth stack.
+#   py -3.11 -m venv training/.venv
+#   training/.venv/Scripts/python.exe -m pip install -r training/requirements.txt
+# download.py / dedupe.py
+huggingface_hub==0.36.2
+pyarrow==26.0.0
+# evaluate.py (SARI, BERTScore, bootstrap)
+numpy==2.4.6
+pandas==3.0.6
+torch==2.14.1
+transformers==4.57.6
+tokenizers==0.22.2
+datasets==4.3.0
+evaluate==0.4.6
+sacrebleu==2.6.0
+sacremoses==0.2.0
+bert-score==0.3.13
+# colab/check_notebook.py
+nbformat==5.11.1

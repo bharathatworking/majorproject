@@ -7,3 +7,11 @@ public/models/
 public/ort/
 
 CLAUDE.md
+
+# Prompt 10 training (large files; STATS.md is committed)
+training/.venv/
+training/data/*
+!training/data/STATS.md
+training/out/
+*.gguf
+__pycache__/

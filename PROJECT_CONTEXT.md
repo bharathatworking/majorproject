@@ -69,10 +69,13 @@ scripts/checker/             combined meaning score (Prompt 9.5): fit on calibra
   test-heldout.mjs           npm run checker:test: the one held-out test on the bake-off labels → REPORT.md (refuses to run twice)
   rescale-quality.mjs        npm run checker:rescale: stage 7 QUALITY_THRESHOLD by quantile matching on the 81 calibration items (reads RESCALE_FILES only, writes nothing)
   discussion.mjs             npm run checker:discuss: EXPLORATORY post-hoc analysis of the held-out test (ROC, shift, false-fail drivers) → eval/checker/DISCUSSION.md only
+scripts/train-data/          Prompt 10 SFT data (no src/ change): lib.ts (pure: dedupe matcher twin of dedupe.py, A4 filters, grade clamp, pseudo-paragraph runs, water-filling grade balance, split by article; tested), render.ts (the app's exact prompt for one text at one grade, via buildPrompt; parity-tested), build-sft.mjs (npm run train:data), dedupe-cases.json (shared TS/Python matcher cases)
+scripts/train-eval/          Prompt 10 Part C: lib.ts (pure: pre-registered item selection, grade hit, entity recall, resume; tested), generate.mjs (npm run train:eval:gen: base vs clarity-simplify, temperature 0, --select-items, --dry-run, --flags-only)
+training/                    Prompt 10 LoRA fine-tune (README.md is the step-by-step): DATA_LICENSES.md, requirements.txt (Python 3.11 venv at training/.venv), prepare/download.py + dedupe.py, colab/train_clarity_lora.ipynb + check_notebook.py, Modelfile.template, evaluate.py, eval/PREREG.md + items.json (+ REPORT.md, results.json after Part C), data/STATS.md (the rest of data/, out/, *.gguf and .venv/ are git-ignored)
 eval/nli-calibration/        paragraphs.jsonl (67 originals), pairs.jsonl (60 labelled sentences), paragraph-items.jsonl, labels.csv, SOURCES.md, README.md
 eval/model-bakeoff/          bakeoff-only paragraphs.jsonl (40), SOURCES.md, README.md, outputs.jsonl, labels_bakeoff.csv (labelled), blind_key.json, models.json (licences, Unsloth evidence), REPORT.md
 eval/checker/                features_calib.csv (81), features_bakeoff.csv (119), fit.json, PREREG.md (frozen values), REPORT.md (held-out test), DISCUSSION.md (post-hoc, exploratory)
-eval/fixtures/               DEV regression fixtures only, excluded from every benchmark, calibration, bake-off and training set: uk-wiki-paste.txt (8 UK Wikipedia paragraphs), runs/uk-wiki-2026-10-19.json (its run report), README.md
+eval/fixtures/               DEV regression fixtures only, excluded from every benchmark, calibration, bake-off and training set: uk-wiki-paste.txt (8 UK Wikipedia paragraphs), runs/uk-wiki-2026-10-19.json (its run report, format 3; tests read it), README.md. Any other runs/*.json is a local, uncommitted export (dedupe.py still reads it)
 public/models/, public/ort/  git-ignored; copied by Vite into dist/models/ and dist/ort/
 src/
   manifest.ts                MV3 manifest (defineManifest); holds the pinned `key`
@@ -103,7 +106,7 @@ src/
 tests/
   mocks/          chrome.ts (installChromeMock), fixtures.ts (makeReport, makeDocInput,
                   makeAssessment, makeEntailment, makeRunMeaningSummary)
-  unit/           30 *.test.ts files (see section 8)
+  unit/           37 *.test.ts files (see section 8)
 ```
 
 `dist/`, `node_modules/` and `coverage/` are git-ignored.
@@ -286,6 +289,8 @@ npm run checker:fit        # fit FULL / LITE on the calibration features only �
 npm run checker:test       # the one held-out test → eval/checker/REPORT.md (refuses once REPORT.md exists)
 npm run checker:rescale    # stage 7 QUALITY_THRESHOLD by quantile matching on calibration only (prints; copy into config.ts)
 npm run checker:discuss    # post-hoc, exploratory: eval/checker/DISCUSSION.md (reads the test labels; writes nothing else)
+npm run train:data         # Prompt 10: training/data/sft_train.jsonl + sft_dev.jsonl + STATS.md (after training/prepare/download.py and dedupe.py; see training/README.md)
+npm run train:eval:gen     # Prompt 10 Part C: base vs clarity-simplify on training/eval/items.json → training/out/eval_generations.jsonl, then training/evaluate.py
 npm run build          # production build -> dist/
 npm run dev            # crxjs watch / hot reload
 npm test               # vitest run (tests/unit/**/*.test.ts)
@@ -313,7 +318,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 ## 8. Current status
 
 - **Done:** phases 1 to 4 (capture and documents, Reading, Progress and Settings, paste and PDF), reading presets, purpose-aware prompt rules and the lexical hint, the stage 6C semantic check, the performance work (skip easy nodes, result cache, start at the visible node, model setting, lazy loading), stage 7 (candidate scoring, prompt variants, run report) and Prompt 9 (the thesis meaning standard: SBERT ≥ 0.87 + entities + local NLI, glossary exemptions, pass rate and coverage).
-- **Health on 2026-10-19:** `npm test` passes (30 files, 636 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
+- **Health on 2026-10-20:** `npm test` passes (37 files, 825 tests), `npm run typecheck` passes with 0 errors, and `npm run build` passes.
 - **NLI premise strategy and speed (decided 2026-10-15).** The Chrome run of the whole-paragraph-premise engine (wasm) measured **13,376 ms of NLI per paragraph** (about 1 s per sentence, budget 500 ms, about 73% of run time) and 0/3 passed at average similarity 0.87. Decision: SummaC sentence premises pruned to the top 3 by all-minilm, one batch per node, WebGPU first with wasm fallback, the stricter glossary rule, and the Auto/Full/Lite quality mode. Not done (by decision): a bigger in-app NLI model, and a contradiction-only check. Multi-threaded wasm (COOP/COEP) is investigated but not applied.
 - **NLI calibration (2026-10-15, `eval/nli-calibration/`, `npm run calibrate-nli`).**
   - **The set:** 15 originals:
@@ -396,6 +401,18 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
     - **Target hit:** every model overshoots below grade 8 (mean FKGL after 5.7–6.2), so hits within ±1 are low (15–28%).
     - **Default switched (2026-10-19):** `DEFAULT_LLM_MODEL` is now `qwen3:4b-instruct-2507-q4_K_M` (Apache 2.0; `qwen2.5:3b`'s Qwen Research licence is non-commercial and blocks a public release). Saved `llmModel` settings are kept. The app now sends `think: false` to it by the bake-off's rule (`thinkSetting`). The cache key includes the model, so earlier cache entries simply miss.
   - **Rule:** the bake-off paragraphs are never reused in the benchmark, the calibration or a training set.
+- **Prompt 10: LoRA fine-tune `clarity-simplify` (2026-10-20; Parts A, B and the Part C code; `training/README.md`).**
+  - **Why:** the bake-off showed every model over-simplifies (asked grade 8, FKGL about 6; qwen3 hit the target ±1 only 17.5% of the time). The fix is **grade conditioning**: each training prompt asks for the grade its reference really has.
+  - **Data (Part A):** Wiki-Auto config `auto` (Jiang et al. 2020; parquet from the Hub's `refs/convert/parquet`, no loader script), 586,150 aligned groups from 138,095 article pairs.
+    - `dedupe.py` removed 1,465 that overlap ASSET val/test, TurkCorpus val/test, the calibration, bake-off or fixture texts (exact or 8-gram containment ≥ 0.5 either way).
+    - `build-sft.mjs` applies the app's own FKGL, NER and prompt: 60% pseudo-paragraphs (2–5 consecutive pairs of one paragraph), filters (source < 8 words, word ratio outside 0.4–1.3, FKGL drop < 0.5, added entity, lost main-claim number, tier 'none'), a keep slice ≤ 5% (unchanged pairs, target = source), and g = clamp(round(FKGL(simple)), 3, 12).
+    - Grades are balanced by water-filling, hints are truthful (the app's difficult words that the reference really replaced; author's decision), and the split is by article: 15,000 train + 500 dev.
+    - Numbers are in `training/data/STATS.md`.
+  - **Training (Part B):** `training/colab/train_clarity_lora.ipynb` (free T4): Unsloth 2026.10.3, 4-bit, LoRA r 16 / α 16 on 7 projections, 1 epoch, lr 2e-4 cosine, batch 2 × 8, fp16, loss on the answer only, eval and Drive checkpoints every 100 steps with auto-resume, GGUF q4_k_m export (16-bit merge fallback).
+    - The training text is built exactly as Ollama renders it: the HF template of this checkpoint inserts an empty `<think></think>` block that Ollama's template never sends. `training/Modelfile.template` copies the base model's TEMPLATE, stops and sampling verbatim, without the temperature line.
+  - **Evaluation (Part C, pre-registered in `training/eval/PREREG.md`; not run yet):** 300 ASSET validation sentences + 100 pseudo-paragraphs (not already simple at grade 8) at targets 6 and 8, both models, temperature 0. Measures are grade hit, SARI (10 references), entities kept, near copy, BERTScore and speed, with paired bootstrap CIs.
+    - "Better" = grade hit +15 points AND SARI −1.0 at most AND entities kept −2 points at most AND fine-tuned near copies ≤ 5%.
+  - **Rule:** ASSET test and TurkCorpus val/test are reserved for the final benchmark: stored without references, never trained or generated on.
 - **Multi-threaded wasm (investigated, not applied).**
   - **What it would take:** the manifest keys `cross_origin_opener_policy: { value: 'same-origin' }` and `cross_origin_embedder_policy: { value: 'require-corp' }`, which make the app page `crossOriginIsolated`, plus `numThreads > 1` in the worker.
   - **What already fits:**
@@ -407,7 +424,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
     - Whether host-permission fetches to `localhost:11434` still pass under `require-corp`.
     - Whether nested workers inherit COEP correctly.
   - **Status:** not applied; needs the author's approval and a throwaway-build test.
-- **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, similarity, glossary, premises, nli, verdict, values, progress, quality-mode, meaning, score, run-log, timing, simplify, text-blocks, bakeoff (`scripts/bakeoff/lib.ts`), checker (`src/lib/quality/checker.ts`), checker-fit (`scripts/checker/lib.ts`, including the guard that the fit and the rescale cannot read the bake-off files, and the check that `QUALITY_THRESHOLD` keeps the calibration trigger share within 5 points of the old one). `simplify.test.ts` stubs `combinedScore` with a documented threshold stub (the run loop is tested, not the weights).
+- **Test files** (`tests/unit/`): metrics, node-grade, difficult-words, format-output, ner, utils, resolver, presets, prompt-builder, ollama-stream, ollama-provider, documents, cache, segmenter, semantic, similarity, glossary, premises, nli, verdict, values, progress, quality-mode, meaning, score, run-log, timing, simplify, text-blocks, bakeoff (`scripts/bakeoff/lib.ts`), train-data (`scripts/train-data/lib.ts` + the `render.ts` prompt parity with `buildPrompt`, the dedupe cases shared with `dedupe.py`), train-eval (`scripts/train-eval/lib.ts`), checker (`src/lib/quality/checker.ts`), checker-fit (`scripts/checker/lib.ts`, including the guard that the fit and the rescale cannot read the bake-off files, and the check that `QUALITY_THRESHOLD` keeps the calibration trigger share within 5 points of the old one). `simplify.test.ts` stubs `combinedScore` with a documented threshold stub (the run loop is tested, not the weights).
 - **Known issues (not yet fixed):**
   - Progress records the *target grade setting* per session, not measured reading ability.
   - Leftovers from the old Chrome built-in AI provider: the unused `_onProgress` parameter of `createBaseSession`, the `'list'` and `'table'` entries in `STORED_TYPE`, and the `'downloadable'` and `'downloading'` values in `LLMAvailability`. A built-in AI (Gemini Nano) provider is **cancelled** and will not be added.
@@ -415,7 +432,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - The README now states Chrome 138+, matching the manifest.
 - **Planned work after stage 7, in this order:**
   1. **Prompt 9 follow-up:** measure NLI ms per paragraph in Chrome on WebGPU and on wasm. (`ENTAILMENT_MIN` no longer decides the verdict; the frozen combined score does. G8, an external SummaC / LLM-AggreFact check, is still open.)
-  2. **Prompt 10: fine-tuned model.** A LoRA fine-tune named `clarity-simplify`, built in a `training/` folder on Colab from `Qwen3-4B-Instruct-2507`, the winner of the Prompt 9.4 bake-off (`eval/model-bakeoff/REPORT.md`), and exported as GGUF for Ollama.
+  2. **Prompt 10: fine-tuned model (in progress).** A LoRA fine-tune named `clarity-simplify`, built in `training/` on Colab from `Qwen3-4B-Instruct-2507`, the winner of the Prompt 9.4 bake-off (`eval/model-bakeoff/REPORT.md`), and exported as GGUF for Ollama. Parts A (data), B (notebook, Modelfile) and the Part C code plus `training/eval/PREREG.md` are done; training on Colab and the Part C run are next (see "Prompt 10" above).
   3. **Prompt 11:** integrate the fine-tuned model into the hybrid engine.
   4. **Prompt 12:**
      - Web URL input

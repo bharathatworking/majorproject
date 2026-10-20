@@ -23,7 +23,9 @@
     "checker:fit": "node scripts/checker/fit.mjs",
     "checker:test": "node scripts/checker/test-heldout.mjs",
     "checker:rescale": "node scripts/checker/rescale-quality.mjs",
-    "checker:discuss": "node scripts/checker/discussion.mjs"
+    "checker:discuss": "node scripts/checker/discussion.mjs",
+    "train:data": "node scripts/train-data/build-sft.mjs",
+    "train:eval:gen": "node scripts/train-eval/generate.mjs"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.1",
