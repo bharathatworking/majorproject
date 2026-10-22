@@ -401,7 +401,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
     - **Target hit:** every model overshoots below grade 8 (mean FKGL after 5.7–6.2), so hits within ±1 are low (15–28%).
     - **Default switched (2026-10-19):** `DEFAULT_LLM_MODEL` is now `qwen3:4b-instruct-2507-q4_K_M` (Apache 2.0; `qwen2.5:3b`'s Qwen Research licence is non-commercial and blocks a public release). Saved `llmModel` settings are kept. The app now sends `think: false` to it by the bake-off's rule (`thinkSetting`). The cache key includes the model, so earlier cache entries simply miss.
   - **Rule:** the bake-off paragraphs are never reused in the benchmark, the calibration or a training set.
-- **Prompt 10: LoRA fine-tune `clarity-simplify` (2026-10-20; Parts A, B and the Part C code; `training/README.md`).**
+- **Prompt 10: LoRA fine-tune `clarity-simplify` (2026-10-20 to 2026-10-22; `training/README.md`). Result: NOT better; the base model stays the default.**
   - **Why:** the bake-off showed every model over-simplifies (asked grade 8, FKGL about 6; qwen3 hit the target ±1 only 17.5% of the time). The fix is **grade conditioning**: each training prompt asks for the grade its reference really has.
   - **Data (Part A):** Wiki-Auto config `auto` (Jiang et al. 2020; parquet from the Hub's `refs/convert/parquet`, no loader script), 586,150 aligned groups from 138,095 article pairs.
     - `dedupe.py` removed 1,465 that overlap ASSET val/test, TurkCorpus val/test, the calibration, bake-off or fixture texts (exact or 8-gram containment ≥ 0.5 either way).
@@ -410,8 +410,11 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
     - Numbers are in `training/data/STATS.md`.
   - **Training (Part B):** `training/colab/train_clarity_lora.ipynb` (free T4): Unsloth 2026.10.3, 4-bit, LoRA r 16 / α 16 on 7 projections, 1 epoch, lr 2e-4 cosine, batch 2 × 8, fp16, loss on the answer only, eval and Drive checkpoints every 100 steps with auto-resume, GGUF q4_k_m export (16-bit merge fallback).
     - The training text is built exactly as Ollama renders it: the HF template of this checkpoint inserts an empty `<think></think>` block that Ollama's template never sends. `training/Modelfile.template` copies the base model's TEMPLATE, stops and sampling verbatim, without the temperature line.
-  - **Evaluation (Part C, pre-registered in `training/eval/PREREG.md`; not run yet):** 300 ASSET validation sentences + 100 pseudo-paragraphs (not already simple at grade 8) at targets 6 and 8, both models, temperature 0. Measures are grade hit, SARI (10 references), entities kept, near copy, BERTScore and speed, with paired bootstrap CIs.
+  - **Evaluation (Part C, pre-registered in `training/eval/PREREG.md`, run once on 2026-10-22, `training/eval/REPORT.md`):** 300 ASSET validation sentences + 100 pseudo-paragraphs (not already simple at grade 8) at targets 6 and 8, both models, temperature 0. Measures are grade hit, SARI (10 references), entities kept, near copy, BERTScore and speed, with paired bootstrap CIs.
     - "Better" = grade hit +15 points AND SARI −1.0 at most AND entities kept −2 points at most AND fine-tuned near copies ≤ 5%.
+    - **Result (pooled, 800 prompts per model): not better.** Grade hit 25.4% → 25.5% (+0.1 points [−4.0, +4.4]); SARI 38.6 → 41.4 (+2.8 [+2.1, +3.5]); entities kept 96.3% → 86.5% (−9.8 points [−11.9, −7.7]); near copies 2.6% → 19.0%; BERTScore F1 vs source 0.46 → 0.70; 4.1 → 2.3 s per 100 words (GPU). Three of four criteria failed.
+    - **Why (post hoc, exploratory):** the base over-simplifies and expands (481/800 more than a grade below target, length ratio 1.49, sometimes inventing sentences); the fine-tune under-simplifies and deletes (363/800 more than a grade above target, length ratio 0.76, 192/800 outputs drop an entity) and gave the same output at grades 6 and 8 for 224 of 400 items. It learned Simple Wikipedia's deletion style, not grade control. Likely causes: deletion-heavy references (the entity filter protected only main-claim numbers), the keep slice and light-edit references (copying), and a weak grade signal in the prompt.
+    - The GGUF used: `training/out/clarity-simplify-q4_k_m.gguf`, SHA-256 `281a45898a37cc06c00793f3c040cb883971cd1b44f3606312230ed01165cc5c` (Ollama tag `clarity-simplify:latest`). Outputs: `training/eval/generations.jsonl`; numbers: `training/eval/results.json`.
   - **Rule:** ASSET test and TurkCorpus val/test are reserved for the final benchmark: stored without references, never trained or generated on.
 - **Multi-threaded wasm (investigated, not applied).**
   - **What it would take:** the manifest keys `cross_origin_opener_policy: { value: 'same-origin' }` and `cross_origin_embedder_policy: { value: 'require-corp' }`, which make the app page `crossOriginIsolated`, plus `numThreads > 1` in the worker.
@@ -432,8 +435,8 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - The README now states Chrome 138+, matching the manifest.
 - **Planned work after stage 7, in this order:**
   1. **Prompt 9 follow-up:** measure NLI ms per paragraph in Chrome on WebGPU and on wasm. (`ENTAILMENT_MIN` no longer decides the verdict; the frozen combined score does. G8, an external SummaC / LLM-AggreFact check, is still open.)
-  2. **Prompt 10: fine-tuned model (in progress).** A LoRA fine-tune named `clarity-simplify`, built in `training/` on Colab from `Qwen3-4B-Instruct-2507`, the winner of the Prompt 9.4 bake-off (`eval/model-bakeoff/REPORT.md`), and exported as GGUF for Ollama. Parts A (data), B (notebook, Modelfile) and the Part C code plus `training/eval/PREREG.md` are done; training on Colab and the Part C run are next (see "Prompt 10" above).
-  3. **Prompt 11:** integrate the fine-tuned model into the hybrid engine.
+  2. **Prompt 10: fine-tuned model (done 2026-10-22, negative result).** The LoRA `clarity-simplify` did not beat its base on the pre-registered test (see "Prompt 10" above), so `DEFAULT_LLM_MODEL` stays `qwen3:4b-instruct-2507-q4_K_M`.
+  3. **Prompt 11:** originally "integrate the fine-tuned model"; since it was not better, attack the grade problem in the prompt or the run loop instead (e.g. re-ask when the output's FKGL misses the target), with a new pre-registration before it is measured.
   4. **Prompt 12:**
      - Web URL input
      - keyword highlighting

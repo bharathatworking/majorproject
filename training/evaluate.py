@@ -288,6 +288,7 @@ def write_report(items, pairs, results, generations_path):
 
 
 def main():
+    sys.stdout.reconfigure(encoding='utf-8')  # the Windows console defaults to cp1252
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--generations', default=str(ROOT / 'training' / 'out' / 'eval_generations.jsonl'))
     parser.add_argument('--self-test', action='store_true')
