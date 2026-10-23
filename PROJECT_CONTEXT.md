@@ -71,10 +71,12 @@ scripts/checker/             combined meaning score (Prompt 9.5): fit on calibra
   discussion.mjs             npm run checker:discuss: EXPLORATORY post-hoc analysis of the held-out test (ROC, shift, false-fail drivers) → eval/checker/DISCUSSION.md only
 scripts/train-data/          Prompt 10 SFT data (no src/ change): lib.ts (pure: dedupe matcher twin of dedupe.py, A4 filters, grade clamp, pseudo-paragraph runs, water-filling grade balance, split by article; tested), render.ts (the app's exact prompt for one text at one grade, via buildPrompt; parity-tested), build-sft.mjs (npm run train:data), dedupe-cases.json (shared TS/Python matcher cases)
 scripts/train-eval/          Prompt 10 Part C: lib.ts (pure: pre-registered item selection, grade hit, entity recall, resume; tested), generate.mjs (npm run train:eval:gen: base vs clarity-simplify, temperature 0, --select-items, --dry-run, --flags-only)
+scripts/grade/               Prompt 11 grade-targeting evaluation (no src/ change): lib.ts (pure: pre-registered item draw, near copy, paired bootstrap, criteria, resume; tested in grade-eval.test.ts), run-arm.mjs (npm run grade:run: --select-items once, --arm A|B|C [--limit N]; arm A = the app's per-node path at temperature 0, seed 42; B/C refuse until Prompt 11 adds them), report.mjs (npm run grade:report → eval/grade-targeting/REPORT.md)
 training/                    Prompt 10 LoRA fine-tune (README.md is the step-by-step): DATA_LICENSES.md, requirements.txt (Python 3.11 venv at training/.venv), prepare/download.py + dedupe.py, colab/train_clarity_lora.ipynb + check_notebook.py, Modelfile.template, evaluate.py, eval/PREREG.md + items.json (+ REPORT.md, results.json after Part C), data/STATS.md (the rest of data/, out/, *.gguf and .venv/ are git-ignored)
 eval/nli-calibration/        paragraphs.jsonl (67 originals), pairs.jsonl (60 labelled sentences), paragraph-items.jsonl, labels.csv, SOURCES.md, README.md
 eval/model-bakeoff/          bakeoff-only paragraphs.jsonl (40), SOURCES.md, README.md, outputs.jsonl, labels_bakeoff.csv (labelled), blind_key.json, models.json (licences, Unsloth evidence), REPORT.md
 eval/checker/                features_calib.csv (81), features_bakeoff.csv (119), fit.json, PREREG.md (frozen values), REPORT.md (held-out test), DISCUSSION.md (post-hoc, exploratory)
+eval/grade-targeting/        Prompt 11: PREREG.md (committed before any implementation), items.jsonl (200 frozen ASSET-validation items, grades 4/6/8/10, 30 sentences + 20 pseudo-paragraphs each, CC BY-NC 4.0, LF-pinned by .gitattributes), README.md (provenance), runs/arm-<X>.jsonl + REPORT.md after the runs (runs/smoke/ is git-ignored)
 eval/fixtures/               DEV regression fixtures only, excluded from every benchmark, calibration, bake-off and training set: uk-wiki-paste.txt (8 UK Wikipedia paragraphs), runs/uk-wiki-2026-10-19.json (its run report, format 3; tests read it), README.md. Any other runs/*.json is a local, uncommitted export (dedupe.py still reads it)
 public/models/, public/ort/  git-ignored; copied by Vite into dist/models/ and dist/ort/
 src/
@@ -291,6 +293,8 @@ npm run checker:rescale    # stage 7 QUALITY_THRESHOLD by quantile matching on c
 npm run checker:discuss    # post-hoc, exploratory: eval/checker/DISCUSSION.md (reads the test labels; writes nothing else)
 npm run train:data         # Prompt 10: training/data/sft_train.jsonl + sft_dev.jsonl + STATS.md (after training/prepare/download.py and dedupe.py; see training/README.md)
 npm run train:eval:gen     # Prompt 10 Part C: base vs clarity-simplify on training/eval/items.json → training/out/eval_generations.jsonl, then training/evaluate.py
+npm run grade:run -- --arm A        # Prompt 11 grade targeting: one arm on eval/grade-targeting/items.jsonl (resumable; --limit N = smoke run into runs/smoke/; B and C after Prompt 11)
+npm run grade:report       # eval/grade-targeting/REPORT.md: per-arm tables, paired bootstrap, pre-registered verdict (-- --runs <dir> for a smoke report)
 npm run build          # production build -> dist/
 npm run dev            # crxjs watch / hot reload
 npm test               # vitest run (tests/unit/**/*.test.ts)
@@ -436,7 +440,13 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
 - **Planned work after stage 7, in this order:**
   1. **Prompt 9 follow-up:** measure NLI ms per paragraph in Chrome on WebGPU and on wasm. (`ENTAILMENT_MIN` no longer decides the verdict; the frozen combined score does. G8, an external SummaC / LLM-AggreFact check, is still open.)
   2. **Prompt 10: fine-tuned model (done 2026-10-22, negative result).** The LoRA `clarity-simplify` did not beat its base on the pre-registered test (see "Prompt 10" above), so `DEFAULT_LLM_MODEL` stays `qwen3:4b-instruct-2507-q4_K_M`.
-  3. **Prompt 11:** originally "integrate the fine-tuned model"; since it was not better, attack the grade problem in the prompt or the run loop instead (e.g. re-ask when the output's FKGL misses the target), with a new pre-registration before it is measured.
+  3. **Prompt 11: grade targeting at inference time.** Originally "integrate the fine-tuned model"; since it was not better, the grade problem is attacked in the prompt and the run loop instead.
+     - **Pre-registered 2026-10-23** (`eval/grade-targeting/PREREG.md`, commit `5c4b757`), before any implementation.
+     - **The arms:** A is the current pipeline, B is grade-aware wording, and C is wording + a grade-feedback retry. All run on 200 fresh ASSET-validation items (grades 4/6/8/10, 30 sentences + 20 pseudo-paragraphs each) at temperature 0, seed 42.
+     - **Primary criterion:** grade hit C − A ≥ +15 points, with the paired-bootstrap 95% CI lower bound above 0.
+     - **Guardrails:** meaning pass rate −3 points at most, entities kept −2 points at most, C near copy ≤ 5%, and median s/node +60% at most.
+     - **If the primary criterion fails,** the loop stays off by default.
+     - **Status:** the harness exists (`npm run grade:run` / `grade:report`; arm A smoke-tested on 5 items). Next: the full arm A run, then B and C in `src/` and in `run-arm.mjs`.
   4. **Prompt 12:**
      - Web URL input
      - keyword highlighting

@@ -19,6 +19,7 @@ Everything here is used for a university major project. The files themselves (`t
 - **Source:** Hugging Face `facebook/asset`, config `simplification` (parquet).
 - **Licence:** the dataset card's text says **CC BY-NC 4.0**; its metadata tag says CC BY-SA 4.0. We follow the stricter one: non-commercial, evaluation only.
 - **Use:** the validation split (2,000 sentences × 10 references) is the Part C evaluation set. The **test split (359 sentences) is reserved for the final benchmark**: it is stored without references and used only to remove overlapping training pairs.
+- **Committed text:** `eval/grade-targeting/items.jsonl` (Prompt 11) includes the original sentences of 407 ASSET **validation** rows (no references, none of the test split), so the frozen evaluation set works on its own. The text is redistributed under CC BY-NC 4.0 with the citation below, for **non-commercial academic use only**. Everything else from ASSET stays in the git-ignored `training/data/`.
 - **Citation:** Fernando Alva-Manchego, Louis Martin, Antoine Bordes, Carolina Scarton, Benoît Sagot and Lucia Specia. 2020. *ASSET: A Dataset for Tuning and Evaluation of Sentence Simplification Models with Multiple Rewriting Transformations.* Proceedings of ACL 2020, pages 4668–4679.
 
 ### TurkCorpus

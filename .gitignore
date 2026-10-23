@@ -15,3 +15,6 @@ training/data/*
 training/out/
 *.gguf
 __pycache__/
+
+# Prompt 11 grade-targeting smoke runs (--limit); the real runs are committed
+eval/grade-targeting/runs/smoke/
