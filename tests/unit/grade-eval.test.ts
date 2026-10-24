@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  evaluateCriteria, gradeItemId, isNearCopyEdit, median, pairedBootstrap, pendingItems, quantile, selectGradeItems,
-  BOOTSTRAP_RESAMPLES, CRITERIA, EVAL_OPTIONS, FILL_ORDER, GRADE_TARGETS, PARA_MAX_ROWS, PARA_MIN_ROWS,
+  evaluateCriteria, gradeItemId, isNearCopyEdit, median, pairedBootstrap, pendingItems, quantile, runFileName,
+  runFilePath, runsDir, selectGradeItems,
+  ARMS, BOOTSTRAP_RESAMPLES, CRITERIA, EVAL_OPTIONS, FILL_ORDER, GRADE_TARGETS, PARA_MAX_ROWS, PARA_MIN_ROWS,
   PARAGRAPHS_PER_TARGET, SENTENCES_PER_TARGET,
   type BootstrapResult, type SelectionInput,
 } from '../../scripts/grade/lib';
@@ -158,5 +161,44 @@ describe('pendingItems', () => {
     expect(pendingItems(wanted, [{ arm: 'A', itemId: 'g4-s-1', promptHash: 'h1' }])).toEqual([wanted[1]]);
     expect(pendingItems(wanted, [{ arm: 'C', itemId: 'g4-s-1', promptHash: 'x' }])).toEqual(wanted);
     expect(() => pendingItems(wanted, [{ arm: 'A', itemId: 'g4-s-2', promptHash: 'old' }])).toThrow(/prompt changed/);
+  });
+});
+
+// ─── Run files ────────────────────────────────────────────────────────────────
+
+describe('run files', () => {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const smokeArg = 'eval/grade-targeting/runs/smoke';
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('gives the writer and the reader the same smoke run file for every arm', () => {
+    for (const arm of ARMS) {
+      const written = runFilePath(runsDir(root, { smoke: true }), arm);
+      expect(runFilePath(runsDir(root, { runs: smokeArg }), arm)).toBe(written);
+      expect(runFilePath(runsDir(root, { runs: join('eval', 'grade-targeting', 'runs', 'smoke') }), arm)).toBe(written);
+      expect(runFilePath(runsDir(root, { runs: join(root, smokeArg) }), arm)).toBe(written);
+      expect(isAbsolute(written)).toBe(true);
+      expect(written.endsWith(join('eval', 'grade-targeting', 'runs', 'smoke', `arm-${arm}.jsonl`))).toBe(true);
+    }
+  });
+
+  it('gives the writer and the reader the same pre-registered run file for every arm', () => {
+    for (const arm of ARMS) {
+      const written = runFilePath(runsDir(root), arm);
+      expect(runFilePath(runsDir(root, { runs: null }), arm)).toBe(written);
+      expect(runFilePath(runsDir(root, { runs: 'eval/grade-targeting/runs' }), arm)).toBe(written);
+      expect(written).toBe(join(root, 'eval', 'grade-targeting', 'runs', runFileName(arm)));
+    }
+  });
+
+  it('never reads the working directory', () => {
+    vi.spyOn(process, 'cwd').mockImplementation(() => {
+      throw new Error('process.cwd() called');
+    });
+    for (const arm of ARMS) {
+      expect(() => runFilePath(runsDir(root, { smoke: true }), arm)).not.toThrow();
+      expect(() => runFilePath(runsDir(root, { runs: smokeArg }), arm)).not.toThrow();
+    }
   });
 });

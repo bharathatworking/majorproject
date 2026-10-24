@@ -167,4 +167,4 @@ All four must hold for C vs A (point estimates, paired over the same items):
 
 ## Deviations
 
-None.
+- 2026-10-24, before any pre-registered run (only git-ignored `--limit` smoke runs existed): a bug fix to file-path resolution only. `scripts/grade/run-arm.mjs` and `scripts/grade/report.mjs` now take the runs directory and the `arm-<X>.jsonl` name from one helper in `scripts/grade/lib.ts` (`runsDir`, `runFilePath`), resolved from the repository root, never the working directory. `run-arm.mjs` prints the absolute path it wrote, and `report.mjs` lists the directory searched, the expected names and what it found when there is no run. No item, measure, criterion or decision rule changed.

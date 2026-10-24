@@ -17,10 +17,12 @@
  *    says "pending". Pooled is primary; per kind and per target are
  *    secondary and never change it.
  *  - With --runs <dir> (e.g. runs/smoke) the report goes into <dir>/REPORT.md,
- *    so a smoke run never overwrites the real report.
+ *    so a smoke run never overwrites the real report. The directory and the
+ *    run file names come from lib.ts runsDir / runFilePath, the same helpers
+ *    run-arm.mjs writes with; <dir> is relative to the repository root.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { createAppLoader, readJsonl, ROOT } from '../lib/nli-node.mjs';
@@ -32,8 +34,6 @@ const ITEMS = join(DIR, 'items.jsonl');
 
 const argv = process.argv.slice(2);
 const option = name => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : null);
-const runsDir = option('--runs') ? join(ROOT, option('--runs')) : join(DIR, 'runs');
-const reportFile = option('--runs') ? join(runsDir, 'REPORT.md') : join(DIR, 'REPORT.md');
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
 
@@ -47,17 +47,26 @@ const signed = (x, d = 2) => (Number.isNaN(x) ? '–' : `${x >= 0 ? '+' : ''}${x
 const vite = await createAppLoader();
 try {
   const lib = await vite.ssrLoadModule('/scripts/grade/lib.ts');
+  const runsDir = lib.runsDir(ROOT, { runs: option('--runs') });
+  const reportFile = option('--runs') ? join(runsDir, 'REPORT.md') : join(DIR, 'REPORT.md');
   const [, ...items] = await readJsonl(ITEMS);
   const itemIds = new Set(items.map(i => i.id));
 
   const runs = {};
   for (const arm of lib.ARMS) {
-    const file = join(runsDir, `arm-${arm}.jsonl`);
+    const file = lib.runFilePath(runsDir, arm);
     if (!existsSync(file)) continue;
     const records = (await readJsonl(file)).filter(r => itemIds.has(r.itemId));
     runs[arm] = new Map(records.map(r => [r.itemId, r]));
   }
-  if (!runs.A) throw new Error(`no arm A run in ${relative(ROOT, runsDir)}`);
+  if (!runs.A) {
+    const found = existsSync(runsDir) ? readdirSync(runsDir) : null;
+    throw new Error(
+      `no arm A run.\n  Searched: ${runsDir}\n` +
+      `  Expected: ${lib.ARMS.map(lib.runFileName).join(', ')} (${lib.runFileName('A')} required)\n` +
+      `  Found: ${found === null ? '(directory does not exist)' : found.length === 0 ? '(empty directory)' : found.join(', ')}`,
+    );
+  }
 
   const rate = (rs, f) => lib.mean(rs.map(r => (f(r) ? 1 : 0)));
   /** Per-arm figures over its own records. */

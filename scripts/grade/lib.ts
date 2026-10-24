@@ -5,7 +5,8 @@
  * pre-registered criteria (eval/grade-targeting/PREREG.md).
  *
  * Design decisions:
- *  - No DOM, no Node APIs, no src/ imports: the drivers load this file
+ *  - No DOM, no src/ imports, and no Node API but node:path (for the run
+ *    files, below): the drivers load this file
  *    through Vite's ssrLoadModule and tests/unit/grade-eval.test.ts imports
  *    it directly. The seeded generator and shuffle come from
  *    scripts/train-data/lib.ts (the same mulberry32 as Prompt 10), not a copy.
@@ -19,8 +20,14 @@
  *    hard row taken by grade 4 first would be lost to grade 10.
  *  - The bootstrap resamples items (pairs), percentile interval with
  *    linear interpolation (numpy's default quantile).
+ *  - Run files: run-arm.mjs (writer) and report.mjs (reader) take the runs
+ *    directory and the arm-<X>.jsonl name only from runsDir / runFilePath, so
+ *    the two can't disagree. Paths resolve from the repository root the
+ *    caller passes (nli-node.mjs ROOT, from import.meta.url), never from
+ *    process.cwd(); a test checks writer and reader give the same path.
  */
 
+import { isAbsolute, join, normalize } from 'node:path';
 import { mulberry32, randomInt, shuffleWith } from '../train-data/lib';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -290,6 +297,31 @@ export function evaluateCriteria(c: CriteriaInput): CriteriaVerdict {
   const primaryMet = criteria[0].met;
   const guardrailsMet = criteria.slice(1).every(r => r.met);
   return { criteria, primaryMet, guardrailsMet, adopt: primaryMet && guardrailsMet };
+}
+
+// ─── Run files ────────────────────────────────────────────────────────────────
+
+/** The one name of an arm's run file. */
+export function runFileName(arm: Arm): string {
+  return `arm-${arm}.jsonl`;
+}
+
+export interface RunsDirOptions {
+  /** A --limit smoke run: runs/smoke/ instead of the pre-registered runs/. */
+  smoke?: boolean;
+  /** report.mjs --runs: absolute, or relative to the repository root (not the working directory). */
+  runs?: string | null;
+}
+
+/** Absolute runs directory, for the writer and the reader alike. */
+export function runsDir(root: string, opts: RunsDirOptions = {}): string {
+  if (opts.runs) return isAbsolute(opts.runs) ? normalize(opts.runs) : join(root, opts.runs);
+  const base = join(root, 'eval', 'grade-targeting', 'runs');
+  return opts.smoke ? join(base, 'smoke') : base;
+}
+
+export function runFilePath(dir: string, arm: Arm): string {
+  return join(dir, runFileName(arm));
 }
 
 // ─── Resume ───────────────────────────────────────────────────────────────────

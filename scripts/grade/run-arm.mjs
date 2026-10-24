@@ -399,8 +399,8 @@ async function runArm(arm) {
   const items = await readItems();
   const limit = option('--limit') ? Number(option('--limit')) : Infinity;
   const smoke = Number.isFinite(limit);
-  const outDir = smoke ? join(DIR, 'runs', 'smoke') : join(DIR, 'runs');
-  const outFile = join(outDir, `arm-${arm}.jsonl`);
+  const outDir = lib.runsDir(ROOT, { smoke });
+  const outFile = lib.runFilePath(outDir, arm);
   mkdirSync(outDir, { recursive: true });
 
   const wanted = items.map(item => {
@@ -409,8 +409,11 @@ async function runArm(arm) {
   });
   const done = existsSync(outFile) ? await readJsonl(outFile) : [];
   const pending = lib.pendingItems(wanted, done).slice(0, limit);
-  console.log(`[Clarity] Arm ${arm}: ${items.length} items, ${done.length} done, ${pending.length} to run → ${outFile.slice(ROOT.length + 1)}`);
-  if (pending.length === 0) return;
+  console.log(`[Clarity] Arm ${arm}: ${items.length} items, ${done.length} done, ${pending.length} to run → ${outFile}`);
+  if (pending.length === 0) {
+    console.log(`[Clarity] Arm ${arm}: nothing to run; ${done.length} records in ${outFile}`);
+    return;
+  }
 
   // Preflight: chat model, all-minilm and the NLI model, or no run
   const tags = (await api('/api/tags')).models;
@@ -462,6 +465,8 @@ async function runArm(arm) {
       `${calls} call${calls === 1 ? '' : 's'}, ${wallSeconds.toFixed(1)} s`,
     );
   }
+  const inFile = (await readJsonl(outFile)).length;
+  console.log(`[Clarity] Arm ${arm}: wrote ${pending.length} records (${inFile} in file) → ${outFile}`);
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
