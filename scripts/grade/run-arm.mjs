@@ -4,7 +4,7 @@
  * runs one arm over it against local Ollama.
  *
  *   node scripts/grade/run-arm.mjs --select-items [--force]   # once: eval/grade-targeting/items.jsonl
- *   node scripts/grade/run-arm.mjs --arm A [--limit N]        # A now; B and C after Prompt 11
+ *   node scripts/grade/run-arm.mjs --arm A [--limit N] [--new-run]   # A now; B and C after Prompt 11
  *
  * Design decisions:
  *  - Items come only from training/data/asset_val.jsonl, minus every row of
@@ -42,10 +42,21 @@
  *    are appended as each item finishes, keyed by arm, item and prompt hash.
  *  - --limit N is a smoke test: it writes to runs/smoke/ (git-ignored),
  *    never to the pre-registered runs/arm-<X>.jsonl.
+ *  - Resume guard: every record carries its provenance (lib.ts
+ *    RunProvenance: HEAD commit, dirty tree and a hash of the uncommitted
+ *    changes, Ollama version, model tag and digest, temperature, seed, think,
+ *    quality mode, NLI model, items.jsonl sha256, arm). Before anything is
+ *    appended, the current provenance must equal every record's in the file,
+ *    or the run stops naming each differing field. --new-run moves the
+ *    existing file aside (arm-<X>.superseded-<time>.jsonl) and starts fresh;
+ *    nothing is overwritten or deleted. The harness outputs (runs/,
+ *    REPORT.md) don't count as uncommitted changes, so a run's own records
+ *    don't make the next resume dirty.
  */
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createAppLoader, embed, embedOrThrow, loadModel, readJsonl, ROOT } from '../lib/nli-node.mjs';
@@ -64,6 +75,8 @@ const DIR = join(ROOT, 'eval', 'grade-targeting');
 const ITEMS = join(DIR, 'items.jsonl');
 /** reserved.jsonl sources that are reserved sets (asset-val / turk-val are the pool's own sources). */
 const RESERVED_SOURCES = ['asset-test', 'turk-test', 'nli-calibration', 'model-bakeoff', 'fixtures'];
+/** The harness's own outputs: never "uncommitted changes" for the resume guard. */
+const HARNESS_OUTPUTS = [':(exclude)eval/grade-targeting/runs', ':(exclude)eval/grade-targeting/REPORT.md'];
 
 const argv = process.argv.slice(2);
 const flag = name => argv.includes(name);
@@ -215,6 +228,27 @@ async function readItems() {
     if (sha256(i.text) !== i.sha256) throw new Error(`item ${i.id}: text does not match its sha256`);
   }
   return items;
+}
+
+// ─── Git ──────────────────────────────────────────────────────────────────────
+
+const git = (...args) => execFileSync('git', args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024 });
+
+/**
+ * HEAD, the uncommitted files outside the harness outputs, and a hash of
+ * those changes (tracked diff plus each untracked file's path and content),
+ * so two different dirty trees never look the same.
+ */
+function gitState() {
+  const commit = git('rev-parse', 'HEAD').toString('utf8').trim();
+  const status = git('status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.', ...HARNESS_OUTPUTS).toString('utf8');
+  const dirtyFiles = lib.dirtyFilesFromPorcelain(status);
+  if (dirtyFiles.length === 0) return { commit, dirty: false, worktreeSha256: null, dirtyFiles };
+  const hash = createHash('sha256').update(git('diff', 'HEAD', '--binary', '--', '.', ...HARNESS_OUTPUTS));
+  const untracked = git('ls-files', '--others', '--exclude-standard', '-z', '--', '.', ...HARNESS_OUTPUTS)
+    .toString('utf8').split('\0').filter(Boolean).sort();
+  for (const path of untracked) hash.update(`\0${path}\0${sha256(readFileSync(join(ROOT, path)))}`);
+  return { commit, dirty: true, worktreeSha256: hash.digest('hex'), dirtyFiles };
 }
 
 // ─── Ollama ───────────────────────────────────────────────────────────────────
@@ -407,21 +441,65 @@ async function runArm(arm) {
     const prompt = render.renderPrompt(item.text, item.target, 'app', wordSet);
     return { arm, itemId: item.id, item, prompt, promptHash: sha256(`${prompt.system}\n\n${prompt.user}`) };
   });
-  const done = existsSync(outFile) ? await readJsonl(outFile) : [];
-  const pending = lib.pendingItems(wanted, done).slice(0, limit);
-  console.log(`[Clarity] Arm ${arm}: ${items.length} items, ${done.length} done, ${pending.length} to run → ${outFile}`);
-  if (pending.length === 0) {
-    console.log(`[Clarity] Arm ${arm}: nothing to run; ${done.length} records in ${outFile}`);
-    return;
-  }
+  const existing = existsSync(outFile) ? await readJsonl(outFile) : null;
 
-  // Preflight: chat model, all-minilm and the NLI model, or no run
+  // Preflight: chat model and all-minilm, or no run
   const tags = (await api('/api/tags')).models;
   const tag = tags.find(t => t.name === lib.GRADE_MODEL);
   if (!tag) throw new Error(`Ollama has no ${lib.GRADE_MODEL} (ollama pull ${lib.GRADE_MODEL})`);
   if (!tags.some(t => t.name === EMBED_MODEL || t.name === `${EMBED_MODEL}:latest`)) throw new Error(`Ollama has no ${EMBED_MODEL} (ollama pull ${EMBED_MODEL})`);
   const { version } = await api('/api/version');
   const thinkValue = think.thinkSetting(await api('/api/show', { model: lib.GRADE_MODEL }));
+
+  // Resume guard: the file's records must come from this exact system
+  const repo = gitState();
+  if (repo.dirty) {
+    console.warn(
+      `[Clarity] Working tree is dirty: this run uses uncommitted code (${repo.dirtyFiles.length} changed file${repo.dirtyFiles.length === 1 ? '' : 's'}):\n` +
+      repo.dirtyFiles.map(f => `  ${f}`).join('\n'),
+    );
+  }
+  const provenance = {
+    arm,
+    commit: repo.commit,
+    dirty: repo.dirty,
+    worktreeSha256: repo.worktreeSha256,
+    ollamaVersion: version,
+    model: lib.GRADE_MODEL,
+    modelDigest: tag.digest,
+    temperature: lib.EVAL_OPTIONS.temperature,
+    seed: lib.EVAL_OPTIONS.seed,
+    think: thinkValue ?? null,
+    qualityMode: lib.GRADE_QUALITY_MODE,
+    nliModel: config.NLI_MODEL_ID,
+    itemsSha256: sha256(await readFile(ITEMS)),
+  };
+  const plan = lib.planRunFile(existing, provenance, flag('--new-run'));
+  if (plan.action === 'refuse') {
+    throw new Error(
+      `Arm ${arm}: refusing to append to ${outFile}: its records were produced under different conditions:\n` +
+      `${lib.formatMismatches(plan.mismatches)}\n` +
+      'Use --new-run to start a fresh file (the existing one is moved aside, not deleted).',
+    );
+  }
+  if (plan.action === 'fresh' && plan.archive) {
+    const moved = join(outDir, lib.supersededFileName(arm, new Date().toISOString()));
+    renameSync(outFile, moved);
+    console.log(`[Clarity] --new-run: moved ${outFile} → ${moved}`);
+  }
+  const done = plan.action === 'append' ? plan.done : [];
+
+  const pending = lib.pendingItems(wanted, done).slice(0, limit);
+  console.log(
+    `[Clarity] Arm ${arm} @ ${repo.commit.slice(0, 12)}${repo.dirty ? ' (dirty)' : ''}, ${lib.GRADE_MODEL}: ` +
+    `${items.length} items, ${done.length} done, ${pending.length} to run → ${outFile}`,
+  );
+  if (pending.length === 0) {
+    console.log(`[Clarity] Arm ${arm}: nothing to run; ${done.length} records in ${outFile}`);
+    return;
+  }
+
+  // The NLI model, or no run
   let model;
   try {
     model = await loadModel(config.NLI_MODEL_ID);
@@ -444,6 +522,7 @@ async function runArm(arm) {
     const m = chosen.meaning;
     const record = {
       format: lib.RUN_FORMAT,
+      provenance,
       arm, itemId: w.item.id, kind: w.item.kind, rows: w.item.rows, target: w.item.target,
       model: lib.GRADE_MODEL, digest: tag.digest, ollamaVersion: version,
       options: lib.EVAL_OPTIONS, think: thinkValue ?? null,
@@ -474,7 +553,7 @@ async function runArm(arm) {
 try {
   if (flag('--select-items')) await selectItems();
   else if (option('--arm')) await runArm(option('--arm'));
-  else throw new Error('usage: npm run grade:run -- --select-items [--force] | --arm A|B|C [--limit N]');
+  else throw new Error('usage: npm run grade:run -- --select-items [--force] | --arm A|B|C [--limit N] [--new-run]');
 } catch (err) {
   console.error(`[Clarity] ${err.message}`);
   process.exitCode = 1;

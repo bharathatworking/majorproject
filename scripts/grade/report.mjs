@@ -20,6 +20,11 @@
  *    so a smoke run never overwrites the real report. The directory and the
  *    run file names come from lib.ts runsDir / runFilePath, the same helpers
  *    run-arm.mjs writes with; <dir> is relative to the repository root.
+ *  - Provenance: the report states, per arm, the commit, model tag and the
+ *    rest of each record's provenance (lib.ts provenanceReportLines). An arm
+ *    whose records hold more than one provenance was not produced by one
+ *    system: it gets a loud warning, is left out of every table and the
+ *    verdict (never pooled), and the script exits non-zero after writing.
  */
 
 import { existsSync, readdirSync } from 'node:fs';
@@ -53,11 +58,13 @@ try {
   const itemIds = new Set(items.map(i => i.id));
 
   const runs = {};
+  const groups = {};
   for (const arm of lib.ARMS) {
     const file = lib.runFilePath(runsDir, arm);
     if (!existsSync(file)) continue;
     const records = (await readJsonl(file)).filter(r => itemIds.has(r.itemId));
     runs[arm] = new Map(records.map(r => [r.itemId, r]));
+    groups[arm] = lib.provenanceGroups(records);
   }
   if (!runs.A) {
     const found = existsSync(runsDir) ? readdirSync(runsDir) : null;
@@ -109,19 +116,25 @@ try {
     };
   }
 
-  const arms = lib.ARMS.filter(a => runs[a]);
+  // A mixed arm is never pooled: it is only listed under Provenance
+  const found = lib.ARMS.filter(a => runs[a]);
+  const mixed = found.filter(a => lib.isMixed(groups[a]));
+  const arms = found.filter(a => !mixed.includes(a));
   const sums = Object.fromEntries(arms.map(a => [a, summary(runs[a])]));
   const lines = [
     '# Grade-targeting evaluation: report (Prompt 11)',
     '',
     `Generated ${new Date().toISOString().slice(0, 10)} by \`npm run grade:report\` from \`${relative(ROOT, runsDir).replace(/\\/g, '/')}\`, following \`eval/grade-targeting/PREREG.md\`. Items: \`eval/grade-targeting/items.jsonl\` (${items.length}).`,
     '',
+    ...lib.provenanceReportLines(found.map(arm => ({ arm, groups: groups[arm] }))),
   ];
 
   // Verdict
-  const complete = a => runs[a] && runs[a].size === items.length;
+  const complete = a => arms.includes(a) && runs[a].size === items.length;
   lines.push('## Verdict', '');
-  if (complete('A') && complete('C')) {
+  if (mixed.includes('A') || mixed.includes('C')) {
+    lines.push(`**Not computed**: arm ${mixed.join(' and ')} mixes provenances (see Provenance) and is not pooled. Re-run it with \`--new-run\`.`);
+  } else if (complete('A') && complete('C')) {
     const p = paired('C');
     const v = lib.evaluateCriteria({
       hitDiff: p.hit, meaningDiff: p.meaning, entityDiff: p.entities,
@@ -146,39 +159,52 @@ try {
   }
   lines.push('');
 
-  // Per arm
-  lines.push('## Per arm', '', '| Arm | n | Grade hit | Hit (sentences) | Hit (paragraphs) | Meaning pass | Fully checked | Entities kept | Near copy | Mean FKGL | Mean \\|FKGL − target\\| | Calls | Median s/node |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|');
-  for (const a of arms) {
-    const s = sums[a];
-    lines.push(`| ${a} | ${s.n} | ${pts(s.hit)} | ${pts(s.hitSent)} | ${pts(s.hitPara)} | ${pts(s.meaning)} | ${pts(s.coverage)} | ${pts(s.entities)} | ${pts(s.nearCopy)} | ${num(s.fkgl)} | ${num(s.gap)} | ${num(s.calls)} | ${num(s.medianSeconds)} |`);
-  }
-  lines.push('', 'Rates are percentages. Meaning pass is over fully checked items; entities kept over items whose source has an entity.', '');
+  if (arms.length > 0) {
+    // Per arm
+    lines.push('## Per arm', '', '| Arm | n | Grade hit | Hit (sentences) | Hit (paragraphs) | Meaning pass | Fully checked | Entities kept | Near copy | Mean FKGL | Mean \\|FKGL − target\\| | Calls | Median s/node |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+    for (const a of arms) {
+      const s = sums[a];
+      lines.push(`| ${a} | ${s.n} | ${pts(s.hit)} | ${pts(s.hitSent)} | ${pts(s.hitPara)} | ${pts(s.meaning)} | ${pts(s.coverage)} | ${pts(s.entities)} | ${pts(s.nearCopy)} | ${num(s.fkgl)} | ${num(s.gap)} | ${num(s.calls)} | ${num(s.medianSeconds)} |`);
+    }
+    lines.push('', 'Rates are percentages. Meaning pass is over fully checked items; entities kept over items whose source has an entity.', '');
 
-  // Paired differences
-  const diffRow = (label, b, unit = 'pts') => `| ${label} | ${b.n} | ${unit === 'pts' ? signedPts(b.mean) : signed(b.mean)} | [${unit === 'pts' ? signedPts(b.lo) : signed(b.lo)}, ${unit === 'pts' ? signedPts(b.hi) : signed(b.hi)}] |`;
-  for (const arm of arms.filter(a => a !== 'A')) {
-    const p = paired(arm);
-    lines.push(`## ${arm} − A (paired)`, '', '| Measure | n | Difference | 95% CI |', '|---|---|---|---|',
-      diffRow('Grade hit (pooled, primary)', p.hit),
-      diffRow('Grade hit, sentences', paired(arm, r => r.kind === 'sent').hit),
-      diffRow('Grade hit, paragraphs', paired(arm, r => r.kind === 'para').hit),
-      ...lib.GRADE_TARGETS.map(t => diffRow(`Grade hit, target ${t}`, paired(arm, r => r.target === t).hit)),
-      diffRow('Meaning pass', p.meaning),
-      diffRow('Entities kept', p.entities),
-      diffRow('Near copy', p.nearCopy),
-      diffRow('\\|FKGL − target\\| (grades)', p.gap, 'grades'),
-      '');
-  }
+    // Paired differences
+    const diffRow = (label, b, unit = 'pts') => `| ${label} | ${b.n} | ${unit === 'pts' ? signedPts(b.mean) : signed(b.mean)} | [${unit === 'pts' ? signedPts(b.lo) : signed(b.lo)}, ${unit === 'pts' ? signedPts(b.hi) : signed(b.hi)}] |`;
+    for (const arm of arms.includes('A') ? arms.filter(a => a !== 'A') : []) {
+      const p = paired(arm);
+      lines.push(`## ${arm} − A (paired)`, '', '| Measure | n | Difference | 95% CI |', '|---|---|---|---|',
+        diffRow('Grade hit (pooled, primary)', p.hit),
+        diffRow('Grade hit, sentences', paired(arm, r => r.kind === 'sent').hit),
+        diffRow('Grade hit, paragraphs', paired(arm, r => r.kind === 'para').hit),
+        ...lib.GRADE_TARGETS.map(t => diffRow(`Grade hit, target ${t}`, paired(arm, r => r.target === t).hit)),
+        diffRow('Meaning pass', p.meaning),
+        diffRow('Entities kept', p.entities),
+        diffRow('Near copy', p.nearCopy),
+        diffRow('\\|FKGL − target\\| (grades)', p.gap, 'grades'),
+        '');
+    }
 
-  // Per target, per arm
-  lines.push('## Grade hit by target (secondary)', '', `| Target | ${arms.join(' | ')} |`, `|---|${arms.map(() => '---').join('|')}|`);
-  for (const t of lib.GRADE_TARGETS) {
-    lines.push(`| ${t} | ${arms.map(a => pts(rate([...runs[a].values()].filter(r => r.target === t), r => r.gradeHit))).join(' | ')} |`);
+    // Per target, per arm
+    lines.push('## Grade hit by target (secondary)', '', `| Target | ${arms.join(' | ')} |`, `|---|${arms.map(() => '---').join('|')}|`);
+    for (const t of lib.GRADE_TARGETS) {
+      lines.push(`| ${t} | ${arms.map(a => pts(rate([...runs[a].values()].filter(r => r.target === t), r => r.gradeHit))).join(' | ')} |`);
+    }
+    lines.push('', `Differences are arm − A over the same items; paired bootstrap, ${lib.BOOTSTRAP_RESAMPLES} resamples, seed ${lib.GRADE_SEED}, percentile ${lib.CI_LEVEL * 100}% interval. Pooled grade hit is the primary measure; everything else is secondary or a guardrail.`, '');
+  } else {
+    lines.push('No arm can be pooled, so there are no tables.', '');
   }
-  lines.push('', `Differences are arm − A over the same items; paired bootstrap, ${lib.BOOTSTRAP_RESAMPLES} resamples, seed ${lib.GRADE_SEED}, percentile ${lib.CI_LEVEL * 100}% interval. Pooled grade hit is the primary measure; everything else is secondary or a guardrail.`, '');
 
   await writeFile(reportFile, lines.join('\n'));
-  console.log(`[Clarity] ${relative(ROOT, reportFile)}: arms ${arms.join(', ')}; A grade hit ${pts(sums.A.hit)}% over ${sums.A.n}`);
+  const provA = groups.A[0]?.provenance;
+  const system = provA ? ` @ ${provA.commit.slice(0, 12)}${provA.dirty ? ' (dirty)' : ''}, ${provA.model}` : ' (no provenance recorded)';
+  console.log(
+    `[Clarity] ${relative(ROOT, reportFile)}: arms ${arms.join(', ') || '(none pooled)'}` +
+    (sums.A ? `; A grade hit ${pts(sums.A.hit)}% over ${sums.A.n}${system}` : ''),
+  );
+  if (mixed.length > 0) {
+    console.error(`[Clarity] MIXED PROVENANCE: arm ${mixed.join(', ')} holds records from more than one system and was not pooled; see ${relative(ROOT, reportFile)}`);
+    process.exitCode = 1;
+  }
 } catch (err) {
   console.error(`[Clarity] ${err.message}`);
   process.exitCode = 1;

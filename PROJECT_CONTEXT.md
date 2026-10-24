@@ -293,8 +293,8 @@ npm run checker:rescale    # stage 7 QUALITY_THRESHOLD by quantile matching on c
 npm run checker:discuss    # post-hoc, exploratory: eval/checker/DISCUSSION.md (reads the test labels; writes nothing else)
 npm run train:data         # Prompt 10: training/data/sft_train.jsonl + sft_dev.jsonl + STATS.md (after training/prepare/download.py and dedupe.py; see training/README.md)
 npm run train:eval:gen     # Prompt 10 Part C: base vs clarity-simplify on training/eval/items.json → training/out/eval_generations.jsonl, then training/evaluate.py
-npm run grade:run -- --arm A        # Prompt 11 grade targeting: one arm on eval/grade-targeting/items.jsonl (resumable; --limit N = smoke run into runs/smoke/; B and C after Prompt 11)
-npm run grade:report       # eval/grade-targeting/REPORT.md: per-arm tables, paired bootstrap, pre-registered verdict (-- --runs <dir> for a smoke report)
+npm run grade:run -- --arm A        # Prompt 11 grade targeting: one arm on eval/grade-targeting/items.jsonl (resumable only under identical provenance, else refuses; --new-run starts fresh; --limit N = smoke run into runs/smoke/; B and C after Prompt 11)
+npm run grade:report       # eval/grade-targeting/REPORT.md: provenance per arm, per-arm tables, paired bootstrap, pre-registered verdict; a mixed-provenance arm is flagged, not pooled (-- --runs <dir> for a smoke report)
 npm run build          # production build -> dist/
 npm run dev            # crxjs watch / hot reload
 npm test               # vitest run (tests/unit/**/*.test.ts)
@@ -447,6 +447,7 @@ Test notes: there is no DOM and no `chrome.*` in tests by default.
      - **Guardrails:** meaning pass rate −3 points at most, entities kept −2 points at most, C near copy ≤ 5%, and median s/node +60% at most.
      - **If the primary criterion fails,** the loop stays off by default.
      - **Status:** the harness exists (`npm run grade:run` / `grade:report`; arm A smoke-tested on 5 items). Next: the full arm A run, then B and C in `src/` and in `run-arm.mjs`.
+     - **Resume guard (2026-10-24, a pre-run Deviations entry):** every run record carries `provenance` (HEAD commit, dirty tree plus a hash of the uncommitted changes, Ollama version, model tag and digest, temperature, seed, think, quality mode, NLI model, items.jsonl sha256, arm). A resume that differs in any field refuses to append and names each field; `--new-run` moves the old file aside (`arm-<X>.superseded-<time>.jsonl`) and starts fresh. REPORT.md prints each arm's provenance and never pools an arm whose file mixes provenances (the report then exits 1). Don't commit or update Ollama between resumes of one arm.
   4. **Prompt 12:**
      - Web URL input
      - keyword highlighting

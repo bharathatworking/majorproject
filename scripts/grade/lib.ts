@@ -25,6 +25,12 @@
  *    the two can't disagree. Paths resolve from the repository root the
  *    caller passes (nli-node.mjs ROOT, from import.meta.url), never from
  *    process.cwd(); a test checks writer and reader give the same path.
+ *  - Provenance is a field on every record, not a file header: an appended
+ *    record stays self-describing, and a file that mixes systems is visible
+ *    record by record. run-arm.mjs refuses to append when any field of
+ *    PROVENANCE_FIELDS differs from a record already in the file (planRunFile;
+ *    --new-run starts a fresh file instead), and report.mjs never pools an arm
+ *    whose records hold more than one provenance (provenanceGroups).
  */
 
 import { isAbsolute, join, normalize } from 'node:path';
@@ -48,7 +54,10 @@ export const EVAL_OPTIONS = { temperature: 0, seed: 42 } as const;
 export const GRADE_MODEL = 'qwen3:4b-instruct-2507-q4_K_M';
 export const ARMS = ['A', 'B', 'C'] as const;
 export const ITEMS_FORMAT = 'clarity-grade-items/1';
-export const RUN_FORMAT = 'clarity-grade-run/1';
+/** /2: every record carries its provenance (see "Provenance" below). */
+export const RUN_FORMAT = 'clarity-grade-run/2';
+/** Every arm runs the app's Full quality mode (NLI on, no Lite fallback). */
+export const GRADE_QUALITY_MODE = 'full';
 
 /** Near copy: word-level normalised edit distance from the source below this. */
 export const NEAR_COPY_EDIT_MAX = 0.1;
@@ -345,4 +354,186 @@ export function pendingItems<T extends RunKey>(wanted: readonly T[], done: reado
     if (hash !== w.promptHash) throw new Error(`prompt changed for arm ${w.arm} item ${w.itemId}; outputs would mix prompts`);
     return false;
   });
+}
+
+// ─── Provenance ───────────────────────────────────────────────────────────────
+
+/** What produced a run record; every field must match for a resume to append. */
+export interface RunProvenance {
+  arm: string;
+  /** git rev-parse HEAD. */
+  commit: string;
+  /** Uncommitted changes outside the harness outputs (runs/, REPORT.md). */
+  dirty: boolean;
+  /** sha256 of the uncommitted changes (diff plus untracked files); null when clean. */
+  worktreeSha256: string | null;
+  ollamaVersion: string;
+  /** The exact Ollama tag. */
+  model: string;
+  modelDigest: string;
+  temperature: number;
+  seed: number;
+  /** The `think` value sent (thinkSetting), null when none is sent. */
+  think: boolean | null;
+  qualityMode: string;
+  nliModel: string;
+  /** sha256 of the raw bytes of eval/grade-targeting/items.jsonl. */
+  itemsSha256: string;
+}
+
+export const PROVENANCE_FIELDS = [
+  'arm', 'commit', 'dirty', 'worktreeSha256', 'ollamaVersion', 'model', 'modelDigest',
+  'temperature', 'seed', 'think', 'qualityMode', 'nliModel', 'itemsSha256',
+] as const satisfies readonly (keyof RunProvenance)[];
+
+/** A run record as far as provenance goes; records before RUN_FORMAT /2 have none. */
+export interface ProvenancedRecord {
+  provenance?: RunProvenance | null;
+}
+
+export interface ProvenanceMismatch {
+  /** A PROVENANCE_FIELDS name, or 'provenance' for a record that has none. */
+  field: string;
+  file: string;
+  current: string;
+}
+
+const NOT_RECORDED = '(not recorded)';
+const show = (v: unknown) => (v === undefined ? NOT_RECORDED : JSON.stringify(v));
+
+/**
+ * Paths from `git status --porcelain=v1 -z`. A rename or copy entry is
+ * followed by its original path as a separate field, which is skipped.
+ */
+export function dirtyFilesFromPorcelain(z: string): string[] {
+  const fields = z.split('\0');
+  const files: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const entry = fields[i];
+    if (entry.length < 4) continue;
+    files.push(entry.slice(3));
+    if (/[RC]/.test(entry.slice(0, 2))) i++;
+  }
+  return files;
+}
+
+/**
+ * Every field where `current` differs from a provenance already in the file,
+ * once per distinct file value. A record without provenance is one mismatch
+ * on 'provenance': its conditions can't be compared, so it can't be extended.
+ */
+export function provenanceMismatches(current: RunProvenance, records: readonly ProvenancedRecord[]): ProvenanceMismatch[] {
+  const out: ProvenanceMismatch[] = [];
+  const seen = new Set<string>();
+  const add = (m: ProvenanceMismatch) => {
+    const key = `${m.field}|${m.file}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(m);
+    }
+  };
+  for (const r of records) {
+    if (!r.provenance) {
+      add({ field: 'provenance', file: NOT_RECORDED, current: 'recorded' });
+      continue;
+    }
+    for (const f of PROVENANCE_FIELDS) {
+      if (r.provenance[f] !== current[f]) add({ field: f, file: show(r.provenance[f]), current: show(current[f]) });
+    }
+  }
+  return out;
+}
+
+export function formatMismatches(mismatches: readonly ProvenanceMismatch[]): string {
+  return mismatches.map(m => `  ${m.field}: file ${m.file}, now ${m.current}`).join('\n');
+}
+
+export type RunFilePlan<T> =
+  | { action: 'fresh'; archive: boolean }
+  | { action: 'append'; done: T[] }
+  | { action: 'refuse'; mismatches: ProvenanceMismatch[] };
+
+/**
+ * What a run does with its run file. `existing` is null when there is no
+ * file. --new-run always starts fresh (the caller moves an existing file
+ * aside, never deletes it); otherwise the records must all share `current`.
+ */
+export function planRunFile<T extends ProvenancedRecord>(
+  existing: readonly T[] | null,
+  current: RunProvenance,
+  newRun: boolean,
+): RunFilePlan<T> {
+  if (newRun) return { action: 'fresh', archive: existing !== null };
+  if (existing === null) return { action: 'fresh', archive: false };
+  const mismatches = provenanceMismatches(current, existing);
+  return mismatches.length > 0 ? { action: 'refuse', mismatches } : { action: 'append', done: [...existing] };
+}
+
+/** Where --new-run moves an existing run file (same directory; report.mjs never reads it). */
+export function supersededFileName(arm: Arm, stamp: string): string {
+  return `arm-${arm}.superseded-${stamp.replace(/[:.]/g, '-')}.jsonl`;
+}
+
+export interface ProvenanceGroup {
+  /** null for records written before provenance was recorded. */
+  provenance: RunProvenance | null;
+  count: number;
+}
+
+/** The distinct provenances of an arm's records, in first-seen order. */
+export function provenanceGroups(records: readonly ProvenancedRecord[]): ProvenanceGroup[] {
+  const groups = new Map<string, ProvenanceGroup>();
+  for (const r of records) {
+    const p = r.provenance ?? null;
+    const key = p === null ? '' : JSON.stringify(PROVENANCE_FIELDS.map(f => p[f]));
+    const g = groups.get(key);
+    if (g) g.count++;
+    else groups.set(key, { provenance: p, count: 1 });
+  }
+  return [...groups.values()];
+}
+
+export function isMixed(groups: readonly ProvenanceGroup[]): boolean {
+  return groups.length > 1;
+}
+
+/**
+ * The REPORT.md provenance section: which system produced each arm's
+ * numbers, and a loud warning for every arm whose file mixes provenances
+ * (report.mjs leaves such an arm out of every table and the verdict).
+ */
+export function provenanceReportLines(byArm: ReadonlyArray<{ arm: string; groups: readonly ProvenanceGroup[] }>): string[] {
+  const short = (s: string | null) => (s === null ? '–' : `\`${s.slice(0, 12)}\``);
+  const lines = ['## Provenance', ''];
+  for (const { arm, groups } of byArm) {
+    if (isMixed(groups)) {
+      lines.push(
+        `> **⚠ MIXED PROVENANCE: arm ${arm}'s run file holds records from ${groups.length} different provenances ` +
+        `(${groups.map(g => g.count).join(' + ')} records). They were not produced by one system, so arm ${arm} is NOT pooled: ` +
+        `it is left out of every table and the verdict below. Re-run it with --new-run.**`,
+        '',
+      );
+    } else if (groups[0]?.provenance === null) {
+      lines.push(`> Arm ${arm}'s records carry no provenance (written before the resume guard); the system that produced them can't be stated.`, '');
+    }
+  }
+  lines.push(
+    '| Arm | Records | Commit | Dirty | Model | Digest | Ollama | Temperature | Seed | Think | Quality mode | NLI model | items.jsonl sha256 |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+  );
+  for (const { arm, groups } of byArm) {
+    for (const { provenance: p, count } of groups) {
+      if (p === null) {
+        lines.push(`| ${arm} | ${count} | ${NOT_RECORDED} |  |  |  |  |  |  |  |  |  |  |`);
+        continue;
+      }
+      const dirty = p.dirty ? `**yes** (changes ${short(p.worktreeSha256)})` : 'no';
+      lines.push(
+        `| ${arm} | ${count} | ${short(p.commit)} | ${dirty} | \`${p.model}\` | ${short(p.modelDigest)} | ${p.ollamaVersion} | ` +
+        `${p.temperature} | ${p.seed} | ${p.think === null ? '–' : p.think} | ${p.qualityMode} | \`${p.nliModel}\` | ${short(p.itemsSha256)} |`,
+      );
+    }
+  }
+  lines.push('');
+  return lines;
 }

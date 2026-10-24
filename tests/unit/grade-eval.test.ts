@@ -2,11 +2,12 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  evaluateCriteria, gradeItemId, isNearCopyEdit, median, pairedBootstrap, pendingItems, quantile, runFileName,
-  runFilePath, runsDir, selectGradeItems,
-  ARMS, BOOTSTRAP_RESAMPLES, CRITERIA, EVAL_OPTIONS, FILL_ORDER, GRADE_TARGETS, PARA_MAX_ROWS, PARA_MIN_ROWS,
-  PARAGRAPHS_PER_TARGET, SENTENCES_PER_TARGET,
-  type BootstrapResult, type SelectionInput,
+  dirtyFilesFromPorcelain, evaluateCriteria, formatMismatches, gradeItemId, isMixed, isNearCopyEdit, median,
+  pairedBootstrap, pendingItems, planRunFile, provenanceGroups, provenanceMismatches, provenanceReportLines, quantile,
+  runFileName, runFilePath, runsDir, selectGradeItems, supersededFileName,
+  ARMS, BOOTSTRAP_RESAMPLES, CRITERIA, EVAL_OPTIONS, FILL_ORDER, GRADE_QUALITY_MODE, GRADE_TARGETS, PARA_MAX_ROWS,
+  PARA_MIN_ROWS, PARAGRAPHS_PER_TARGET, PROVENANCE_FIELDS, SENTENCES_PER_TARGET,
+  type BootstrapResult, type ProvenancedRecord, type RunProvenance, type SelectionInput,
 } from '../../scripts/grade/lib';
 
 // ─── Selection ────────────────────────────────────────────────────────────────
@@ -200,5 +201,141 @@ describe('run files', () => {
       expect(() => runFilePath(runsDir(root, { smoke: true }), arm)).not.toThrow();
       expect(() => runFilePath(runsDir(root, { runs: smokeArg }), arm)).not.toThrow();
     }
+  });
+});
+
+// ─── Provenance ───────────────────────────────────────────────────────────────
+
+describe('provenance', () => {
+  const prov: RunProvenance = {
+    arm: 'A',
+    commit: 'a'.repeat(40),
+    dirty: false,
+    worktreeSha256: null,
+    ollamaVersion: '0.35.0',
+    model: 'qwen3:4b-instruct-2507-q4_K_M',
+    modelDigest: 'd'.repeat(64),
+    temperature: 0,
+    seed: 42,
+    think: false,
+    qualityMode: GRADE_QUALITY_MODE,
+    nliModel: 'Xenova/nli-deberta-v3-xsmall',
+    itemsSha256: 'e'.repeat(64),
+  };
+  const rec = (itemId: string, provenance: RunProvenance | null = prov) => ({ itemId, provenance });
+  /** A different value of the same type for each field. */
+  const changed: { [K in keyof RunProvenance]: RunProvenance[K] } = {
+    arm: 'C',
+    commit: 'b'.repeat(40),
+    dirty: true,
+    worktreeSha256: 'f'.repeat(64),
+    ollamaVersion: '0.36.0',
+    model: 'qwen2.5:3b',
+    modelDigest: 'c'.repeat(64),
+    temperature: 0.7,
+    seed: 7,
+    think: null,
+    qualityMode: 'lite',
+    nliModel: 'other/nli',
+    itemsSha256: '0'.repeat(64),
+  };
+
+  it('covers at least the required fields', () => {
+    for (const f of ['commit', 'dirty', 'ollamaVersion', 'model', 'temperature', 'qualityMode', 'itemsSha256', 'arm'] as const) {
+      expect(PROVENANCE_FIELDS).toContain(f);
+    }
+    expect(Object.keys(changed).sort()).toEqual([...PROVENANCE_FIELDS].sort());
+  });
+
+  it('appends when the provenance is the same', () => {
+    const existing = [rec('g4-s-1'), rec('g4-s-2')];
+    expect(planRunFile(existing, { ...prov }, false)).toEqual({ action: 'append', done: existing });
+    expect(provenanceMismatches(prov, existing)).toEqual([]);
+  });
+
+  it.each(PROVENANCE_FIELDS)('refuses to append when %s differs, naming both values', field => {
+    const current = { ...prov, [field]: changed[field] };
+    const plan = planRunFile([rec('g4-s-1'), rec('g4-s-2')], current, false);
+    expect(plan.action).toBe('refuse');
+    if (plan.action !== 'refuse') return;
+    expect(plan.mismatches).toEqual([{ field, file: JSON.stringify(prov[field]), current: JSON.stringify(changed[field]) }]);
+    const text = formatMismatches(plan.mismatches);
+    expect(text).toContain(field);
+    expect(text).toContain(`file ${JSON.stringify(prov[field])}`);
+    expect(text).toContain(`now ${JSON.stringify(changed[field])}`);
+  });
+
+  it('names every differing field against every provenance in the file, each file value once', () => {
+    const other = { ...prov, ollamaVersion: '0.34.0' };
+    const plan = planRunFile([rec('g4-s-1'), rec('g4-s-2', other), rec('g4-s-3', other)], { ...prov, seed: 7 }, false);
+    expect(plan.action === 'refuse' && plan.mismatches).toEqual([
+      { field: 'seed', file: '42', current: '7' },
+      { field: 'ollamaVersion', file: '"0.34.0"', current: '"0.35.0"' },
+    ]);
+  });
+
+  it('refuses to extend records that carry no provenance', () => {
+    const legacy: Array<ProvenancedRecord & { itemId: string }> = [rec('g4-s-1', null), { itemId: 'g4-s-2' }];
+    const plan = planRunFile(legacy, prov, false);
+    expect(plan).toEqual({ action: 'refuse', mismatches: [{ field: 'provenance', file: '(not recorded)', current: 'recorded' }] });
+  });
+
+  it('starts fresh with --new-run, moving an existing file aside', () => {
+    const existing = [rec('g4-s-1', { ...prov, commit: 'b'.repeat(40) })];
+    expect(planRunFile(existing, prov, true)).toEqual({ action: 'fresh', archive: true });
+    expect(planRunFile(null, prov, true)).toEqual({ action: 'fresh', archive: false });
+    expect(supersededFileName('A', '2026-10-24T10:00:00.000Z')).toBe('arm-A.superseded-2026-10-24T10-00-00-000Z.jsonl');
+    expect(supersededFileName('A', '2026-10-24T10:00:00.000Z')).not.toBe(runFileName('A'));
+  });
+
+  it('starts fresh without a file and appends to an empty one', () => {
+    expect(planRunFile(null, prov, false)).toEqual({ action: 'fresh', archive: false });
+    expect(planRunFile([], prov, false)).toEqual({ action: 'append', done: [] });
+  });
+
+  it('reads dirty files from git status -z, renames included', () => {
+    const z = ' M src/a.ts\0?? scripts/new.mjs\0R  docs/new.md\0docs/old.md\0A  path with space.txt\0';
+    expect(dirtyFilesFromPorcelain(z)).toEqual(['src/a.ts', 'scripts/new.mjs', 'docs/new.md', 'path with space.txt']);
+    expect(dirtyFilesFromPorcelain('')).toEqual([]);
+  });
+});
+
+describe('provenance in the report', () => {
+  const prov = (commit: string): RunProvenance => ({
+    arm: 'A', commit, dirty: false, worktreeSha256: null, ollamaVersion: '0.35.0',
+    model: 'qwen3:4b-instruct-2507-q4_K_M', modelDigest: 'd'.repeat(64), temperature: 0, seed: 42, think: false,
+    qualityMode: GRADE_QUALITY_MODE, nliModel: 'Xenova/nli-deberta-v3-xsmall', itemsSha256: 'e'.repeat(64),
+  });
+  const one = prov('1111111111112222');
+  const two = prov('3333333333334444');
+
+  it('states the commit and model tag of a single-provenance arm, without a warning', () => {
+    const groups = provenanceGroups([{ provenance: one }, { provenance: { ...one } }]);
+    expect(groups).toEqual([{ provenance: one, count: 2 }]);
+    expect(isMixed(groups)).toBe(false);
+    const md = provenanceReportLines([{ arm: 'A', groups }]).join('\n');
+    expect(md).toContain('`111111111111`');
+    expect(md).toContain('`qwen3:4b-instruct-2507-q4_K_M`');
+    expect(md).not.toContain('MIXED');
+  });
+
+  it('flags a mixed file loudly instead of pooling it', () => {
+    const records: ProvenancedRecord[] = [{ provenance: one }, { provenance: two }, { provenance: one }];
+    const groups = provenanceGroups(records);
+    expect(groups.map(g => g.count)).toEqual([2, 1]);
+    expect(isMixed(groups)).toBe(true);
+    const md = provenanceReportLines([{ arm: 'A', groups }]).join('\n');
+    expect(md).toContain('MIXED PROVENANCE: arm A');
+    expect(md).toContain('NOT pooled');
+    expect(md).toContain('`111111111111`');
+    expect(md).toContain('`333333333333`');
+  });
+
+  it('treats records without provenance as their own group', () => {
+    const groups = provenanceGroups([{ provenance: one }, {}]);
+    expect(isMixed(groups)).toBe(true);
+    const legacy = provenanceReportLines([{ arm: 'A', groups: provenanceGroups([{}, { provenance: null }]) }]).join('\n');
+    expect(legacy).toContain('carry no provenance');
+    expect(legacy).not.toContain('MIXED');
   });
 });

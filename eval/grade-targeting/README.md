@@ -15,7 +15,8 @@ The hypotheses, definitions, criteria and decision rule are fixed in [PREREG.md]
 |---|---|
 | `PREREG.md` | The pre-registration. Changes go only in its Deviations section. |
 | `items.jsonl` | The 200 frozen items. Line 1 is `{"header": …}` (source, seed, provenance counts); each other line is `{id, kind, rows, target, text, sha256, fkgl, estimatedGrade}`. SHA-256 of the file (LF): `e2bafeabdd9edbe5e75e321384689b64ba36f885778d28bbddda7d3a6b446577`. `.gitattributes` keeps it LF on Windows checkouts. |
-| `runs/arm-<A\|B\|C>.jsonl` | One record per item and arm, written by `npm run grade:run` (created by the real runs). |
+| `runs/arm-<A\|B\|C>.jsonl` | One record per item and arm, written by `npm run grade:run` (created by the real runs). Each record has a `provenance` field: HEAD commit, dirty tree (and a hash of the uncommitted changes), Ollama version, model tag and digest, temperature, seed, think, quality mode, NLI model, items.jsonl sha256 and arm. |
+| `runs/arm-<X>.superseded-<time>.jsonl` | An older run file that `--new-run` moved aside. It is never read by the report. |
 | `runs/smoke/` | `--limit` smoke runs; git-ignored, never results. |
 | `REPORT.md` | Written by `npm run grade:report`. |
 
@@ -59,10 +60,18 @@ No paragraph window was rejected for overlap. TurkCorpus validation (`turk_val.j
 ```powershell
 npm run grade:run -- --select-items            # done once; refuses to overwrite (--force only to confirm a byte-identical redraw)
 npm run grade:run -- --arm A --limit 5         # smoke test → runs/smoke/arm-A.jsonl
-npm run grade:run -- --arm A                   # the pre-registered baseline run (resumable)
+npm run grade:run -- --arm A                   # the pre-registered baseline run (resumable under the same provenance)
+npm run grade:run -- --arm A --new-run         # start a fresh file; the existing one is moved aside, not deleted
 npm run grade:run -- --arm B                   # after Prompt 11 adds arm B (and C)
 npm run grade:report                           # → REPORT.md (-- --runs eval/grade-targeting/runs/smoke for a smoke report)
 ```
+
+**Resume guard.** A rerun appends only if its provenance equals that of every record already in the file. Otherwise it exits non-zero and names each differing field with both values. Use `--new-run` to start over. A dirty working tree is allowed but printed as a warning, with the changed files; the harness outputs (`runs/`, `REPORT.md`) don't count. So, between resumes of one arm:
+- don't commit;
+- don't edit code;
+- don't update Ollama or re-pull the model.
+
+Commit the run file once the arm is complete. `REPORT.md` states each arm's commit and model tag. If an arm's file mixes provenances, the report flags it, leaves that arm out of every table and the verdict, and exits non-zero.
 
 To run the arms you need:
 - Ollama with `qwen3:4b-instruct-2507-q4_K_M` and `all-minilm`;
