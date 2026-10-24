@@ -4,7 +4,7 @@
  * runs one arm over it against local Ollama.
  *
  *   node scripts/grade/run-arm.mjs --select-items [--force]   # once: eval/grade-targeting/items.jsonl
- *   node scripts/grade/run-arm.mjs --arm A [--limit N] [--new-run]   # A now; B and C after Prompt 11
+ *   node scripts/grade/run-arm.mjs --arm A|B|C [--limit N] [--new-run]
  *
  * Design decisions:
  *  - Items come only from training/data/asset_val.jsonl, minus every row of
@@ -28,6 +28,17 @@
  *    and the echo-strip last resort. Only the call itself is ours, because
  *    OllamaProvider sends no temperature: options are EVAL_OPTIONS
  *    (temperature 0, seed 42) and `think` follows thinkSetting.
+ *  - Arms B and C (Prompt 11) are added next to arm A, which is unchanged.
+ *    B is arm A's path (runArmA itself) on the grade-aware prompt
+ *    (renderPrompt gradeAware → buildPrompt gradeAware). C is runArmC: the
+ *    grade-aware prompt plus the app's grade retry (src/lib/quality/grade.ts,
+ *    as in simplify.ts generate() with extra quality off): FKGL of the first
+ *    version (computeReadabilityReport of the plain text, 2 decimals, as
+ *    simplify.ts measures it), planRetry with CALLS_WITHOUT_BEST_OF_N (2), so
+ *    the meaning retry and the grade note share one retry, pickGradeAware,
+ *    then A's echo-strip last resort. C reads only the item's target (via
+ *    the spec) and the app's own measures, never items.jsonl's FKGL. At most
+ *    2 calls per item in every arm, under MAX_MODEL_CALLS_PER_NODE (3).
  *  - The meaning checks run like replay-meaning.mjs: SBERT through
  *    checkMeaning with all-minilm, NLI through checkEntailment with the
  *    bundled model on onnxruntime-node (NliClient), main claim through
@@ -106,8 +117,9 @@ for (const path of [
   '/src/lib/llm/ollama-think.ts',
   '/scripts/bakeoff/lib.ts',
   '/src/lib/quality/config.ts',
+  '/src/lib/quality/grade.ts',
 ]) modules.push(await load(path));
-const [lib, evalLib, trainLib, render, engine, nodeGrade, semantic, meaning, nli, premises, echo, format, think, bakeoff, config] = modules;
+const [lib, evalLib, trainLib, render, engine, nodeGrade, semantic, meaning, nli, premises, echo, format, think, bakeoff, config, grade] = modules;
 const wordSet = render.baseWordSet();
 
 /** Readability of a text as the app measures it (list markers stripped). */
@@ -386,7 +398,110 @@ async function runArmA(item, prompt, client, thinkValue) {
   return { chosen, tried, calls };
 }
 
-const ARM_RUNNERS = { A: runArmA };
+// ─── Arm C ────────────────────────────────────────────────────────────────────
+
+/**
+ * Grade-aware prompt (the caller renders it) plus the app's grade retry: the
+ * first version's FKGL decides a grade note, which shares the one retry with
+ * the meaning reasons (planRetry, CALLS_WITHOUT_BEST_OF_N); pickGradeAware
+ * keeps a version; then arm A's echo last resort. The assess and attempt
+ * steps repeat arm A's, so arm A's own function stays untouched.
+ */
+async function runArmC(item, prompt, client, thinkValue) {
+  const node = { id: 'n0', type: 'paragraph', text: prompt.modelText, entities: prompt.entities };
+  const hinted = prompt.hinted;
+  const checked = semantic.shouldCheckNode(node);
+  const flatten = !prompt.spec.allowBullets;
+  const shape = text => (flatten ? format.flattenLists(text) : text);
+  const target = prompt.spec.targetGrade;
+  // simplify.ts: the grade loop runs only when there is a target to aim at
+  const gradeLoop = checked && prompt.spec.depthTier !== 'none';
+  // simplify.ts fkgl(toPlainText(text)), 2 decimals
+  const gradeOf = c => Math.round(engine.computeReadabilityReport(format.toPlainText(c.text), wordSet).fleschKincaidGradeLevel * 100) / 100;
+  let calls = 0;
+
+  const assess = text => meaning.assessMeaning(node.text, text, node.entities, hinted, {
+    similarity: async (original, plain) => {
+      try {
+        return (await semantic.checkMeaning(original, plain, embedOrThrow)).similarity;
+      } catch (err) {
+        console.warn(`[Clarity] Similarity check failed for ${item.id}`, err.message);
+        return null;
+      }
+    },
+    entail: async (original, simplified, words) => {
+      try {
+        return await nli.checkEntailment(original, simplified, words, client, { label: item.id, embed: embedOrThrow });
+      } catch (err) {
+        console.warn(`[Clarity] NLI check failed for ${item.id}`, err.message);
+        return null;
+      }
+    },
+    mainClaim: async (original, sentences) => {
+      if (sentences.length <= 2) return null;
+      try {
+        const [paragraph, ...vecs] = await embedOrThrow([original, ...sentences]);
+        return premises.mainClaimIndexes(sentences.length, { sentences: vecs, paragraph });
+      } catch {
+        return null;
+      }
+    },
+    mainClaimEntailment: async (original, simplified, claim) => {
+      try {
+        return await nli.checkMainClaim(original, simplified, claim, client, { label: item.id, embed: embedOrThrow });
+      } catch {
+        return null;
+      }
+    },
+  }, { echoGuard: true });
+
+  async function attempt(retryFrom, gradeNote) {
+    if (calls >= config.MAX_MODEL_CALLS_PER_NODE) throw new Error(`model call limit reached for ${item.id}`);
+    calls++;
+    const prefix = grade.combineRetryInstructions(
+      retryFrom === null ? null : meaning.buildRetryInstruction(meaning.retryInputOf(retryFrom)),
+      gradeNote?.note ?? null,
+    );
+    const user = prefix === '' ? prompt.user : `${prefix}\n\n${prompt.user}`;
+    const text = shape(await chat(prompt.system, user, thinkValue));
+    const c = { text, meaning: checked ? await assess(text) : null, retry: retryFrom !== null };
+    if (gradeNote) c.gradeInstruction = gradeNote.miss;
+    if (gradeLoop) c.fkgl = gradeOf(c);
+    return c;
+  }
+
+  const first = await attempt(null, null);
+  const tried = [first];
+  let chosen = first;
+  if (checked) {
+    const meaningRetry = !meaning.candidatePasses(first) && first.meaning !== null && meaning.shouldRetry(first.meaning);
+    const miss = gradeLoop ? grade.gradeMiss(first.fkgl, target) : null;
+    const plan = grade.planRetry({ meaningRetry, miss, callsMade: calls, callLimit: config.CALLS_WITHOUT_BEST_OF_N });
+    if (plan.retry) {
+      const gradeNote = plan.grade ? { miss: plan.grade, note: grade.buildGradeInstruction(plan.grade, first.fkgl, target) } : null;
+      const retry = await attempt(plan.meaning ? first.meaning : null, gradeNote);
+      tried.push(retry);
+      chosen = gradeLoop ? grade.pickGradeAware(first, retry, target, gradeOf) : meaning.pickBetterVersion(first, retry);
+    }
+  }
+  if (chosen.meaning?.echo) {
+    const ctx = { original: node.text, entities: node.entities };
+    const stripped = echo.stripEchoLines(chosen.text, ctx);
+    const finding = echo.findEcho(stripped, ctx);
+    if (stripped !== '' && stripped !== chosen.text && finding.lines.length === 0 && !finding.instruction) {
+      const cleaned = { text: stripped, meaning: await assess(stripped), retry: chosen.retry, echoStripped: true };
+      if (gradeLoop) cleaned.fkgl = gradeOf(cleaned);
+      tried.push(cleaned);
+      chosen = cleaned;
+    }
+  }
+  return { chosen, tried, calls };
+}
+
+// B is arm A's path on the grade-aware prompt (ARM_PROMPT_OPTIONS)
+const ARM_RUNNERS = { A: runArmA, B: runArmA, C: runArmC };
+/** renderPrompt options per arm; A gets none, so its prompt and hash are unchanged. */
+const ARM_PROMPT_OPTIONS = { B: { gradeAware: true }, C: { gradeAware: true } };
 
 // ─── Measures ─────────────────────────────────────────────────────────────────
 
@@ -415,6 +530,9 @@ const candidateLog = c => ({
   text: c.text,
   retry: c.retry,
   ...(c.echoStripped && { echoStripped: true }),
+  // Arms B and C only (absent from arm A's records)
+  ...(c.gradeInstruction && { gradeInstruction: c.gradeInstruction }),
+  ...(c.fkgl !== undefined && { fkgl: round(c.fkgl, 2) }),
   passed: c.meaning ? c.meaning.passed : null,
   score: round(c.meaning?.score ?? null, 4),
   similarity: round(c.meaning?.similarity ?? null, 4),
@@ -428,7 +546,7 @@ const candidateLog = c => ({
 async function runArm(arm) {
   if (!lib.ARMS.includes(arm)) throw new Error(`unknown arm ${arm} (A, B or C)`);
   const runner = ARM_RUNNERS[arm];
-  if (!runner) throw new Error(`Arm ${arm} needs Prompt 11's grade-targeting code (not in src/ yet); only arm A runs before Prompt 11`);
+  if (!runner) throw new Error(`Arm ${arm} has no runner`);
 
   const items = await readItems();
   const limit = option('--limit') ? Number(option('--limit')) : Infinity;
@@ -438,7 +556,9 @@ async function runArm(arm) {
   mkdirSync(outDir, { recursive: true });
 
   const wanted = items.map(item => {
-    const prompt = render.renderPrompt(item.text, item.target, 'app', wordSet);
+    const prompt = ARM_PROMPT_OPTIONS[arm]
+      ? render.renderPrompt(item.text, item.target, 'app', wordSet, ARM_PROMPT_OPTIONS[arm])
+      : render.renderPrompt(item.text, item.target, 'app', wordSet);
     return { arm, itemId: item.id, item, prompt, promptHash: sha256(`${prompt.system}\n\n${prompt.user}`) };
   });
   const existing = existsSync(outFile) ? await readJsonl(outFile) : null;

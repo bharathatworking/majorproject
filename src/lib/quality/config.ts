@@ -252,3 +252,46 @@ export const BELOW_TARGET_FACTOR = 0.5;
 export const LENGTH_IDEAL = { min: 0.5, max: 1.3 } as const;
 export const LENGTH_MIN = 0.15;
 export const LENGTH_MAX = 2.0;
+
+// ─── Grade targeting (Prompt 11, lib/quality/grade.ts) ───────────────────────
+
+/**
+ * A version is on target when |FKGL − target grade| ≤ this. The same 1.0 as
+ * the pre-registered "target-grade hit" (eval/grade-targeting/PREREG.md).
+ */
+export const GRADE_TOLERANCE = 1.0;
+
+/**
+ * Grade-aware prompt wording (arm B) in the app. Off until
+ * eval/grade-targeting/REPORT.md: PREREG's decision rule keeps B's wording
+ * only if B vs A breaks no guardrail.
+ */
+export const GRADE_WORDING_ENABLED = false;
+
+/**
+ * The FKGL measure-and-retry loop (arm C) in the app. Off until REPORT.md:
+ * PREREG enables it by default only if the primary criterion and all four
+ * guardrails hold. It never adds a model call (see lib/quality/grade.ts).
+ */
+export const GRADE_RETRY_ENABLED = false;
+
+/**
+ * What a grade means, for the grade-aware wording: the first band whose
+ * `maxGrade` is ≥ the target. Typical reader ages (US grade + 5/6) and the
+ * sentence lengths that give that Flesch-Kincaid grade with everyday words.
+ */
+export const GRADE_WORDING_BANDS: readonly { maxGrade: number; ages: string; words: string; vocabulary: string }[] = [
+  { maxGrade: 3, ages: '7–9', words: '6–9', vocabulary: 'only very common, short words' },
+  { maxGrade: 5, ages: '9–11', words: '8–12', vocabulary: 'common everyday words' },
+  { maxGrade: 7, ages: '11–13', words: '12–15', vocabulary: 'mostly everyday words; explain any harder word' },
+  { maxGrade: 9, ages: '13–15', words: '14–18', vocabulary: 'everyday words plus a few subject words' },
+  { maxGrade: 12, ages: '15–18', words: '17–22', vocabulary: 'general vocabulary; subject terms are fine' },
+  { maxGrade: Infinity, ages: 'adult', words: '20–25', vocabulary: 'educated adult vocabulary' },
+];
+
+/**
+ * Model calls a node may make without best-of-N ("Extra quality" off, or
+ * Lite mode): the first version plus one retry. The meaning retry and the
+ * grade retry share that one retry (lib/quality/grade.ts planRetry).
+ */
+export const CALLS_WITHOUT_BEST_OF_N = 2;

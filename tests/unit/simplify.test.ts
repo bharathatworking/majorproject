@@ -1627,3 +1627,184 @@ describe('runSimplification run log', () => {
     expect(cb.onComplete).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Grade retry (Prompt 11): FKGL measured, one shared retry, never more calls
+// ---------------------------------------------------------------------------
+describe('runSimplification grade retry', () => {
+  // FKGL with the base word list: GOOD 2.31, MID 5.04, LIKED 6.62, HARD 21.73;
+  // the CURIE source is 9.26, so it is never "already simple" at 3 or 7.
+  const GOOD = 'Marie Curie won a big prize in 1903.';
+  const MID = 'Marie Curie won the Nobel Prize in Physics in 1903 for her work on rays.';
+  const LIKED = 'Marie Curie liked science.';
+  const HARD =
+    'Marie Curie received the prestigious Nobel Prize in Physics in 1903, recognizing ' +
+    'extraordinary investigations concerning radioactivity.';
+  const TOO_HARD_NOTE = 'harder than the target grade 3';
+  const lastLog = async (docId: string) => (await getDocument(docId))?.runLogs?.at(-1);
+  const enableGradeRetry = () => chrome.storage.local.set({ 'debug:gradeTargeting': 'retry' });
+
+  beforeEach(async () => {
+    nodes = [CURIE];
+    await setTargetGrade(3);
+  });
+
+  it('is off by default: an off-target version that passes is kept with one call', async () => {
+    replies = { n0: [HARD] };
+    scores = { [HARD]: 0.9 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const log = await lastLog(doc.id);
+    expect(log?.gradeTargeting).toBeUndefined();
+    expect(log?.nodes[0].candidates[0]).not.toHaveProperty('fkgl');
+  });
+
+  it('already on target: no retry', async () => {
+    await enableGradeRetry();
+    replies = { n0: [GOOD] };
+    scores = { [GOOD]: 0.93 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const log = await lastLog(doc.id);
+    expect(log?.gradeTargeting).toEqual({ wording: true, retry: true });
+    expect(log?.nodes[0].candidates[0].fkgl).toBeCloseTo(2.31, 1);
+  });
+
+  it('too hard: one retry asking for shorter sentences and commoner words, keeping the on-target version', async () => {
+    await enableGradeRetry();
+    replies = { n0: [HARD, GOOD] };
+    scores = { [HARD]: 0.9, [GOOD]: 0.93 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(prompts[0]).not.toContain(TOO_HARD_NOTE);
+    expect(prompts[1]).toContain(TOO_HARD_NOTE);
+    expect(prompts[1]).toContain('shorter sentences and commoner, everyday words');
+    // The meaning check passed: the retry is the grade note plus the first prompt, nothing else
+    expect(prompts[1]).toMatch(/^Your last version read at about grade 21\.7, harder than the target grade 3\. [^\n]+\n\n/);
+    expect(prompts[1].endsWith(prompts[0])).toBe(true);
+    expect(prompts[1].split('\n\n').length).toBe(prompts[0].split('\n\n').length + 1);
+    expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe(GOOD);
+    const node = (await lastLog(doc.id))?.nodes[0];
+    expect(node?.candidates.map(c => c.gradeInstruction)).toEqual([undefined, 'too-hard']);
+    expect(node?.candidates.map(c => c.chosen)).toEqual([false, true]);
+  });
+
+  it('too easy: the retry says keep the detail, and the closer grade is kept', async () => {
+    await enableGradeRetry();
+    await setTargetGrade(7);
+    replies = { n0: [GOOD, MID] };
+    scores = { [GOOD]: 0.93, [MID]: 0.93 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(prompts[1]).toContain('easier than the target grade 7');
+    expect(prompts[1]).toContain('stop over-simplifying; keep the detail');
+    expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe(MID);
+  });
+
+  it('a meaning failure and a grade miss share one retry: 2 calls, never 3', async () => {
+    await enableGradeRetry();
+    replies = { n0: [LIKED, LIKED] };
+    scores = { [LIKED]: 0.6 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(prompts[1].startsWith(RETRY_OPENING)).toBe(true);
+    expect(prompts[1]).toContain(TOO_HARD_NOTE);
+    const node = (await lastLog(doc.id))?.nodes[0];
+    expect(node).toMatchObject({ modelCalls: 2, retries: 1 });
+    expect(node?.candidates[1]).toMatchObject({ retryInstruction: true, gradeInstruction: 'too-hard' });
+  });
+
+  it('Lite mode keeps its single retry with the grade loop on', async () => {
+    await enableGradeRetry();
+    await chrome.storage.sync.set({ qualityMode: 'lite' });
+    replies = { n0: [LIKED, HARD, GOOD] };
+    scores = { [LIKED]: 0.6, [HARD]: 0.6, [GOOD]: 0.93 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(prompts[1]).toContain(TOO_HARD_NOTE);
+  });
+
+  it('Lite mode with Extra quality on still makes no best-of-N calls', async () => {
+    await enableGradeRetry();
+    await chrome.storage.sync.set({ qualityMode: 'lite', extraQuality: true });
+    replies = { n0: [HARD, HARD, GOOD] };
+    scores = { [HARD]: 0.9, [GOOD]: 0.93 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('Extra quality: the variants carry the grade note, within MAX_MODEL_CALLS_PER_NODE', async () => {
+    await enableGradeRetry();
+    await chrome.storage.sync.set({ extraQuality: true });
+    replies = { n0: [HARD, MID, GOOD] };
+    scores = { [HARD]: 0.9, [MID]: 0.9, [GOOD]: 0.93 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_MODEL_CALLS_PER_NODE);
+    expect(prompts[1]).toContain(TOO_HARD_NOTE);
+    expect(prompts[2]).toContain(TOO_HARD_NOTE);
+  });
+
+  it('budget exhausted: a second miss on the retry does not trigger another call', async () => {
+    await enableGradeRetry();
+    replies = { n0: [HARD, HARD, GOOD] };
+    scores = { [HARD]: 0.9, [GOOD]: 0.93 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe(HARD);
+  });
+
+  it('wording only (arm B in the app): no grade retry', async () => {
+    await chrome.storage.local.set({ 'debug:gradeTargeting': 'wording' });
+    replies = { n0: [HARD] };
+    scores = { [HARD]: 0.9 };
+    const doc = await storedDoc();
+
+    await runSimplification(doc, callbacks(), 'all');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((await lastLog(doc.id))?.gradeTargeting).toEqual({ wording: true, retry: false });
+  });
+});
+
+describe('runSimplification dev model override', () => {
+  it('runs clarity-simplify only when the dev key names it', async () => {
+    nodes = [NODES[0]];
+    await chrome.storage.local.set({ 'debug:llmModelOverride': 'clarity-simplify' });
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+    expect(models).toEqual(['clarity-simplify']);
+  });
+
+  it('ignores any other value', async () => {
+    nodes = [NODES[0]];
+    await chrome.storage.local.set({ 'debug:llmModelOverride': 'llama3.2:1b' });
+    await runSimplification(await storedDoc(), callbacks(), 'all');
+    expect(models).toEqual([DEFAULT_LLM_MODEL]);
+  });
+});

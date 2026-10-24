@@ -33,6 +33,14 @@ describe('cacheKey', () => {
     expect(await cacheKey(TEXT, { ...SPEC }, MODEL)).toBe(key);
   });
 
+  it('keeps the standard key when grade targeting is off, and separates its modes', async () => {
+    const standard = await cacheKey(TEXT, SPEC, MODEL);
+    expect(await cacheKey(TEXT, SPEC, MODEL, 'standard', { wording: false, retry: false })).toBe(standard);
+    const wording = await cacheKey(TEXT, SPEC, MODEL, 'standard', { wording: true, retry: false });
+    const retry = await cacheKey(TEXT, SPEC, MODEL, 'standard', { wording: true, retry: true });
+    expect(new Set([standard, wording, retry]).size).toBe(3);
+  });
+
   it('changes with the node text', async () => {
     expect(await cacheKey(`${TEXT} `, SPEC, MODEL)).not.toBe(await cacheKey(TEXT, SPEC, MODEL));
   });

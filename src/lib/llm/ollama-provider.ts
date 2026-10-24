@@ -8,8 +8,11 @@
  *
  * createBaseSession reads the model's /api/show once: a 404 there means the
  * model is not pulled (caught before any node runs), and its capabilities
- * decide the `think` field (ollama-think.ts). No temperature is sent; each
- * model uses its Modelfile default.
+ * decide the `think` field (ollama-think.ts). Every /api/chat call pins
+ * `options.temperature` to LLM_TEMPERATURE (0), the value the grade-targeting
+ * evaluation runs with (eval/grade-targeting/PREREG.md: arm A pinned it while
+ * the app sent none and took each model's Modelfile default), so the app and
+ * the eval harness generate the same way.
  */
 
 import type { LLMAvailability } from '../../types';
@@ -23,6 +26,11 @@ const OLLAMA_BASE_URL = 'http://localhost:11434';
  * licensed Apache 2.0. A model saved in sync `llmModel` always wins over it.
  */
 export const DEFAULT_LLM_MODEL = 'qwen3:4b-instruct-2507-q4_K_M';
+/**
+ * Sampling temperature of every chat call. 0 = greedy decoding, the same as
+ * the eval harnesses' EVAL_OPTIONS (scripts/grade/lib.ts).
+ */
+export const LLM_TEMPERATURE = 0;
 /** Lighter chat model Settings suggests for slower computers. */
 export const LIGHT_LLM_MODEL = 'qwen2.5:1.5b';
 /**
@@ -144,6 +152,7 @@ export class OllamaProvider {
         stream: true,
         keep_alive: '10m',  // keep the model resident so only the first call in a
                             // session pays the cold-load cost, not every call
+        options: { temperature: LLM_TEMPERATURE },
         ...(this.think !== undefined && { think: this.think }),
       }),
     });

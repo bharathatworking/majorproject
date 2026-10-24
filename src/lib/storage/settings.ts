@@ -2,10 +2,17 @@
  * User settings in chrome.storage.sync: the reading profile (`userProfile`),
  * the chat model (`llmModel`), the "Extra quality" toggle (`extraQuality`)
  * and the quality mode (`qualityMode`). All fall back to defaults when unset.
+ *
+ * Dev-only A/B switches (chrome.storage.local, `debug:` keys, like
+ * debug:nliDevice): read only when import.meta.env.DEV, so `npm run build`
+ * replaces the check with `false` and drops the reads, and the store build
+ * can never reach them. Both are off unless the key is set by hand in the
+ * extension page's console.
  */
 
 import { DEFAULT_LLM_MODEL } from '../llm/ollama-provider';
-import type { QualityModeSetting, UserProfile } from '../../types';
+import { GRADE_RETRY_ENABLED, GRADE_WORDING_ENABLED } from '../quality/config';
+import type { GradeTargeting, QualityModeSetting, UserProfile } from '../../types';
 
 // ─── Profile ──────────────────────────────────────────────────────────────────
 
@@ -65,4 +72,40 @@ export async function getQualityMode(): Promise<QualityModeSetting> {
 
 export async function saveQualityMode(mode: QualityModeSetting): Promise<void> {
   await chrome.storage.sync.set({ qualityMode: mode });
+}
+
+// ─── Dev-only A/B switches ────────────────────────────────────────────────────
+
+/** Models the dev model override accepts (the Prompt 10 LoRA, not adopted). */
+export const DEV_MODEL_OVERRIDES: readonly string[] = ['clarity-simplify'];
+
+/**
+ * Dev build only: local `debug:llmModelOverride` = 'clarity-simplify' runs
+ * that model instead of the saved one, for A/B comparison. Null in the store
+ * build, when unset, or for any other value.
+ */
+export async function getDevModelOverride(): Promise<string | null> {
+  if (!import.meta.env.DEV) return null;
+  const data = await chrome.storage.local.get<{ 'debug:llmModelOverride'?: unknown }>('debug:llmModelOverride');
+  const value = data['debug:llmModelOverride'];
+  return typeof value === 'string' && DEV_MODEL_OVERRIDES.includes(value) ? value : null;
+}
+
+/**
+ * Grade-aware wording and the grade retry (Prompt 11): GRADE_WORDING_ENABLED
+ * and GRADE_RETRY_ENABLED from config.ts (both off until
+ * eval/grade-targeting/REPORT.md). Dev build only: local
+ * `debug:gradeTargeting` = 'wording' (arm B), 'retry' (arm C: wording and
+ * retry) or 'off' overrides them.
+ */
+export async function getGradeTargeting(): Promise<GradeTargeting> {
+  const defaults: GradeTargeting = { wording: GRADE_WORDING_ENABLED, retry: GRADE_RETRY_ENABLED };
+  if (!import.meta.env.DEV) return defaults;
+  const data = await chrome.storage.local.get<{ 'debug:gradeTargeting'?: unknown }>('debug:gradeTargeting');
+  switch (data['debug:gradeTargeting']) {
+    case 'off': return { wording: false, retry: false };
+    case 'wording': return { wording: true, retry: false };
+    case 'retry': return { wording: true, retry: true };
+    default: return defaults;
+  }
 }

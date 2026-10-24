@@ -26,7 +26,7 @@
 
 import { sha256 } from '../utils/hash';
 import { createWriteQueue } from '../utils/write-queue';
-import type { CachedResult, SimplificationSpec } from '../../types';
+import type { CachedResult, GradeTargeting, SimplificationSpec } from '../../types';
 
 export const CACHE_MAX_ENTRIES = 2000;
 /**
@@ -60,8 +60,12 @@ export function cacheKey(
   spec: SimplificationSpec,
   model: string,
   quality: 'standard' | 'extra' = 'standard',
+  grade: GradeTargeting = { wording: false, retry: false },
 ): Promise<string> {
-  const suffix = quality === 'extra' ? '\u0000extra' : '';
+  // Prompt 11 grade wording / retry get their own keys; the standard key is unchanged
+  const suffix = (quality === 'extra' ? '\u0000extra' : '')
+    + (grade.wording ? '\u0000grade-wording' : '')
+    + (grade.retry ? '\u0000grade-retry' : '');
   return sha256(`${nodeText}\u0000${stableJson(spec)}\u0000${model}${suffix}`);
 }
 

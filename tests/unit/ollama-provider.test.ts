@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
-  chatModelsFromTags, DEFAULT_LLM_MODEL, missingModelLog, OllamaProvider,
+  chatModelsFromTags, DEFAULT_LLM_MODEL, LLM_TEMPERATURE, missingModelLog, OllamaProvider,
 } from '../../src/lib/llm/ollama-provider';
 import { THINKING_CAPABILITY, thinkSetting } from '../../src/lib/llm/ollama-think';
 import { getLlmModel, saveLlmModel } from '../../src/lib/storage/settings';
@@ -52,6 +52,18 @@ describe('OllamaProvider', () => {
 
     const init = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit;
     expect(JSON.parse(String(init.body)).model).toBe('llama3.2:1b');
+  });
+
+  it('pins temperature 0 on every chat call, the grade evaluation value', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"done":true}\n', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const stream = await new OllamaProvider().simplifyChunk('Hi');
+    for await (const _ of stream) { /* drain */ }
+
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit;
+    expect(LLM_TEMPERATURE).toBe(0);
+    expect(JSON.parse(String(init.body)).options).toEqual({ temperature: 0 });
   });
 
   it('listModels throws on a non-OK response', async () => {
@@ -136,7 +148,7 @@ describe('OllamaProvider session', () => {
     expect(JSON.parse(String(show[1]?.body))).toEqual({ model: DEFAULT_LLM_MODEL });
     const body = await chatBody(provider, fetchMock);
     expect(body.think).toBe(false);
-    expect(body).not.toHaveProperty('options');
+    expect(body.options).toEqual({ temperature: LLM_TEMPERATURE });
   });
 
   it('sends no think field when the model cannot think', async () => {

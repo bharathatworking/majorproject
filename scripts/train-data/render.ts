@@ -18,7 +18,9 @@
  *    passes that list; a function picks from the app's list (training's
  *    truthful hints, lib.ts truthfulHints), so NER runs once.
  *    buildPrompt's own hintedWords still drops them for tier 'none'.
- *  - This file imports src/ but changes nothing there; Prompt 11 integrates.
+ *  - This file imports src/ but changes nothing there. `gradeAware`
+ *    (Prompt 11 arms B and C) passes through to buildPrompt; its default
+ *    false renders the prompt arm A ran with.
  */
 
 import { BASE_COMMON_WORDS, wordFormCandidates } from '../../src/lib/metrics/common-words';
@@ -67,6 +69,7 @@ export function renderPrompt(
   targetGrade: number,
   hints: HintChoice,
   wordSet: Set<string> = baseWordSet(),
+  { gradeAware = false }: { gradeAware?: boolean } = {},
 ): RenderedPrompt {
   const report = computeReadabilityReport(text, wordSet);
   const spec = resolveProfile({ ...DEFAULT_PROFILE, targetGradeLevel: targetGrade }, report.estimatedGradeLevel);
@@ -77,6 +80,6 @@ export function renderPrompt(
   const passed = hints === 'app' ? difficultWords
     : typeof hints === 'function' ? hints(difficultWords)
     : [...hints];
-  const { system, user } = buildPrompt(node, spec, report, '', passed);
+  const { system, user } = buildPrompt(node, spec, report, '', passed, 'standard', gradeAware);
   return { system, user, spec, report, modelText, entities, difficultWords, hinted: hintedWords(spec, passed) };
 }

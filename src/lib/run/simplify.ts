@@ -99,6 +99,17 @@
  *     short texts (no 6C check) always get one call. Extra-quality results
  *     are cached under their own key.
  *
+ * Grade retry (Prompt 11, lib/quality/grade.ts; off by default via
+ * GRADE_RETRY_ENABLED / GRADE_WORDING_ENABLED, dev builds can override with
+ * local debug:gradeTargeting): the first version's FKGL is measured, and a
+ * miss of more than GRADE_TOLERANCE adds a note naming the direction (too
+ * hard: shorter sentences, commoner words; too easy: keep the detail). The
+ * note never gets its own call: it rides on the one meaning retry
+ * (planRetry, CALLS_WITHOUT_BEST_OF_N) or on the Extra-quality variants, and
+ * pickGradeAware keeps meaning first, then grade. Worst-case model calls per
+ * node stay 2 with Extra quality off or in Lite mode and 3 with it on. Every
+ * chat call is at temperature 0 (OllamaProvider LLM_TEMPERATURE).
+ *
  * Quality mode (lib/quality/mode.ts, sync `qualityMode`): Full is the
  * above; Lite skips NLI (results nliChecked: false, lite: true, so they stay
  * out of the thesis pass rate), keeps the one 6C retry and ignores "Extra
@@ -131,7 +142,9 @@ import { buildPrompt, hintedWords } from '../prompt-builder/builder';
 import { EXTRA_VARIANTS, stripExampleLabel } from '../prompt-builder/variants';
 import { segmentHtml, simplifiableNodes } from '../segmentation/segmenter';
 import { cleanForModel } from '../segmentation/clutter';
-import { getExtraQuality, getLlmModel, getQualityMode, getUserProfile } from '../storage/settings';
+import {
+  getDevModelOverride, getExtraQuality, getGradeTargeting, getLlmModel, getQualityMode, getUserProfile,
+} from '../storage/settings';
 import { extensionVersion, getNliBench, getNliDevice } from '../storage/nli-bench';
 import { appVersion, gitCommit } from '../utils/build-info';
 import { getCommonWordSet } from '../metrics/word-set';
@@ -148,20 +161,21 @@ import {
 } from '../quality/meaning';
 import { findEcho, stripEchoLines } from '../quality/echo';
 import { pickBestCandidate, scoreCandidate, type ScoredCandidate } from '../quality/score';
+import { buildGradeInstruction, combineRetryInstructions, gradeMiss, pickGradeAware, planRetry } from '../quality/grade';
 import {
   chooseQualityMode, evidenceOf, hasWebGpuAdapter, isBenchStale, type BenchContext, type QualityDecision,
 } from '../quality/mode';
 import { mainClaimIndexes, PREMISE_STRATEGY } from '../quality/premises';
 import { failureBreakdown, failuresFromReasons, formatFailureBreakdown } from '../quality/verdict';
 import {
-  COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, CONTRADICTION_MAX, ENTAILMENT_MIN, ENTITY_RECALL_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
+  CALLS_WITHOUT_BEST_OF_N, COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, CONTRADICTION_MAX, ENTAILMENT_MIN, ENTITY_RECALL_MIN, GLOSSARY_EXEMPTION_MAX_RATE, MAX_MODEL_CALLS_PER_NODE,
   NLI_BUDGET_MS, NLI_CONTRADICTION_AGG, NLI_HYPOTHESIS_CONTEXT, NLI_MODEL_ID, NLI_PARAGRAPH_RULE,
   QUALITY_THRESHOLD, SIMILARITY_THRESHOLD, THESIS_COVERAGE_MIN, WEIGHTS,
 } from '../quality/config';
 import { isFullyChecked, meaningStatusOf, summarizeMeaning } from '../quality/similarity';
 import { formatSeconds, summarizeRun, type NodeTiming } from './timing';
 import type {
-  CachedResult, CandidateLog, CandidateScores, ClarityDocument, ContentNode, EntailmentCheck,
+  CachedResult, CandidateLog, CandidateScores, ClarityDocument, ContentNode, EntailmentCheck, GradeMiss,
   MeaningAssessment, MeaningStatus, NliBenchRecord, NodeMeaningLog, NodeRunLog, NodeSource,
   PromptVariantId, QualityModeSetting, RunLog, RunMode, StoredMeaning, StoredResult,
 } from '../../types';
@@ -317,6 +331,8 @@ const STORED_TYPE: Record<ContentNode['type'], StoredResult['type']> = {
 /** One scored model output, with what the run log needs about it. */
 interface Attempt extends ScoredCandidate {
   retryInstruction: boolean;
+  /** The prompt carried a grade note in this direction (grade retry). */
+  gradeInstruction?: GradeMiss;
   ms: number;
   /** The kept version with its echo lines removed (no model call). */
   echoStripped?: boolean;
@@ -353,10 +369,20 @@ export async function runSimplification(
   if (signal.aborted) return;
 
   // 2. Profile + word set + model + "Extra quality" + quality mode (parallel fetch)
-  const [profile, wordSet, model, extraQualitySetting, qualitySetting] = await Promise.all([
+  const [profile, wordSet, savedModel, extraQualitySetting, qualitySetting, gradeTargeting, devModel] = await Promise.all([
     getUserProfile(), getCommonWordSet(), getLlmModel(), getExtraQuality(), getQualityMode(),
+    getGradeTargeting(), getDevModelOverride(),
   ]);
   if (signal.aborted) return;
+  // Dev build only (always null in the store build): A/B against another model
+  const model = devModel ?? savedModel;
+  if (devModel) console.log(`[Clarity] Dev model override: ${devModel} instead of ${savedModel}`);
+  if (gradeTargeting.wording || gradeTargeting.retry) {
+    console.log(
+      `[Clarity] Grade targeting: wording ${gradeTargeting.wording ? 'on' : 'off'}, ` +
+      `retry ${gradeTargeting.retry ? 'on' : 'off'}`,
+    );
+  }
 
   const currentGrade = doc.report?.estimatedGradeLevel ?? 8;
   const spec = resolveProfile(profile, currentGrade);
@@ -391,7 +417,7 @@ export async function runSimplification(
   const llm = new OllamaProvider(model);
   const ollamaVersion = llm.version().catch(() => null);
   const firstPromptObj = doc.report
-    ? buildPrompt(toRun[0], spec, doc.report)
+    ? buildPrompt(toRun[0], spec, doc.report, '', [], 'standard', gradeTargeting.wording)
     : null;
 
   try {
@@ -458,6 +484,8 @@ export async function runSimplification(
   /** Flesch-Kincaid grade of a text, 2 decimals (run log). */
   const fkgl = (text: string) =>
     Math.round(computeReadabilityReport(text, wordSet).fleschKincaidGradeLevel * 100) / 100;
+  // The grade retry measures versions only when there is a target to aim at
+  const gradeLoop = gradeTargeting.retry && spec.depthTier !== 'none';
 
   /**
    * Records a finished node. `finalText` is the kept text (null for an
@@ -753,7 +781,7 @@ export async function runSimplification(
     /** User prompt for a variant; falls back to the bare text without a report. */
     const promptFor = (variant: PromptVariantId): string =>
       doc.report
-        ? buildPrompt(node, spec, doc.report, contextFor(node), difficultWords, variant).user
+        ? buildPrompt(node, spec, doc.report, contextFor(node), difficultWords, variant, gradeTargeting.wording).user
         : node.text;
 
     /**
@@ -778,26 +806,33 @@ export async function runSimplification(
       return { text, meaning, variant, scores, retryInstruction, ms: performance.now() - started };
     }
 
+    /** FKGL of a version's plain text (the grade the retry aims at). */
+    const gradeOf = (a: Attempt) => fkgl(toPlainText(a.text));
+
     /**
      * Generates, checks (6C) and scores one candidate. `retryFrom` (null for
-     * a first attempt) is the failed assessment the retry instruction names.
+     * a first attempt) is the failed assessment the retry instruction names;
+     * `grade` (the grade retry) adds the note naming the direction after it.
      * Null if aborted.
      */
     async function attempt(
       variant: PromptVariantId,
       retryFrom: MeaningAssessment | null,
       stream: boolean,
+      grade: { miss: GradeMiss; note: string } | null = null,
     ): Promise<Attempt | null> {
       const started = performance.now();
       const prompt = promptFor(variant);
-      const raw = await completeText(
-        node.id,
-        retryFrom === null ? prompt : `${buildRetryInstruction(retryInputOf(retryFrom))}\n\n${prompt}`,
-        stream,
+      const prefix = combineRetryInstructions(
+        retryFrom === null ? null : buildRetryInstruction(retryInputOf(retryFrom)),
+        grade?.note ?? null,
       );
+      const raw = await completeText(node.id, prefix === '' ? prompt : `${prefix}\n\n${prompt}`, stream);
       if (raw === null) return null;
       const text = shape(variant === 'example-guided' ? stripExampleLabel(raw) : raw);
-      return judge(text, variant, retryFrom !== null, started);
+      const judged = await judge(text, variant, retryFrom !== null, started);
+      if (judged && grade) judged.gradeInstruction = grade.miss;
+      return judged;
     }
 
     const first = await attempt('standard', null, true);
@@ -810,10 +845,19 @@ export async function runSimplification(
       const firstPasses = candidatePasses(first);
       // A failure worth fixing; an unsupported-only one is kept as "Not verified"
       const reasons = !firstPasses && first.meaning && shouldRetry(first.meaning) ? first.meaning : null;
-      if (extraQuality && (reasons !== null || first.scores.total < QUALITY_THRESHOLD)) {
+      // Grade retry (Prompt 11, off by default): the first version's grade
+      // and, when it misses the target, the note naming the direction. It
+      // rides on the same retry or variants as the meaning reasons and never
+      // adds a call (lib/quality/grade.ts).
+      const firstGrade = gradeLoop ? gradeOf(first) : null;
+      const miss = gradeLoop ? gradeMiss(firstGrade, spec.targetGrade) : null;
+      const grade = miss && firstGrade !== null
+        ? { miss, note: buildGradeInstruction(miss, firstGrade, spec.targetGrade) }
+        : null;
+      if (extraQuality && (reasons !== null || grade !== null || first.scores.total < QUALITY_THRESHOLD)) {
         for (const variant of EXTRA_VARIANTS.slice(0, MAX_MODEL_CALLS_PER_NODE - 1)) {
           try {
-            const next = await attempt(variant, reasons, false);
+            const next = await attempt(variant, reasons, false, grade);
             if (next === null) return null;
             tried.push(next);
           } catch (err) {
@@ -823,12 +867,24 @@ export async function runSimplification(
           }
         }
         chosen = pickBestCandidate(tried);
-      } else if (!extraQuality && reasons !== null) {
+      } else if (!extraQuality) {
+        // One retry at most (also in Lite mode), carrying the meaning reasons,
+        // the grade note or both
+        const plan = planRetry({
+          meaningRetry: reasons !== null, miss, callsMade: nodeCalls, callLimit: CALLS_WITHOUT_BEST_OF_N,
+        });
         try {
-          const retry = await attempt('standard', reasons, true);
-          if (retry === null) return null;
-          tried.push(retry);
-          chosen = pickBetterVersion(first, retry);
+          if (plan.retry) {
+            if (plan.grade) {
+              console.log(`[Clarity] Node ${node.id}: grade ${firstGrade} vs target ${spec.targetGrade} (${plan.grade}), retrying`);
+            }
+            const retry = await attempt('standard', plan.meaning ? reasons : null, true, plan.grade ? grade : null);
+            if (retry === null) return null;
+            tried.push(retry);
+            chosen = gradeLoop
+              ? pickGradeAware(first, retry, spec.targetGrade, gradeOf)
+              : pickBetterVersion(first, retry);
+          }
         } catch (err) {
           if (signal.aborted) return null;
           // The first version is still usable; don't fail the node over the retry
@@ -860,6 +916,8 @@ export async function runSimplification(
     const candidates: CandidateLog[] = tried.map(t => ({
       variant: t.variant,
       retryInstruction: t.retryInstruction,
+      ...(t.gradeInstruction && { gradeInstruction: t.gradeInstruction }),
+      ...(gradeLoop && { fkgl: gradeOf(t) }),
       chosen: t === chosen,
       ms: Math.round(t.ms),
       text: t.text,
@@ -949,7 +1007,7 @@ export async function runSimplification(
       }
 
       // c. Cache, then d. the model
-      const key = await cacheKey(work.text, spec, model, extraQuality ? 'extra' : 'standard');
+      const key = await cacheKey(work.text, spec, model, extraQuality ? 'extra' : 'standard', gradeTargeting);
       const cached = await lookupCache(key);
       let fullText: string;
       let stored: StoredMeaning | null;
@@ -1094,6 +1152,7 @@ export async function runSimplification(
     ollamaVersion: await ollamaVersion,
     // The effective value: Lite turns best-of-N off whatever the toggle says
     extraQuality,
+    ...((gradeTargeting.wording || gradeTargeting.retry) && { gradeTargeting }),
     qualitySetting,
     qualityMode: decision.mode,
     qualityModeReason: decision.reason,

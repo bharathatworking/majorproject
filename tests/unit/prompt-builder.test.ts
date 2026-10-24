@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPrompt, entityList, readerRules } from '../../src/lib/prompt-builder/builder';
+import { buildPrompt, entityList, gradeTargetDescription, readerRules } from '../../src/lib/prompt-builder/builder';
 import {
   EXAMPLES, EXTRA_VARIANTS, PROMPT_VARIANTS, pickExample, stripExampleLabel,
 } from '../../src/lib/prompt-builder/variants';
@@ -270,5 +270,38 @@ describe('buildPrompt variants', () => {
   it('strips a copied "After:" label from model output', () => {
     expect(stripExampleLabel('After: The plan failed.')).toBe('The plan failed.');
     expect(stripExampleLabel('The plan failed after: a while.')).toBe('The plan failed after: a while.');
+  });
+});
+
+describe('buildPrompt grade-aware wording (Prompt 11)', () => {
+  it('is off by default: the prompt is byte-identical to gradeAware false', () => {
+    for (const depthTier of ['light', 'moderate', 'aggressive', 'none'] as const) {
+      const s = spec({ depthTier });
+      expect(buildPrompt(node, s, report)).toEqual(buildPrompt(node, s, report, '', [], 'standard', false));
+    }
+    expect(buildPrompt(node, spec(), report).system).toContain('1. Target reading level: exactly grade 6.');
+  });
+
+  it('makes the target concrete: reader age, words per sentence and vocabulary', () => {
+    const { system, user } = buildPrompt(node, spec(), report, '', [], 'standard', true);
+    expect(system).toContain(
+      '1. Target reading level: grade 6, neither harder nor much easier ' +
+      '(a typical reader aged 11–13 reads it easily; about 12–15 words per sentence; ' +
+      'mostly everyday words; explain any harder word).',
+    );
+    // Only rule 1 changes; the user prompt is untouched
+    expect(user).toBe(buildPrompt(node, spec(), report).user);
+  });
+
+  it('says "no higher" for the aggressive tier, without "as simple as possible"', () => {
+    const text = gradeTargetDescription(spec({ depthTier: 'aggressive', targetGrade: 4 }));
+    expect(text).toContain('grade 4 or slightly below, no higher');
+    expect(text).toContain('9–11');
+    expect(text).not.toContain('as simple as possible');
+  });
+
+  it('keeps the none tier as it was, and covers grades above the last band', () => {
+    expect(gradeTargetDescription(spec({ depthTier: 'none' }))).toBe('the original grade level — do NOT simplify');
+    expect(gradeTargetDescription(spec({ targetGrade: 16 }))).toContain('adult');
   });
 });

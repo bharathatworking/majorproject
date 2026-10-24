@@ -62,7 +62,9 @@ npm run grade:run -- --select-items            # done once; refuses to overwrite
 npm run grade:run -- --arm A --limit 5         # smoke test → runs/smoke/arm-A.jsonl
 npm run grade:run -- --arm A                   # the pre-registered baseline run (resumable under the same provenance)
 npm run grade:run -- --arm A --new-run         # start a fresh file; the existing one is moved aside, not deleted
-npm run grade:run -- --arm B                   # after Prompt 11 adds arm B (and C)
+npm run grade:run -- --arm C --limit 5         # arm C smoke test → runs/smoke/arm-C.jsonl
+npm run grade:run -- --arm B                   # arm B: arm A's path on the grade-aware prompt
+npm run grade:run -- --arm C                   # arm C: grade-aware prompt + grade retry (one shared retry, at most 2 calls)
 npm run grade:report                           # → REPORT.md (-- --runs eval/grade-targeting/runs/smoke for a smoke report)
 ```
 

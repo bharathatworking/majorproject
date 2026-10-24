@@ -364,6 +364,26 @@ export interface MeaningAssessment {
 }
 
 /** One simplified version of a node; `meaning` is null when the node is not checked. */
+/** Which way a version missed its target grade (lib/quality/grade.ts gradeMiss). */
+export type GradeMiss = 'too-hard' | 'too-easy';
+
+/** Which Prompt 11 grade-targeting parts a run uses (lib/storage/settings.ts getGradeTargeting). */
+export interface GradeTargeting {
+  /** Grade-aware prompt wording (buildPrompt gradeAware). */
+  wording: boolean;
+  /** The FKGL measure-and-retry loop (lib/quality/grade.ts). */
+  retry: boolean;
+}
+
+/** A retry decision (lib/quality/grade.ts planRetry): what the one retry carries. */
+export interface RetryPlan {
+  retry: boolean;
+  /** The retry names the meaning-check reasons. */
+  meaning: boolean;
+  /** The retry names the grade direction. */
+  grade: GradeMiss | null;
+}
+
 export interface MeaningCandidate {
   text: string;
   meaning: MeaningAssessment | null;
@@ -399,6 +419,10 @@ export interface CandidateLog {
   variant: PromptVariantId;
   /** The prompt carried the meaning-retry instruction. */
   retryInstruction: boolean;
+  /** The prompt carried a grade note in this direction (Prompt 11 grade retry). */
+  gradeInstruction?: GradeMiss;
+  /** Flesch-Kincaid grade of the plain output (logged when the grade retry is on). */
+  fkgl?: number;
   /** This version was kept. */
   chosen: boolean;
   ms: number;
@@ -542,6 +566,8 @@ export interface RunLog {
   gitCommit?: string | null;
   ollamaVersion?: string | null;
   extraQuality: boolean;
+  /** Prompt 11 grade wording and retry (absent in logs before Prompt 11). */
+  gradeTargeting?: GradeTargeting;
   /** Quality mode setting and the mode used (absent in logs from before quality modes). */
   qualitySetting?: QualityModeSetting;
   qualityMode?: QualityMode;

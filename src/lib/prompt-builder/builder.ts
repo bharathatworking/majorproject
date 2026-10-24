@@ -1,3 +1,4 @@
+import { GRADE_WORDING_BANDS } from '../quality/config';
 import { PROMPT_VARIANTS } from './variants';
 import type { ContentNode, Entity, PromptVariantId, SimplificationSpec, ReadabilityReport } from '../../types';
 
@@ -78,6 +79,27 @@ function gradeLevelDescription(spec: SimplificationSpec): string {
 }
 
 /**
+ * Grade-aware wording (Prompt 11, eval/grade-targeting/PREREG.md arm B): the
+ * target grade made concrete (reader age, words per sentence, vocabulary
+ * from GRADE_WORDING_BANDS) instead of a bare number. Light and moderate
+ * tiers aim at the grade; the aggressive tier says "no higher", without the
+ * old "as simple as possible", which invites over-simplifying. The 'none'
+ * tier is unchanged.
+ */
+export function gradeTargetDescription(spec: SimplificationSpec): string {
+  if (spec.depthTier === 'none') return gradeLevelDescription(spec);
+  const band = GRADE_WORDING_BANDS.find(b => spec.targetGrade <= b.maxGrade)
+    ?? GRADE_WORDING_BANDS[GRADE_WORDING_BANDS.length - 1];
+  const detail =
+    `a typical reader aged ${band.ages} reads it easily; ` +
+    `about ${band.words} words per sentence; ${band.vocabulary}`;
+  const aim = spec.depthTier === 'aggressive'
+    ? `grade ${spec.targetGrade} or slightly below, no higher`
+    : `grade ${spec.targetGrade}, neither harder nor much easier`;
+  return `${aim} (${detail})`;
+}
+
+/**
  * The difficult words the user prompt actually names (the lexical hint): none
  * when the reader keeps terms or the tier is 'none'. The NLI glossary
  * exemption (lib/quality/glossary.ts) uses exactly this list.
@@ -107,6 +129,9 @@ export function hintedWords(spec: SimplificationSpec, difficultWords: readonly s
  *    the tier is 'none', where it would contradict the system prompt.
  *  - The prompt variant's block (lib/prompt-builder/variants.ts), just before
  *    the text. 'standard', the default, adds nothing.
+ * `gradeAware` (default false) swaps rule 1's target for
+ * gradeTargetDescription; with false the prompt is byte-identical to the
+ * pre-Prompt 11 one, which arm A of the grade evaluation depends on.
  */
 export function buildPrompt(
   node: ContentNode,
@@ -115,6 +140,7 @@ export function buildPrompt(
   previousContext: string = '',
   difficultWords: string[] = [],
   variant: PromptVariantId = 'standard',
+  gradeAware = false,
 ): { system: string; user: string } {
 
   const extraRules = readerRules(spec)
@@ -125,7 +151,7 @@ export function buildPrompt(
   const system = `You are an expert editor and plain-language summarizer. \
 Your job is to rewrite the text provided by the user to match a specific reading level and style.
 CRITICAL INSTRUCTIONS:
-1. Target reading level: ${gradeLevelDescription(spec)}. \
+1. Target reading level: ${gradeAware ? gradeTargetDescription(spec) : gradeLevelDescription(spec)}. \
 Current reading level is estimated at grade ${report.estimatedGradeLevel.toFixed(1)}.
 2. Tone/Style: ${spec.style}. ${spec.tone ? `Tone should be ${spec.tone}.` : ''}
 3. Preserve meaning, facts, and structure. Do NOT add new information, opinions, or meta-commentary.
