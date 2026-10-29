@@ -139,6 +139,11 @@ export class OllamaProvider {
     this.think = thinkSetting(await this.show());
   }
 
+  /** Replaces the stored system prompt (no request; the model was already checked). */
+  setSystemPrompt(systemText: string): void {
+    this.systemPrompt = systemText;
+  }
+
   async simplifyChunk(userText: string): Promise<AsyncIterable<string>> {
     const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
       method: 'POST',

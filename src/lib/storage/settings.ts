@@ -1,7 +1,8 @@
 /**
  * User settings in chrome.storage.sync: the reading profile (`userProfile`),
- * the chat model (`llmModel`), the "Extra quality" toggle (`extraQuality`)
- * and the quality mode (`qualityMode`). All fall back to defaults when unset.
+ * the chat model (`llmModel`), the "Extra quality" toggle (`extraQuality`),
+ * the quality mode (`qualityMode`) and the grade-targeting toggle
+ * (`gradeTargeting`). All fall back to defaults when unset.
  *
  * Dev-only A/B switches (chrome.storage.local, `debug:` keys, like
  * debug:nliDevice): read only when import.meta.env.DEV, so `npm run build`
@@ -12,7 +13,7 @@
 
 import { DEFAULT_LLM_MODEL } from '../llm/ollama-provider';
 import { GRADE_RETRY_ENABLED, GRADE_WORDING_ENABLED } from '../quality/config';
-import type { GradeTargeting, QualityModeSetting, UserProfile } from '../../types';
+import type { GradeTargeting, GradeTargetingChoice, QualityModeSetting, UserProfile } from '../../types';
 
 // ─── Profile ──────────────────────────────────────────────────────────────────
 
@@ -74,6 +75,23 @@ export async function saveQualityMode(mode: QualityModeSetting): Promise<void> {
   await chrome.storage.sync.set({ qualityMode: mode });
 }
 
+// ─── Grade targeting ──────────────────────────────────────────────────────────
+
+/**
+ * "Match the target reading grade more closely" (Prompt 11 arm C: grade-aware
+ * wording plus the FKGL measure-and-retry). Off unless saved as true:
+ * eval/grade-targeting/REPORT.md failed the speed guardrail, so the PREREG
+ * decision rule keeps it off by default.
+ */
+export async function getGradeTargetingSetting(): Promise<boolean> {
+  const { gradeTargeting } = await chrome.storage.sync.get<{ gradeTargeting?: unknown }>('gradeTargeting');
+  return gradeTargeting === true;
+}
+
+export async function saveGradeTargetingSetting(on: boolean): Promise<void> {
+  await chrome.storage.sync.set({ gradeTargeting: on });
+}
+
 // ─── Dev-only A/B switches ────────────────────────────────────────────────────
 
 /** Models the dev model override accepts (the Prompt 10 LoRA, not adopted). */
@@ -92,20 +110,26 @@ export async function getDevModelOverride(): Promise<string | null> {
 }
 
 /**
- * Grade-aware wording and the grade retry (Prompt 11): GRADE_WORDING_ENABLED
- * and GRADE_RETRY_ENABLED from config.ts (both off until
- * eval/grade-targeting/REPORT.md). Dev build only: local
+ * Grade-aware wording and the grade retry (Prompt 11) for a run: both on
+ * when the user turned the setting on (exactly arm C), else
+ * GRADE_WORDING_ENABLED and GRADE_RETRY_ENABLED from config.ts (both off,
+ * per eval/grade-targeting/REPORT.md). Dev build only: local
  * `debug:gradeTargeting` = 'wording' (arm B), 'retry' (arm C: wording and
- * retry) or 'off' overrides them.
+ * retry) or 'off' overrides both. The run turns a setting-made choice off in
+ * Lite mode (lib/run/simplify.ts).
  */
-export async function getGradeTargeting(): Promise<GradeTargeting> {
-  const defaults: GradeTargeting = { wording: GRADE_WORDING_ENABLED, retry: GRADE_RETRY_ENABLED };
-  if (!import.meta.env.DEV) return defaults;
+export async function getGradeTargeting(): Promise<GradeTargetingChoice> {
+  const setting = await getGradeTargetingSetting();
+  const targeting: GradeTargeting = setting
+    ? { wording: true, retry: true }
+    : { wording: GRADE_WORDING_ENABLED, retry: GRADE_RETRY_ENABLED };
+  if (!import.meta.env.DEV) return { targeting, setting, devOverride: false };
   const data = await chrome.storage.local.get<{ 'debug:gradeTargeting'?: unknown }>('debug:gradeTargeting');
+  const override = (t: GradeTargeting): GradeTargetingChoice => ({ targeting: t, setting, devOverride: true });
   switch (data['debug:gradeTargeting']) {
-    case 'off': return { wording: false, retry: false };
-    case 'wording': return { wording: true, retry: false };
-    case 'retry': return { wording: true, retry: true };
-    default: return defaults;
+    case 'off': return override({ wording: false, retry: false });
+    case 'wording': return override({ wording: true, retry: false });
+    case 'retry': return override({ wording: true, retry: true });
+    default: return { targeting, setting, devOverride: false };
   }
 }

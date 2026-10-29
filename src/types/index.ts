@@ -383,6 +383,16 @@ export interface GradeTargeting {
   retry: boolean;
 }
 
+/** The grade targeting a run starts with (lib/storage/settings.ts getGradeTargeting). */
+export interface GradeTargetingChoice {
+  /** What the run uses, before Lite mode is applied. */
+  targeting: GradeTargeting;
+  /** The saved "Match the target reading grade more closely" setting (sync gradeTargeting). */
+  setting: boolean;
+  /** Dev build only: debug:gradeTargeting decided it (it wins over the setting, also in Lite). */
+  devOverride: boolean;
+}
+
 /** A retry decision (lib/quality/grade.ts planRetry): what the one retry carries. */
 export interface RetryPlan {
   retry: boolean;
@@ -580,8 +590,16 @@ export interface RunLog {
   gitCommit?: string | null;
   ollamaVersion?: string | null;
   extraQuality: boolean;
-  /** Prompt 11 grade wording and retry (absent in logs before Prompt 11). */
+  /**
+   * The grade wording and retry the run used (absent when both were off, and
+   * in logs before Prompt 11).
+   */
   gradeTargeting?: GradeTargeting;
+  /**
+   * The saved "Match the target reading grade more closely" setting, whether
+   * or not it took effect (Lite mode ignores it); absent in older logs.
+   */
+  gradeTargetingSetting?: boolean;
   /** Quality mode setting and the mode used (absent in logs from before quality modes). */
   qualitySetting?: QualityModeSetting;
   qualityMode?: QualityMode;

@@ -121,6 +121,8 @@ const prepareNliMock = vi.mocked(nli.prepareNli);
 let failing: Set<string>;
 /** User prompts sent to the model, in order. */
 let prompts: string[];
+/** System prompts sent with them, in order. */
+let systems: string[];
 /** Per-node reply queue (first attempt, retry); FAIL answers HTTP 500. Default: "Simple <id>." */
 let replies: Record<string, string[]>;
 const FAIL = '__FAIL__';
@@ -145,6 +147,7 @@ const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit)
   };
   const user = messages[1].content;
   prompts.push(user);
+  systems.push(messages[0].content);
   models.push(model);
   if (chatStatus !== null) return new Response('nope', { status: chatStatus });
   const node = nodes.find(n => user.endsWith(n.text) || user.endsWith(cleanForModel(n.text)));
@@ -232,6 +235,7 @@ beforeEach(async () => {
   versionMock.mockClear();
   failing = new Set();
   prompts = [];
+  systems = [];
   replies = {};
   scores = {};
   chatStatus = null;
@@ -1781,6 +1785,100 @@ describe('runSimplification grade retry', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe(HARD);
+  });
+
+  describe('the "Match the target reading grade more closely" setting', () => {
+    const GRADE_WORDING = 'a typical reader aged';
+    const turnOn = () => chrome.storage.sync.set({ gradeTargeting: true });
+
+    it('is off by default and the run log says so', async () => {
+      replies = { n0: [HARD] };
+      scores = { [HARD]: 0.9 };
+      const doc = await storedDoc();
+
+      await runSimplification(doc, callbacks(), 'all');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(systems[0]).not.toContain(GRADE_WORDING);
+      const log = await lastLog(doc.id);
+      expect(log?.gradeTargetingSetting).toBe(false);
+      expect(log?.gradeTargeting).toBeUndefined();
+    });
+
+    it('on: grade-aware wording and the grade retry, exactly arm C, within 2 calls', async () => {
+      await turnOn();
+      replies = { n0: [HARD, GOOD] };
+      scores = { [HARD]: 0.9, [GOOD]: 0.93 };
+      const doc = await storedDoc();
+
+      await runSimplification(doc, callbacks(), 'all');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(systems.every(s => s.includes(GRADE_WORDING))).toBe(true);
+      expect(prompts[1]).toContain(TOO_HARD_NOTE);
+      expect((await getDocument(doc.id))?.results[0].simplifiedText).toBe(GOOD);
+      const log = await lastLog(doc.id);
+      expect(log?.gradeTargetingSetting).toBe(true);
+      expect(log?.gradeTargeting).toEqual({ wording: true, retry: true });
+      expect(log?.nodes[0].candidates.map(c => c.gradeInstruction)).toEqual([undefined, 'too-hard']);
+    });
+
+    it('on: a meaning failure and a grade miss still share one retry (2 calls)', async () => {
+      await turnOn();
+      replies = { n0: [LIKED, LIKED, GOOD] };
+      scores = { [LIKED]: 0.6 };
+      const doc = await storedDoc();
+
+      await runSimplification(doc, callbacks(), 'all');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('on with Extra quality: at most MAX_MODEL_CALLS_PER_NODE calls', async () => {
+      await turnOn();
+      await chrome.storage.sync.set({ extraQuality: true });
+      replies = { n0: [HARD, HARD, HARD, GOOD] };
+      scores = { [HARD]: 0.6 };
+      const doc = await storedDoc();
+
+      await runSimplification(doc, callbacks(), 'all');
+
+      expect(fetchMock).toHaveBeenCalledTimes(MAX_MODEL_CALLS_PER_NODE);
+    });
+
+    it('has no effect in Lite mode: no wording, no grade retry, and the log records the setting', async () => {
+      await turnOn();
+      await chrome.storage.sync.set({ qualityMode: 'lite' });
+      replies = { n0: [HARD, GOOD] };
+      scores = { [HARD]: 0.9, [GOOD]: 0.93 };
+      const doc = await storedDoc();
+
+      await runSimplification(doc, callbacks(), 'all');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(systems[0]).not.toContain(GRADE_WORDING);
+      expect(prompts[0]).not.toContain(TOO_HARD_NOTE);
+      const log = await lastLog(doc.id);
+      expect(log?.qualityMode).toBe('lite');
+      expect(log?.gradeTargetingSetting).toBe(true);
+      expect(log?.gradeTargeting).toBeUndefined();
+      expect(log?.nodes[0].candidates[0]).not.toHaveProperty('fkgl');
+    });
+
+    it('the dev override still wins over the setting (dev builds)', async () => {
+      await turnOn();
+      await chrome.storage.local.set({ 'debug:gradeTargeting': 'off' });
+      replies = { n0: [HARD] };
+      scores = { [HARD]: 0.9 };
+      const doc = await storedDoc();
+
+      await runSimplification(doc, callbacks(), 'all');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const log = await lastLog(doc.id);
+      expect(log?.gradeTargetingSetting).toBe(true);
+      expect(log?.gradeTargeting).toBeUndefined();
+    });
   });
 
   it('wording only (arm B in the app): no grade retry', async () => {

@@ -371,7 +371,7 @@ export async function runSimplification(
   if (signal.aborted) return;
 
   // 2. Profile + word set + model + "Extra quality" + quality mode (parallel fetch)
-  const [profile, wordSet, savedModel, extraQualitySetting, qualitySetting, gradeTargeting, devModel] = await Promise.all([
+  const [profile, wordSet, savedModel, extraQualitySetting, qualitySetting, gradeChoice, devModel] = await Promise.all([
     getUserProfile(), getCommonWordSet(), getLlmModel(), getExtraQuality(), getQualityMode(),
     getGradeTargeting(), getDevModelOverride(),
   ]);
@@ -379,10 +379,13 @@ export async function runSimplification(
   // Dev build only (always null in the store build): A/B against another model
   const model = devModel ?? savedModel;
   if (devModel) console.log(`[Clarity] Dev model override: ${devModel} instead of ${savedModel}`);
+  // Grade-aware wording and retry; a setting-made choice is turned off in Lite below
+  let gradeTargeting = gradeChoice.targeting;
   if (gradeTargeting.wording || gradeTargeting.retry) {
     console.log(
       `[Clarity] Grade targeting: wording ${gradeTargeting.wording ? 'on' : 'off'}, ` +
-      `retry ${gradeTargeting.retry ? 'on' : 'off'}`,
+      `retry ${gradeTargeting.retry ? 'on' : 'off'} ` +
+      `(${gradeChoice.devOverride ? 'debug:gradeTargeting' : gradeChoice.setting ? 'setting' : 'config'})`,
     );
   }
 
@@ -487,7 +490,7 @@ export async function runSimplification(
   const fkgl = (text: string) =>
     Math.round(computeReadabilityReport(text, wordSet).fleschKincaidGradeLevel * 100) / 100;
   // The grade retry measures versions only when there is a target to aim at
-  const gradeLoop = gradeTargeting.retry && spec.depthTier !== 'none';
+  let gradeLoop = gradeTargeting.retry && spec.depthTier !== 'none';
 
   /**
    * Records a finished node. `finalText` is the kept text (null for an
@@ -965,6 +968,14 @@ export async function runSimplification(
     extraQuality = false;
     console.log('[Clarity] Extra quality is off in Lite mode (no best-of-N)');
   }
+  // The grade setting has no effect in Lite (one retry, no best-of-N); the
+  // dev override is an explicit choice and stays
+  if (lite && !gradeChoice.devOverride && (gradeTargeting.wording || gradeTargeting.retry)) {
+    gradeTargeting = { wording: false, retry: false };
+    gradeLoop = false;
+    if (doc.report) llm.setSystemPrompt(buildPrompt(toRun[0], spec, doc.report, '', [], 'standard', false).system);
+    console.log('[Clarity] Grade targeting is off in Lite mode (the setting has no effect)');
+  }
 
   for (const node of rotateFrom(simplifiable, startIndex)) {
     if (signal.aborted) break;
@@ -1157,6 +1168,7 @@ export async function runSimplification(
     // The effective value: Lite turns best-of-N off whatever the toggle says
     extraQuality,
     ...((gradeTargeting.wording || gradeTargeting.retry) && { gradeTargeting }),
+    gradeTargetingSetting: gradeChoice.setting,
     qualitySetting,
     qualityMode: decision.mode,
     qualityModeReason: decision.reason,

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   getUserProfile, saveUserProfile, DEFAULT_PROFILE, getLlmModel, saveLlmModel,
   getExtraQuality, saveExtraQuality, getQualityMode, saveQualityMode,
+  getGradeTargetingSetting, saveGradeTargetingSetting,
 } from '../../lib/storage/settings';
 import { clearAllDocuments } from '../../lib/storage/documents';
 import { clearCache } from '../../lib/storage/cache';
@@ -50,6 +51,7 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
   const [llmModel, setLlmModel]             = useState(DEFAULT_LLM_MODEL);
   const [installed, setInstalled]           = useState<ModelList>('loading');
   const [extraQuality, setExtraQuality]     = useState(false);
+  const [gradeTargeting, setGradeTargeting] = useState(false);
   const [qualityMode, setQualityMode]       = useState<QualityModeSetting>('auto');
   const [nliBench, setNliBench]             = useState<NliBenchRecord | null>(null);
 
@@ -61,6 +63,7 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
     });
     getLlmModel().then(setLlmModel);
     getExtraQuality().then(setExtraQuality);
+    getGradeTargetingSetting().then(setGradeTargeting);
     getQualityMode().then(setQualityMode);
     getNliBench().then(setNliBench).catch(() => setNliBench(null));
     new OllamaProvider().listModels().then(setInstalled).catch(err => {
@@ -79,6 +82,12 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
     const next = !extraQuality;
     setExtraQuality(next);
     saveExtraQuality(next);   // fire-and-forget, as above
+  };
+
+  const toggleGradeTargeting = () => {
+    const next = !gradeTargeting;
+    setGradeTargeting(next);
+    saveGradeTargetingSetting(next);   // fire-and-forget, as above
   };
 
   const handleQualityModeChange = (mode: QualityModeSetting) => {
@@ -335,6 +344,25 @@ export function Settings({ displayPrefs, onUpdatePrefs }: SettingsProps) {
             onClick={toggleExtraQuality}
             role="switch"
             aria-checked={extraQuality}
+          >
+            <span className="toggle-thumb" />
+          </button>
+        </div>
+
+        <div className="form-group form-group-inline">
+          <label htmlFor="grade-targeting-toggle">
+            Match the target reading grade more closely
+            <span className="form-hint">
+              {' '}— slower, because the text may be rewritten a second time
+              {qualityMode === 'lite' ? ' (not used in Lite mode)' : ''}
+            </span>
+          </label>
+          <button
+            id="grade-targeting-toggle"
+            className={`toggle-switch ${gradeTargeting ? 'on' : ''}`}
+            onClick={toggleGradeTargeting}
+            role="switch"
+            aria-checked={gradeTargeting}
           >
             <span className="toggle-thumb" />
           </button>
