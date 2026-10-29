@@ -11,11 +11,25 @@
  *    defaults to a CDN URL and loads the wasm factory from a blob: URL, which
  *    script-src 'self' (rightly) blocks. Compiling the wasm itself needs
  *    'wasm-unsafe-eval' in the extension CSP, and nothing more.
- *  - WebGPU first: the worker requests an adapter once per worker (one model
- *    load), hands it to ONNX Runtime so it can't pick another one, loads the
- *    same q8 weights with device 'webgpu' and runs one warm-up pair. Any
- *    failure there (no adapter, unsupported op, shader error) falls back to
- *    wasm. The WebGPU build of ONNX Runtime uses the same asyncify wasm
+ *  - q8 runs on multi-threaded wasm (2026-10-29, eval/checker/NLI_PERF.md):
+ *    ONNX Runtime's WebGPU EP has no MatMulInteger or DynamicQuantizeLinear
+ *    kernel, so on 'webgpu' every quantized matmul of the q8 model ran on
+ *    the CPU EP (one thread) with a GPU↔CPU copy around it, slower than
+ *    plain wasm. The app page is cross-origin isolated (COOP/COEP in the
+ *    manifest), so SharedArrayBuffer exists and wasm gets NLI_WASM_THREADS
+ *    threads. More threads give bit-identical scores (same kernels, same
+ *    batches); only speed changes.
+ *  - The adapter is still requested once per worker: its presence decides
+ *    the batch size (lib/quality/nli.ts batchSizeFor: 32 with an adapter, 8
+ *    without, as before the switch, because the q8 scores depend on which
+ *    pairs share a batch) and the Auto quality mode, and its vendor is
+ *    logged.
+ *  - The WebGPU EP is still used for the fp16 experiment ('webgpu-fp16'),
+ *    for debug:nliDevice = 'webgpu' (the old q8 path, to measure before vs
+ *    after on one build), and as before when the page is not cross-origin
+ *    isolated (one thread only). It hands ONNX Runtime the adapter, loads
+ *    with device 'webgpu' and runs one warm-up pair; any failure falls back
+ *    to wasm. The WebGPU build of ONNX Runtime uses the same asyncify wasm
  *    files, and WGSL shaders are not script, so no CSP change is needed.
  *  - No powerPreference: Chrome ignores it on Windows (crbug 369219127) and
  *    logs a warning that lands on the chrome://extensions Errors page. Which
@@ -25,8 +39,8 @@
  *    weights on WebGPU instead of q8, since ONNX Runtime's WebGPU backend is
  *    built for float math and may run quantized ops on the CPU. A wasm
  *    fallback always uses q8. The 'ready' message reports the dtype used.
- *  - Single-threaded wasm: threads need SharedArrayBuffer, which needs a
- *    cross-origin-isolated page.
+ *  - Threads need SharedArrayBuffer, which needs a cross-origin-isolated
+ *    page; without it wasm runs on one thread, as before.
  *  - Truncation: each pair is also tokenized without truncation, and pairs
  *    over MAX_TOKENS are flagged `truncated`, so the run can count them.
  *  - Labels come from the model's own config.id2label (0 contradiction,
@@ -35,6 +49,7 @@
  */
 
 import { AutoModelForSequenceClassification, AutoTokenizer, env } from '@huggingface/transformers';
+import { NLI_WASM_THREADS } from './config';
 import type { GpuAdapterSummary, NliPair, NliProbs, NliRequest, NliResponse } from './nli';
 import type { NliBackendName, NliDevice, NliDtype } from '../../types';
 
@@ -44,7 +59,8 @@ import type { NliBackendName, NliDevice, NliDtype } from '../../types';
 interface WorkerScope {
   onmessage: ((event: MessageEvent<NliRequest>) => void) | null;
   postMessage(message: NliResponse): void;
-  navigator: { gpu?: GpuLike };
+  navigator: { gpu?: GpuLike; hardwareConcurrency?: number };
+  crossOriginIsolated?: boolean;
 }
 
 /** The parts of WebGPU used here (tsconfig has no WebGPU types). */
@@ -64,6 +80,8 @@ interface Loaded {
   backend: NliBackendName;
   dtype: NliDtype;
   adapter: GpuAdapterSummary | null;
+  /** wasm threads (1 on WebGPU and without cross-origin isolation). */
+  threads: number;
   webgpuError?: string;
   /** Logit index of each label. */
   index: { entailment: number; contradiction: number; neutral: number };
@@ -93,8 +111,13 @@ function configureEnv(modelUrl: string, wasmUrl: string) {
     mjs: `${wasmUrl}ort-wasm-simd-threaded.asyncify.mjs`,
     wasm: `${wasmUrl}ort-wasm-simd-threaded.asyncify.wasm`,
   };
-  wasm.numThreads = 1;
   wasm.proxy = false;
+}
+
+/** wasm threads this page allows: NLI_WASM_THREADS, at most the cores, 1 without isolation. */
+function wasmThreads(): number {
+  if (scope.crossOriginIsolated !== true) return 1;
+  return Math.max(1, Math.min(NLI_WASM_THREADS, scope.navigator.hardwareConcurrency ?? 1));
 }
 
 /** Logit indexes of the three labels, from the model's config. */
@@ -136,12 +159,26 @@ async function load(modelId: string, modelUrl: string, wasmUrl: string, device: 
   configureEnv(modelUrl, wasmUrl);
   const tokenizer = await AutoTokenizer.from_pretrained(modelId);
 
+  let adapter: GpuAdapterSummary | null = null;
   let webgpuError: string | undefined;
   if (device !== 'wasm') {
     try {
-      const adapter = await useWebGpuAdapter();
+      adapter = await useWebGpuAdapter();
+    } catch (err) {
+      webgpuError = String(err);
+    }
+  }
+
+  // ONNX Runtime reads numThreads once, when the first session starts
+  const threads = wasmThreads();
+  const wasm = env.backends.onnx.wasm;
+  const useWebGpu = adapter !== null && (device === 'webgpu-fp16' || device === 'webgpu' || threads === 1);
+  if (wasm) wasm.numThreads = useWebGpu ? 1 : threads;
+
+  if (useWebGpu) {
+    try {
       const dtype: NliDtype = device === 'webgpu-fp16' ? 'fp16' : 'q8';
-      const candidate: Loaded = { tokenizer, ...(await loadOn(modelId, 'webgpu', dtype)), adapter };
+      const candidate: Loaded = { tokenizer, ...(await loadOn(modelId, 'webgpu', dtype)), adapter, threads: 1 };
       await score(candidate, WARMUP);
       return candidate;
     } catch (err) {
@@ -151,7 +188,8 @@ async function load(modelId: string, modelUrl: string, wasmUrl: string, device: 
   return {
     tokenizer,
     ...(await loadOn(modelId, 'wasm', 'q8')),
-    adapter: null,
+    adapter,
+    threads: wasm?.numThreads ?? 1,
     ...(webgpuError !== undefined && { webgpuError }),
   };
 }
@@ -210,6 +248,7 @@ scope.onmessage = async (event) => {
         backend: loaded.backend,
         dtype: loaded.dtype,
         adapter: loaded.adapter,
+        threads: loaded.threads,
         ...(loaded.webgpuError !== undefined && { webgpuError: loaded.webgpuError }),
       });
     } catch (err) {

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
-  benchPairs, checkEntailment, checkMainClaim, createWorkerBackend, entailmentPairs, hypothesisFor, needsContext,
+  batchClassOf, benchPairs, checkEntailment, checkMainClaim, createWorkerBackend, entailmentPairs, hypothesisFor, needsContext,
   NLI_BENCH_PARAGRAPH, NliClient, NliUnavailableError, prepareNli,
   splitSentences, type BenchStore, type NliBackend, type NliPair, type NliProbs, type NliRequest,
   type NliResponse, type WorkerLike,
@@ -9,7 +10,8 @@ import {
   CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_BATCH_SIZE_WASM, NLI_CONTRADICTION_AGG, NLI_TOP_PREMISES, NLI_TYPICAL_SENTENCES,
 } from '../../src/lib/quality/config';
 import { BENCH_FORMAT, BENCH_PAIRS } from '../../src/lib/quality/mode';
-import type { NliBackendName, NliBenchRecord, NliDtype } from '../../src/types';
+import { cleanForModel } from '../../src/lib/segmentation/clutter';
+import type { NliBackendName, NliBenchRecord, NliDtype, NodeRunLog, RunLog } from '../../src/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,6 +95,19 @@ describe('NliClient', () => {
       expect(client.currentBatchSize).toBe(size);
     },
   );
+
+  it('keeps 32 pairs per batch on threaded wasm when the machine has a WebGPU adapter', async () => {
+    // q8 scores depend on batch composition, so the switch to wasm keeps each machine's old size
+    const { backend, batches } = fakeBackend();
+    backend.load = vi.fn(async () => ({
+      backend: 'wasm' as const, threads: 4, adapter: { vendor: 'nvidia', architecture: '', description: '' }, loadMs: 0,
+    }));
+    const client = new NliClient(backend);
+    await client.scorePairs(Array.from({ length: 40 }, (_, i) => ({ premise: 'p', hypothesis: `h${i}.` })));
+    expect(batches.map(b => b.length)).toEqual([32, 8]);
+    expect(batchClassOf({ backend: 'wasm', adapter: null })).toBe('wasm');
+    expect(batchClassOf(null)).toBe('wasm');
+  });
 
   it('uses the wasm batch size for a backend without load()', async () => {
     const { backend, batches } = fakeBackend();
@@ -383,11 +398,17 @@ class FakeWorker implements WorkerLike {
     if (message.type === 'init') {
       reply(this.behaviour === 'init-error'
         ? { type: 'init-error', message: 'NLI model failed to load: 404 config.json' }
-        : {
-            type: 'ready', loadMs: 5, backend: 'webgpu',
-            dtype: (message.device === 'webgpu-fp16' ? 'fp16' : 'q8') as NliDtype,
-            adapter: { vendor: 'nvidia', architecture: 'ampere', description: '' },
-          });
+        : message.device === 'webgpu' || message.device === 'webgpu-fp16'
+          ? {
+              type: 'ready', loadMs: 5, backend: 'webgpu', threads: 1,
+              dtype: (message.device === 'webgpu-fp16' ? 'fp16' : 'q8') as NliDtype,
+              adapter: { vendor: 'nvidia', architecture: 'ampere', description: '' },
+            }
+          // q8 on threaded wasm; 'wasm' ignores the adapter
+          : {
+              type: 'ready', loadMs: 5, backend: 'wasm', threads: 4, dtype: 'q8',
+              adapter: message.device === 'wasm' ? null : { vendor: 'nvidia', architecture: 'ampere', description: '' },
+            });
     } else if (this.behaviour === 'score-error') {
       reply({ type: 'score-error', id: message.id, message: 'boom' });
     } else {
@@ -415,14 +436,27 @@ describe('createWorkerBackend', () => {
     });
   });
 
-  it('reports and logs the backend and adapter vendor, and passes the requested device', async () => {
+  it('reports and logs threaded wasm with the adapter vendor (q8 default)', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const worker = new FakeWorker();
-    const backend = createWorkerBackend(() => worker, { ...URLS, getDevice: async () => 'wasm' });
+    const backend = createWorkerBackend(() => worker, URLS);
     const info = await backend.load();
-    expect(info).toMatchObject({ backend: 'webgpu', adapter: { vendor: 'nvidia' } });
-    expect(worker.received[0]).toMatchObject({ type: 'init', device: 'wasm' });
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[Clarity\] NLI model .* loaded on webgpu \(nvidia ampere\)/));
+    expect(info).toMatchObject({ backend: 'wasm', threads: 4, adapter: { vendor: 'nvidia' } });
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(
+      /^\[Clarity\] NLI model .* loaded on wasm 4 threads \(webgpu adapter nvidia ampere\) in \d+ ms$/,
+    ));
+  });
+
+  it('passes the requested device: wasm (no adapter) and webgpu (the old q8 path)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const wasmWorker = new FakeWorker();
+    const wasm = await createWorkerBackend(() => wasmWorker, { ...URLS, getDevice: async () => 'wasm' }).load();
+    expect(wasmWorker.received[0]).toMatchObject({ type: 'init', device: 'wasm' });
+    expect(wasm).toMatchObject({ backend: 'wasm', adapter: null });
+    const gpuWorker = new FakeWorker();
+    const gpu = await createWorkerBackend(() => gpuWorker, { ...URLS, getDevice: async () => 'webgpu' }).load();
+    expect(gpu).toMatchObject({ backend: 'webgpu', threads: 1, dtype: 'q8' });
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/loaded on webgpu \(nvidia ampere\) .*\(webgpu requested by debug:nliDevice\)$/));
   });
 
   it('passes the fp16 experiment device and reports the dtype it loaded', async () => {
@@ -624,5 +658,46 @@ describe('checkMainClaim', () => {
     const { backend } = fakeBackend();
     const r = await checkMainClaim(ORIGINAL, 'A treaty was signed.', [9], new NliClient(backend));
     expect(r.weakest).toBe('The Treaty of Versailles was signed in 1919.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pair count (regression guard, eval/checker/NLI_PERF.md)
+// ---------------------------------------------------------------------------
+describe('NLI pair count', () => {
+  /** The 2026-10-19 UK run's Full run with Extra quality (eval/fixtures: dev fixture only). */
+  const run = (JSON.parse(readFileSync('eval/fixtures/runs/uk-wiki-2026-10-19.json', 'utf8')) as { runs: RunLog[] }).runs[4];
+  const node = (id: string) => run.nodes.find(n => n.nodeId === id) as NodeRunLog;
+
+  it('n1 standard: 9 output sentences x 3 premises = 27 pairs', () => {
+    const n1 = node('n1');
+    const original = cleanForModel(n1.originalText ?? '');
+    const text = n1.candidates[0].text ?? '';
+    expect(splitSentences(text)).toHaveLength(9);
+    expect(entailmentPairs(original, text)).toHaveLength(27);
+  });
+
+  it('checkEntailment scores exactly those pairs', async () => {
+    const n1 = node('n1');
+    const { backend } = fakeBackend();
+    const check = await checkEntailment(cleanForModel(n1.originalText ?? ''), n1.candidates[0].text ?? '', [], new NliClient(backend));
+    expect(check.pairs).toBe(27);
+  });
+
+  it('every scored version of the run: NLI_TOP_PREMISES pairs per sentence, 564 in all', () => {
+    let total = 0;
+    for (const n of run.nodes) {
+      for (const c of n.candidates) {
+        if (!c.nliMs || !c.text) continue;
+        const pairs = entailmentPairs(cleanForModel(n.originalText ?? ''), c.text);
+        expect(pairs).toHaveLength(NLI_TOP_PREMISES * splitSentences(c.text).length);
+        total += pairs.length;
+      }
+    }
+    expect(total).toBe(564);
+  });
+
+  it('the benchmark paragraph is BENCH_PAIRS pairs', () => {
+    expect(benchPairs()).toHaveLength(BENCH_PAIRS);
   });
 });

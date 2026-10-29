@@ -260,7 +260,13 @@ export type NliBackendName = 'webgpu' | 'wasm';
  * Requested NLI device: WebGPU first ('auto'), wasm only, or WebGPU with fp16
  * weights (the fp16 experiment); the last two are debug overrides.
  */
-export type NliDevice = 'auto' | 'wasm' | 'webgpu-fp16';
+/**
+ * Requested NLI device (local debug:nliDevice): 'auto' (q8 on threaded wasm),
+ * 'wasm' (wasm, and no WebGPU adapter for the batch size or Auto), 'webgpu'
+ * (q8 on the WebGPU EP, the path before 2026-10-29, for before/after
+ * timing) or 'webgpu-fp16' (the fp16 experiment).
+ */
+export type NliDevice = 'auto' | 'wasm' | 'webgpu' | 'webgpu-fp16';
 
 /** Weights the NLI model runs with: 8-bit quantized (the default) or fp16 (experiment). */
 export type NliDtype = 'q8' | 'fp16';
@@ -275,6 +281,8 @@ export interface NliBenchRecord {
   adapterVendor: string | null;
   /** Weights the benchmark ran with (absent in records from before the fp16 experiment: q8). */
   dtype?: NliDtype;
+  /** wasm threads the benchmark ran with (absent before format 3: 1). */
+  threads?: number;
   /**
    * ms to score the benchmark paragraph's pairs (format 2: the 18 pairs of
    * NLI_BENCH_PARAGRAPH in the backend's batch size; format 1: one batch of 8

@@ -168,6 +168,14 @@ export const NLI_BATCH_SIZE_WEBGPU = 32;
 export const NLI_BATCH_SIZE_WASM = 8;
 
 /**
+ * wasm threads for the q8 NLI model (at most the machine's cores; 1 when the
+ * page is not cross-origin isolated). Speed only: threads give bit-identical
+ * scores (eval/checker/NLI_PERF.md, Node: 1 vs 4 threads, 29 versions).
+ * 4 leaves cores for Ollama, which runs alongside.
+ */
+export const NLI_WASM_THREADS = 4;
+
+/**
  * Premises scored per simplified sentence: the most similar original
  * sentences or 2-sentence windows (lib/quality/premises.ts).
  */
@@ -195,11 +203,17 @@ export const NLI_LOAD_TIMEOUT_MS = 60_000;
 export const NLI_SCORE_TIMEOUT_MS = 30_000;
 
 /**
- * Thesis budget for the average NLI time per paragraph. A run above it logs
+ * Budget for the average NLI time per paragraph. A run above it logs
  * "NLI above budget" once with console.info, never console.warn: warnings go
  * to the chrome://extensions Errors page, which stays for real errors.
+ * Raised from 1000 on 2026-10-29 (eval/checker/NLI_PERF.md): qwen3 writes
+ * about 12 sentences per paragraph, so a paragraph is about 36 pairs, and
+ * even native 4-thread CPU (Node, the same q8 model and batches) took
+ * 1943 ms per paragraph on average on the fixtures; 1000 ms was always
+ * exceeded. 3000 is AUTO_LITE_PARAGRAPH_MS, the point where Auto already
+ * calls NLI too slow for Full.
  */
-export const NLI_BUDGET_MS = 1000;
+export const NLI_BUDGET_MS = 3000;
 
 // ─── Quality mode (lib/quality/mode.ts) ──────────────────────────────────────
 

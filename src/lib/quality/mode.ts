@@ -38,8 +38,11 @@ import type { NliBenchRecord, NliDevice, QualityMode, QualityModeSetting } from 
 /** Pairs in the speed benchmark: NLI_TOP_PREMISES per sentence of the benchmark paragraph. */
 export const BENCH_PAIRS = NLI_TOP_PREMISES * NLI_TYPICAL_SENTENCES;
 
-/** Format of NliBenchRecord; 2 = the realistic paragraph. Older records are stale. */
-export const BENCH_FORMAT = 2;
+/**
+ * Format of NliBenchRecord; 2 = the realistic paragraph, 3 = q8 on threaded
+ * wasm (2026-10-29). Older records are stale.
+ */
+export const BENCH_FORMAT = 3;
 
 export interface QualityDecision {
   mode: QualityMode;
@@ -79,9 +82,14 @@ export function isBenchStale(stored: NliBenchRecord, ctx: BenchContext): boolean
     || stored.device !== ctx.device;
 }
 
-/** Speed evidence of a stored benchmark. */
+/**
+ * Speed evidence of a stored benchmark. `webgpu` means the machine has a
+ * WebGPU adapter (the model itself runs on threaded wasm since 2026-10-29),
+ * unless the benchmark was forced to wasm (debug:nliDevice = 'wasm').
+ */
 export function evidenceOf(bench: NliBenchRecord): SpeedEvidence {
-  return { webgpu: bench.backend === 'webgpu', benchMs: bench.ms, predictedParagraphMs: bench.predictedParagraphMs };
+  const webgpu = bench.backend === 'webgpu' || (bench.webgpuAdapter && bench.device !== 'wasm');
+  return { webgpu, benchMs: bench.ms, predictedParagraphMs: bench.predictedParagraphMs };
 }
 
 // ─── Decision ─────────────────────────────────────────────────────────────────

@@ -111,6 +111,7 @@ const {
   COMBINED_SCORE_FULL, COMBINED_SCORE_LITE, ENTAILMENT_MIN, MAX_MODEL_CALLS_PER_NODE, NLI_CONTRADICTION_AGG, NLI_PARAGRAPH_RULE, QUALITY_THRESHOLD,
 } = await import('../../src/lib/quality/config');
 const nli = await import('../../src/lib/quality/nli');
+const { BENCH_FORMAT } = await import('../../src/lib/quality/mode');
 const checkEntailmentMock = vi.mocked(nli.checkEntailment);
 const prepareNliMock = vi.mocked(nli.prepareNli);
 
@@ -752,13 +753,13 @@ describe('runSimplification thesis meaning standard', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     nodes = [CURIE, DARWIN];
     replies = { n0: [GOOD_CURIE], n1: [GOOD_DARWIN] };
-    nliResults = { [GOOD_CURIE]: makeEntailment({ ms: 1500 }), [GOOD_DARWIN]: makeEntailment({ ms: 1300 }) };
+    nliResults = { [GOOD_CURIE]: makeEntailment({ ms: 3500 }), [GOOD_DARWIN]: makeEntailment({ ms: 3300 }) };
 
     await runSimplification(await storedDoc(), callbacks(), 'all');
 
     expect(info).toHaveBeenCalledTimes(1);
     expect(String(info.mock.calls[0][0]))
-      .toBe('[Clarity] NLI above budget: 1400 ms per paragraph on average (budget 1000 ms)');
+      .toBe('[Clarity] NLI above budget: 3400 ms per paragraph on average (budget 3000 ms)');
     expect(vi.mocked(console.warn).mock.calls.map(c => String(c[0]))).not.toContainEqual(expect.stringMatching(/NLI|budget/));
   });
 
@@ -766,7 +767,7 @@ describe('runSimplification thesis meaning standard', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     nodes = [CURIE];
     replies = { n0: [GOOD_CURIE] };
-    nliResults = { [GOOD_CURIE]: makeEntailment({ ms: 1000 }) };
+    nliResults = { [GOOD_CURIE]: makeEntailment({ ms: 3000 }) };
 
     await runSimplification(await storedDoc(), callbacks(), 'all');
 
@@ -1250,7 +1251,7 @@ describe('runSimplification quality mode', () => {
   const DRIFT = 'Marie Curie liked science in 1903.';
   const SLOW_WASM: NliBenchRecord = {
     backend: 'wasm', adapterVendor: null, ms: 4500, predictedParagraphMs: 4500,
-    version: 'dev', webgpuAdapter: false, device: 'auto', at: 1, benchFormat: 2,
+    version: 'dev', webgpuAdapter: false, device: 'auto', at: 1, benchFormat: BENCH_FORMAT,
   };
   const lastLog = async (docId: string) => (await getDocument(docId))?.runLogs?.at(-1);
   const setMode = (qualityMode: string) => chrome.storage.sync.set({ qualityMode });

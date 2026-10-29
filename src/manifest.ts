@@ -1,5 +1,11 @@
 import { defineManifest } from '@crxjs/vite-plugin';
 
+/** COOP + COEP: cross-origin isolation of the extension's pages (see below). */
+const CROSS_ORIGIN_ISOLATION: Pick<chrome.runtime.ManifestV3, 'cross_origin_embedder_policy' | 'cross_origin_opener_policy'> = {
+  cross_origin_embedder_policy: { value: 'require-corp' },
+  cross_origin_opener_policy: { value: 'same-origin' },
+};
+
 export default defineManifest({
   manifest_version: 3,
   name: 'Clarity',
@@ -48,4 +54,10 @@ export default defineManifest({
     extension_pages:
       "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; connect-src 'self' http://localhost:11434;",
   },
+  // Cross-origin isolation for the extension's pages (not a CSP change): it
+  // gives the NLI worker SharedArrayBuffer, so ONNX Runtime's wasm runs on
+  // NLI_WASM_THREADS threads (eval/checker/NLI_PERF.md). Everything the app
+  // loads is same-origin, and Ollama answers CORS requests (OLLAMA_ORIGINS).
+  // crxjs's manifest type lacks these two keys; @types/chrome has them.
+  ...CROSS_ORIGIN_ISOLATION,
 });

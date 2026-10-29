@@ -80,8 +80,12 @@ export async function createAppLoader() {
 
 // ─── Model ────────────────────────────────────────────────────────────────────
 
-/** The NLI model on the CPU; score(pairs) → [{ entailment, contradiction, neutral, truncated }]. */
-export async function loadModel(modelId, dtype = 'q8') {
+/**
+ * The NLI model; score(pairs) → [{ entailment, contradiction, neutral, truncated }].
+ * Defaults: the CPU with one thread (the calibration setup). `device`
+ * ('cpu' | 'webgpu') and `threads` are for scripts/nli-perf.mjs only.
+ */
+export async function loadModel(modelId, dtype = 'q8', { device = 'cpu', threads = 1 } = {}) {
   const { AutoModelForSequenceClassification, AutoTokenizer, env } = await import('@huggingface/transformers');
   env.allowRemoteModels = false;
   env.allowLocalModels = true;
@@ -89,8 +93,8 @@ export async function loadModel(modelId, dtype = 'q8') {
   const tokenizer = await AutoTokenizer.from_pretrained(modelId);
   const model = await AutoModelForSequenceClassification.from_pretrained(modelId, {
     dtype,
-    device: 'cpu',
-    session_options: { intraOpNumThreads: 1, interOpNumThreads: 1 },
+    device,
+    session_options: { intraOpNumThreads: threads, interOpNumThreads: 1 },
   });
   const id2label = model.config.id2label ?? {};
   const find = label => Number(Object.entries(id2label).find(([, l]) => l.toLowerCase() === label)?.[0]);
@@ -118,7 +122,15 @@ export async function loadModel(modelId, dtype = 'q8') {
       };
     });
   }
-  return { score };
+  /** Token count of each pair, untruncated (premise + hypothesis + special tokens). */
+  function tokenLengths(pairs) {
+    if (pairs.length === 0) return [];
+    const full = tokenizer(pairs.map(p => p.premise), {
+      text_pair: pairs.map(p => p.hypothesis), padding: false, truncation: false, return_tensor: false,
+    });
+    return full.input_ids.map(ids => ids.length);
+  }
+  return { score, tokenLengths };
 }
 
 // ─── Statistics ───────────────────────────────────────────────────────────────

@@ -11,10 +11,12 @@
  *    the calibrated ENTAILMENT_MIN holds on WebGPU, wasm and in Node. fp16
  *    weights on WebGPU are an experiment only (debug:nliDevice =
  *    'webgpu-fp16', lib/quality/nli-experiment.ts).
- *  - Backend: WebGPU first (the system's adapter; the GPU is chosen in the
- *    Windows Graphics settings), wasm when WebGPU is missing or fails to load
- *    or warm up. The worker reports the backend, the dtype and the adapter
- *    vendor.
+ *  - Backend: the q8 weights run on wasm with NLI_WASM_THREADS threads (the
+ *    app page is cross-origin isolated); ONNX Runtime's WebGPU EP ran their
+ *    quantized matmuls on one CPU thread anyway (eval/checker/NLI_PERF.md).
+ *    WebGPU stays for the fp16 experiment, for debug:nliDevice = 'webgpu'
+ *    and for a page that is not isolated. The worker reports the backend,
+ *    threads, dtype and the adapter vendor.
  *  - Premises (lib/quality/premises.ts, SummaC zero-shot, Laban et al.,
  *    2022, TACL): each simplified sentence is scored against the original's
  *    sentences and 2-sentence windows, pruned to the NLI_TOP_PREMISES most
@@ -37,8 +39,10 @@
  *    Verdicts and reasons still name the sentence itself, and glossary
  *    exemptions are decided on it alone.
  *  - NliClient sends a node's uncached pairs in batches of
- *    NLI_BATCH_SIZE_WEBGPU (32) or NLI_BATCH_SIZE_WASM (8), by the backend
- *    the model loaded on, and keeps an in-memory LRU of pair scores keyed by
+ *    NLI_BATCH_SIZE_WEBGPU (32) when the machine has a WebGPU adapter, else
+ *    NLI_BATCH_SIZE_WASM (8): the sizes each machine used before the switch
+ *    to threaded wasm, because a q8 pair's scores depend on the other pairs
+ *    in its batch (DynamicQuantizeLinear takes one scale per batch). It keeps an in-memory LRU of pair scores keyed by
  *    sha256(premise, hypothesis), so a retry or a cache re-check never
  *    re-scores an unchanged pair. The worker flags pairs over the model's
  *    512 tokens (scored truncated), and the check counts them. One client
@@ -114,6 +118,8 @@ export type NliResponse =
       backend: NliBackendName;
       dtype: NliDtype;
       adapter: GpuAdapterSummary | null;
+      /** wasm threads (1 on WebGPU). */
+      threads: number;
       /** Why WebGPU was not used, when it was tried and failed. */
       webgpuError?: string;
     }
@@ -127,6 +133,8 @@ export interface NliBackendInfo {
   /** Weights loaded; absent from backends that don't say (tests): q8. */
   dtype?: NliDtype;
   adapter: GpuAdapterSummary | null;
+  /** wasm threads; absent from backends that don't say (tests): 1. */
+  threads?: number;
   loadMs: number;
   webgpuError?: string;
 }
@@ -185,17 +193,32 @@ export interface WorkerBackendOptions {
   scoreTimeoutMs?: number;
 }
 
-/** "webgpu (nvidia ampere)", "webgpu fp16 (nvidia ampere)" or "wasm". */
-function describeBackend(info: Pick<NliBackendInfo, 'backend' | 'adapter' | 'dtype'>): string {
-  const name = info.dtype === 'fp16' ? `${info.backend} fp16` : info.backend;
-  if (info.backend !== 'webgpu' || !info.adapter) return name;
+/**
+ * "webgpu (nvidia ampere)", "webgpu fp16 (nvidia ampere)", "wasm 4 threads
+ * (webgpu adapter nvidia ampere)" or "wasm".
+ */
+function describeBackend(info: Pick<NliBackendInfo, 'backend' | 'adapter' | 'dtype' | 'threads'>): string {
+  let name = info.dtype === 'fp16' ? `${info.backend} fp16` : info.backend;
+  if (info.backend === 'wasm' && (info.threads ?? 1) > 1) name += ` ${info.threads} threads`;
+  if (!info.adapter) return name;
   const parts = [info.adapter.vendor, info.adapter.architecture].filter(Boolean).join(' ');
+  if (info.backend === 'wasm') return `${name} (webgpu adapter${parts ? ` ${parts}` : ''})`;
   return parts ? `${name} (${parts})` : name;
 }
 
-/** Pairs per worker call on a backend (config NLI_BATCH_SIZE_*). */
+/**
+ * Pairs per worker call (config NLI_BATCH_SIZE_*): 'webgpu' for a machine
+ * with a WebGPU adapter (32), 'wasm' without one (8), whatever backend the
+ * model runs on (see the file header).
+ */
 export function batchSizeFor(backend: NliBackendName): number {
   return backend === 'webgpu' ? NLI_BATCH_SIZE_WEBGPU : NLI_BATCH_SIZE_WASM;
+}
+
+/** The batch-size class of a loaded model: 'webgpu' when the machine has an adapter. */
+export function batchClassOf(info: Pick<NliBackendInfo, 'backend' | 'adapter'> | null): NliBackendName {
+  if (!info) return 'wasm';
+  return info.backend === 'webgpu' || info.adapter !== null ? 'webgpu' : 'wasm';
 }
 
 /**
@@ -249,7 +272,7 @@ export function createWorkerBackend(
           case 'ready': {
             clearTimeout(timer);
             const info: NliBackendInfo = {
-              backend: msg.backend, dtype: msg.dtype, adapter: msg.adapter, loadMs: msg.loadMs,
+              backend: msg.backend, dtype: msg.dtype, adapter: msg.adapter, threads: msg.threads, loadMs: msg.loadMs,
               ...(msg.webgpuError !== undefined && { webgpuError: msg.webgpuError }),
             };
             console.log(
@@ -370,9 +393,9 @@ export class NliClient {
     return performance.now() - started;
   }
 
-  /** Pairs per worker call: the fixed size, else by the loaded backend. */
+  /** Pairs per worker call: the fixed size, else by the loaded model (batchClassOf). */
   get currentBatchSize(): number {
-    return this.batchSize ?? batchSizeFor(this.loaded?.backend ?? 'wasm');
+    return this.batchSize ?? batchSizeFor(batchClassOf(this.loaded));
   }
 
   /** Probabilities for every pair, in order, plus cache and truncation counts. */
@@ -522,6 +545,7 @@ export async function prepareNli(
     backend: info.backend,
     adapterVendor: info.adapter?.vendor || null,
     dtype: info.dtype ?? 'q8',
+    threads: info.threads ?? 1,
     ms,
     benchFormat: BENCH_FORMAT,
     predictedParagraphMs: predictParagraphMs(ms),

@@ -71,6 +71,9 @@ describe('chooseQualityMode', () => {
   it('reads the evidence of a stored record', () => {
     expect(evidenceOf(RECORD)).toEqual({ webgpu: false, benchMs: 900, predictedParagraphMs: RECORD.predictedParagraphMs });
     expect(evidenceOf({ ...RECORD, backend: 'webgpu' }).webgpu).toBe(true);
+    // Threaded wasm on a machine with an adapter still counts as WebGPU for Auto, unless forced to wasm
+    expect(evidenceOf({ ...RECORD, webgpuAdapter: true, threads: 4 }).webgpu).toBe(true);
+    expect(evidenceOf({ ...RECORD, webgpuAdapter: true, device: 'wasm' }).webgpu).toBe(false);
   });
 });
 
