@@ -9,12 +9,17 @@
  *
  * Design decisions (agreed rules):
  *  1. Only a sentence that defines one of THIS node's hinted words is exempt:
- *     it starts with the word (optionally after "a", "an" or "the", optionally
- *     quoted, optionally plural) followed by "means" or "refers to", or by
+ *     it starts with the word (optionally after "a", "an" or "the", then
+ *     optionally a naming noun: "word", "term", "number", "name", "phrase" or
+ *     "expression"; optionally quoted, optionally plural) followed by "means"
+ *     or "refers to", or by
  *     "is" plus a defining word: "a", "an", "the", "a kind of", "when" or
  *     "how" ("Inflation is a rise in prices."). A plain statement such as
  *     "Inflation is rising." is not a definition. At most one exempt sentence
- *     per hinted word.
+ *     per hinted word. The naming noun was added 2026-10-29: `The word "karu"
+ *     means …` and `Karu means …` must be judged alike. A word the prompt
+ *     never hinted (a common word such as "billion", not in
+ *     findDifficultWords) is never exempt, however it is defined.
  *  2. A parenthetical definition of a hinted word inside a normal sentence,
  *     "photosynthesis (how plants make food)", is removed before NLI; the rest
  *     of that sentence is still checked.
@@ -37,14 +42,17 @@ function escapeRegExp(word: string): string {
   return word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Nouns that may name the defined word: "The word karu means …", "The number "billion" means …". */
+const NAMING_NOUN = '(?:word|term|number|name|phrase|expression)';
+
 /**
- * "<article?> <quote?>word(s|es)?<quote?>,? (means | refers to |
- * is (a|an|the|when|how))\b" at the start; "is a kind of" and "is a type of"
- * are covered by "is a".
+ * "<article?> <naming noun?> <quote?>word(s|es)?<quote?>,? (means | refers
+ * to | is (a|an|the|when|how))\b" at the start; "is a kind of" and "is a type
+ * of" are covered by "is a".
  */
 function definitionPattern(word: string): RegExp {
   return new RegExp(
-    `^\\s*(?:(?:a|an|the)\\s+)?["'“‘]?${escapeRegExp(word)}(?:s|es)?["'”’]?,?\\s+` +
+    `^\\s*(?:(?:a|an|the)\\s+)?(?:${NAMING_NOUN}\\s+)?["'“‘]?${escapeRegExp(word)}(?:s|es)?["'”’]?,?\\s+` +
       `(?:means|refers\\s+to|is\\s+(?:an?|the|when|how))\\b`,
     'i',
   );

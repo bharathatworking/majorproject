@@ -570,6 +570,8 @@ describe('runSimplification thesis meaning standard', () => {
     // Exactly the words the prompt named
     expect((hinted as string[]).length).toBeGreaterThan(0);
     expect(prompts[0]).toContain(`briefly explain them: ${(hinted as string[]).join(', ')}\n`);
+    // The run log names the same list, so a report shows why a definition was (not) exempt
+    expect((await getDocument(doc.id))?.runLogs?.at(-1)?.nodes[0].hintedWords).toEqual(hinted);
   });
 
   it('does not retry a version whose only failure is an unsupported sentence: kept as Not verified', async () => {

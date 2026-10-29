@@ -54,6 +54,46 @@ describe('isGlossarySentence', () => {
     expect(isGlossarySentence('Photosynthesise is a verb.', HINTED)).toBe(false);
   });
 
+  // Karnataka run (2026-10-27): the same rule for both sentence shapes
+  describe('consistency: bare term vs. a naming noun before it', () => {
+    it.each([
+      ['Karu means "elevated land".', ['karu']],
+      ['The word karu means "elevated land".', ['karu']],
+      ['The number "billion" means one thousand million.', ['billion']],
+      ['Billion means one thousand million.', ['billion']],
+      ['The term "GSDP" refers to the value of everything the state makes.', ['GSDP']],
+      ['A phrase "per capita" means for each person.', ['per capita']],
+    ])('exempts %s when the word was hinted', (sentence, hinted) => {
+      expect(isGlossarySentence(sentence, hinted)).toBe(true);
+    });
+
+    it('does not exempt a definition of a word that was never hinted ("billion" is a common word)', () => {
+      expect(isGlossarySentence('The number "billion" means one thousand million.', ['karu', 'nādu'])).toBe(false);
+      expect(isGlossarySentence('The number "billion" means one thousand million.', [])).toBe(false);
+      expect(isGlossarySentence('Billion means one thousand million.', ['karu'])).toBe(false);
+    });
+
+    it('still needs a definition verb after the naming noun and word', () => {
+      expect(isGlossarySentence('The word karu is old.', ['karu'])).toBe(false);
+      expect(isGlossarySentence('The number billion grew.', ['billion'])).toBe(false);
+      expect(isGlossarySentence('The big number billion means a lot.', ['billion'])).toBe(false);
+    });
+
+    it('keeps one exemption per word and the cap, whichever shape is used', () => {
+      const sentences = [
+        'Karnataka has old words.',
+        'Karu means "elevated land".',
+        'The word karu means "black".',
+        'Nādu means "region".',
+        'The soil is black.',
+        'It is in the south.',
+        'People grow cotton.',
+      ];
+      // 7 sentences → cap floor(0.3 × 7) = 2; the second karu definition is checked normally
+      expect(selectExemptions(sentences, ['karu', 'nādu'])).toEqual([1, 3]);
+    });
+  });
+
   it('returns the matched word, first in hint order', () => {
     expect(glossaryWordOf('Chlorophyll means green colour.', HINTED)).toBe('chlorophyll');
     expect(glossaryWordOf('Leaves are green.', HINTED)).toBeNull();

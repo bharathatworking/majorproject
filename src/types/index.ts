@@ -476,6 +476,12 @@ export interface NodeRunLog {
    * (lib/segmentation/clutter.ts). '' when the node was only a hatnote.
    */
   modelInput?: string;
+  /**
+   * The words the prompt's lexical hint named (builder.ts hintedWords): the
+   * only words whose definitions the NLI glossary rule exempts. Model nodes
+   * only; absent in older logs.
+   */
+  hintedWords?: string[];
   source: NodeSource;
   /** Variant of the kept version; null when the model did not produce it. */
   variantUsed: PromptVariantId | null;

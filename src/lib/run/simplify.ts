@@ -342,6 +342,8 @@ interface Attempt extends ScoredCandidate {
 interface Generated {
   chosen: Attempt;
   candidates: CandidateLog[];
+  /** The prompt's hinted words (the glossary exemption list). */
+  hintedWords: string[];
   /** No retry: the first version failed on unsupported sentences only. */
   retrySkipped?: 'unsupported-only';
 }
@@ -496,7 +498,7 @@ export async function runSimplification(
     source: NodeSource,
     nodeStartedAt: number,
     finalText: string | null,
-    details: Partial<Pick<NodeRunLog, 'variantUsed' | 'candidates' | 'meaning' | 'retrySkipped'>> = {},
+    details: Partial<Pick<NodeRunLog, 'variantUsed' | 'candidates' | 'meaning' | 'retrySkipped' | 'hintedWords'>> = {},
   ) {
     const now = performance.now();
     const ms = now - nodeStartedAt;
@@ -510,6 +512,7 @@ export async function runSimplification(
       type: STORED_TYPE[node.type] ?? 'paragraph',
       originalText: node.text,
       ...(nodeModelInput !== undefined && { modelInput: nodeModelInput }),
+      ...(details.hintedWords && { hintedWords: details.hintedWords }),
       source,
       variantUsed: details.variantUsed ?? null,
       modelCalls: nodeCalls,
@@ -934,7 +937,7 @@ export async function runSimplification(
       nliScoreMs: roundMs(t.meaning?.nliScoreMs ?? null),
       ...(t.echoStripped && { echoStripped: true }),
     }));
-    return { chosen, candidates, ...(retrySkipped && { retrySkipped }) };
+    return { chosen, candidates, hintedWords: hinted, ...(retrySkipped && { retrySkipped }) };
   }
 
   /**
@@ -1029,6 +1032,7 @@ export async function runSimplification(
         details = {
           variantUsed: chosen.variant,
           candidates: generated.candidates,
+          hintedWords: generated.hintedWords,
           ...(generated.retrySkipped && { retrySkipped: generated.retrySkipped }),
           ...(chosen.meaning && { meaning: meaningLog(chosen.meaning, lite) }),
         };
