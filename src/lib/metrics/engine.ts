@@ -1,5 +1,6 @@
 import { syllableCount } from './syllables';
 import { isCommonWord } from './common-words';
+import { countSentenceText, splitSentenceText } from '../utils/sentences';
 import type { ReadabilityReport } from '../../types';
 
 export function countWords(text: string): number {
@@ -7,9 +8,9 @@ export function countWords(text: string): number {
   return matches ? matches.length : 0;
 }
 
+/** Sentences for the formulas (lib/utils/sentences.ts: "10.2%" or "No. 5" is not a boundary). */
 export function countSentences(text: string): number {
-  const matches = text.match(/[.!?]+(?=\s|$)/g);
-  return matches ? matches.length : 1;
+  return countSentenceText(text);
 }
 
 export function countCharacters(text: string): number {
@@ -37,7 +38,7 @@ export function computeReadabilityReport(text: string, customWords: Set<string> 
     uniqueWords.add(word.toLowerCase());
   }
 
-  const sentences = text.split(/[.!?]+(?=\s|$)/).filter(s => s.trim().length > 0);
+  const sentences = splitSentenceText(text);
   for (const sentence of sentences) {
     if (countWords(sentence) > 20) longSentences++;
   }

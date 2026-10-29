@@ -52,6 +52,7 @@
  */
 
 import { escapeHtml } from '../utils/html';
+import { splitSentenceText } from '../utils/sentences';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -98,10 +99,6 @@ const SUB_BULLET_MARKER = /^(?:◦\s*|o\s+)(.*)$/;
 /** Word's third-level "▪" (Wingdings, sometimes pasted as U+F0A7), or "■". */
 const SUB_SUB_BULLET_MARKER = /^[▪■]\s*(.*)$/;
 
-/** After . ! or ? (and any closing quotes or brackets), before a capital or digit. */
-const SENTENCE_BREAK = /(?<=[.!?]["'”’)\]]*)\s+(?=["'“‘(\[]?[A-Z0-9])/;
-/** A piece ending in one of these did not end a sentence ("Dr. Smith", "J. Smith"). */
-const ABBREVIATION = /(?:\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|No|Fig|approx|e\.g|i\.e)|\b[A-Z])\.$/;
 /** A piece that is only a list marker: "3.", "b)", "ii.". */
 const BARE_MARKER = /^(?:\d{1,3}|[a-z]|[ivx]{1,4})[.)]$/;
 /** A sentence ending in the letter or roman marker of the next item: "… errors b." */
@@ -149,14 +146,15 @@ export function parseListMarker(line: string, prevLetter: string | null = null):
 const countWords = (text: string) => text.split(/\s+/).filter(Boolean).length;
 
 /**
- * Sentences of a prose block. Abbreviations and initials don't end one, and a
- * list marker belongs to the sentence after it: "TeamCal. 3. Formative: …"
- * gives "TeamCal." and "3. Formative: …".
+ * Sentences of a prose block (lib/utils/sentences.ts with requireStart:
+ * abbreviations, initials, decimals and a mid-sentence "..." don't end one),
+ * and a list marker belongs to the sentence after it: "TeamCal. 3.
+ * Formative: …" gives "TeamCal." and "3. Formative: …".
  */
 export function splitSentences(text: string): string[] {
   const sentences: string[] = [];
   let carry = '';
-  for (const piece of text.split(SENTENCE_BREAK)) {
+  for (const piece of splitSentenceText(text, { requireStart: true })) {
     let trimmed = piece.trim();
     if (!trimmed) continue;
     if (BARE_MARKER.test(trimmed)) {
@@ -167,9 +165,7 @@ export function splitSentences(text: string): string[] {
       trimmed = `${carry} ${trimmed}`;
       carry = '';
     }
-    const last = sentences.length - 1;
-    if (last >= 0 && ABBREVIATION.test(sentences[last])) sentences[last] += ` ${trimmed}`;
-    else sentences.push(trimmed);
+    sentences.push(trimmed);
   }
   if (carry) {
     if (sentences.length > 0) sentences[sentences.length - 1] += ` ${carry}`;

@@ -25,6 +25,7 @@
  */
 
 import { toPlainText } from '../render/format-output';
+import { splitSentenceText } from '../utils/sentences';
 import { cosineSimilarity } from './similarity';
 import { NLI_TOP_PREMISES } from './config';
 
@@ -52,17 +53,16 @@ export const PREMISE_STRATEGY = `summac-sentences+pairs/top${NLI_TOP_PREMISES}`;
 // ─── Sentences ────────────────────────────────────────────────────────────────
 
 /**
- * Sentences of a (possibly bulleted) text: marker-free text split after . !
- * or ? followed by whitespace, and at line breaks. Trimmed, empty pieces
- * dropped. Used for the hypotheses (model output) and the premises and main
- * claim (original).
+ * Sentences of a (possibly bulleted) text: marker-free text split at line
+ * breaks and by splitSentenceText (lib/utils/sentences.ts: never inside
+ * "10.2%", after "No." before a number, or at a mid-sentence "..."). Trimmed,
+ * empty pieces dropped. Used for the hypotheses (model output) and the
+ * premises and main claim (original).
  */
 export function splitSentences(text: string): string[] {
   return toPlainText(text)
     .split(/\n+/)
-    .flatMap(line => line.split(/(?<=[.!?])\s+/))
-    .map(s => s.trim())
-    .filter(s => s !== '');
+    .flatMap(line => splitSentenceText(line));
 }
 
 /**

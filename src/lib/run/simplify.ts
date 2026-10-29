@@ -155,6 +155,7 @@ import { addRunLog, saveDocument } from '../storage/documents';
 import { cacheKey, getCached, putCached } from '../storage/cache';
 import { recordSession } from '../storage/progress';
 import { flattenLists, toPlainText } from '../render/format-output';
+import { splitSentenceText } from '../utils/sentences';
 import { checkMeaning, shouldCheckNode } from '../quality/semantic';
 import {
   assessMeaning, buildRetryInstruction, candidatePasses, pickBetterVersion, retryInputOf, shouldRetry, toStoredMeaning,
@@ -211,8 +212,7 @@ function stripThinkingArtifacts(text: string): string {
 
 /** Last sentence of marker-free text, used as rolling context for the next node. */
 function lastSentence(plainText: string): string {
-  const sentences = plainText.split(/(?<=[.!?])\s+/);
-  return sentences[sentences.length - 1] ?? '';
+  return splitSentenceText(plainText).at(-1) ?? '';
 }
 
 /** Rounds to 4 decimals so the run report stays readable. */
