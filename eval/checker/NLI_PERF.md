@@ -46,12 +46,12 @@ So in Chrome, "webgpu" meant this: every quantized matmul ran on ORT's CPU EP in
 
 This is why time grew linearly with tokens, which a GPU would not show: 70 ms per pair for the old 8 short pairs, 433 ms per pair for the 18-pair benchmark, and 950 ms per pair for the 39 long pairs of n1's retry. Batches of 32 padded every pair to the longest pair in its batch, adding about 57% padding (1.57× the real tokens).
 
-### 4. The 1256 → 7791 ms "benchmark regression" is mostly a change of yardstick
+### 4. The 1256 → 1366 ms "benchmark regression" is mostly a change of yardstick
 
 Commit `6f82ef6` replaced the old benchmark with one realistic paragraph:
 
 - **Old:** 8 short pairs, scaled up to 18 pairs. It predicted 1256 ms.
-- **New:** one realistic paragraph of 18 pairs: longer premises, 2-sentence windows, one padded batch. It measured 7791 ms.
+- **New:** one realistic paragraph of 18 pairs: longer premises, 2-sentence windows, one padded batch. It measured 1366 ms.
 
 The UK run on 2026-10-19, on the same machine with the old code, already measured 4875 ms per paragraph.
 
