@@ -38,11 +38,12 @@
  *    it has nothing for the premises to entail ("Anatocism is the same.").
  *    Verdicts and reasons still name the sentence itself, and glossary
  *    exemptions are decided on it alone.
- *  - NliClient sends a node's uncached pairs in batches of
- *    NLI_BATCH_SIZE_WEBGPU (32) when the machine has a WebGPU adapter, else
- *    NLI_BATCH_SIZE_WASM (8): the sizes each machine used before the switch
- *    to threaded wasm, because a q8 pair's scores depend on the other pairs
- *    in its batch (DynamicQuantizeLinear takes one scale per batch). It keeps an in-memory LRU of pair scores keyed by
+ *  - NliClient sends a node's uncached pairs, in order, in batches of
+ *    NLI_BATCH_SIZE (8) on every machine and backend: the condition the
+ *    combined score was calibrated under. A q8 pair's scores depend on the
+ *    other pairs in its batch (DynamicQuantizeLinear takes one scale per
+ *    batch), so the pin buys reproducibility (same input, same batches, same
+ *    verdicts on any machine), not batch invariance. It keeps an in-memory LRU of pair scores keyed by
  *    sha256(premise, hypothesis), so a retry or a cache re-check never
  *    re-scores an unchanged pair. The worker flags pairs over the model's
  *    512 tokens (scored truncated), and the check counts them. One client
@@ -51,8 +52,8 @@
  *  - Speed benchmark (prepareNli): after the model loads, the pairs of a
  *    realistic paragraph (NLI_BENCH_PARAGRAPH: ~150 words, 6 simplified
  *    sentences, 18 pairs built by entailmentPairs exactly as the check
- *    builds them, word-overlap ranking) are timed once in the backend's
- *    batch size and stored (`nli:bench`) for the Auto quality mode
+ *    builds them, word-overlap ranking) are timed once in batches of
+ *    NLI_BATCH_SIZE and stored (`nli:bench`) for the Auto quality mode
  *    (lib/quality/mode.ts); re-run when the version, adapter, device or
  *    benchmark format changes.
  *  - Failures: a model that won't load (missing files, wasm blocked, timeout)
@@ -69,7 +70,7 @@
 import { sha256 } from '../utils/hash';
 import { getNliBench, getNliDevice, saveNliBench } from '../storage/nli-bench';
 import {
-  NLI_BATCH_SIZE_WASM, NLI_BATCH_SIZE_WEBGPU, NLI_CACHE_MAX, NLI_CONTEXT_MAX_WORDS, NLI_CONTRADICTION_AGG,
+  NLI_BATCH_SIZE, NLI_CACHE_MAX, NLI_CONTEXT_MAX_WORDS, NLI_CONTRADICTION_AGG,
   NLI_REFERRING_START,
   NLI_LOAD_TIMEOUT_MS, NLI_MODEL_ID, NLI_SCORE_TIMEOUT_MS, NLI_TOP_PREMISES,
 } from './config';
@@ -207,21 +208,6 @@ function describeBackend(info: Pick<NliBackendInfo, 'backend' | 'adapter' | 'dty
 }
 
 /**
- * Pairs per worker call (config NLI_BATCH_SIZE_*): 'webgpu' for a machine
- * with a WebGPU adapter (32), 'wasm' without one (8), whatever backend the
- * model runs on (see the file header).
- */
-export function batchSizeFor(backend: NliBackendName): number {
-  return backend === 'webgpu' ? NLI_BATCH_SIZE_WEBGPU : NLI_BATCH_SIZE_WASM;
-}
-
-/** The batch-size class of a loaded model: 'webgpu' when the machine has an adapter. */
-export function batchClassOf(info: Pick<NliBackendInfo, 'backend' | 'adapter'> | null): NliBackendName {
-  if (!info) return 'wasm';
-  return info.backend === 'webgpu' || info.adapter !== null ? 'webgpu' : 'wasm';
-}
-
-/**
  * Backend that runs the model in a Web Worker. The worker is created and the
  * model loaded on the first load or score call; if that fails, the worker is
  * dropped and the next call starts over.
@@ -276,7 +262,8 @@ export function createWorkerBackend(
               ...(msg.webgpuError !== undefined && { webgpuError: msg.webgpuError }),
             };
             console.log(
-              `[Clarity] NLI model ${NLI_MODEL_ID} loaded on ${describeBackend(info)} in ${Math.round(msg.loadMs)} ms` +
+              `[Clarity] NLI model ${NLI_MODEL_ID} loaded on ${describeBackend(info)} in ${Math.round(msg.loadMs)} ms, ` +
+              `batches of ${NLI_BATCH_SIZE}` +
               (device !== 'auto' ? ` (${device} requested by debug:nliDevice)` : ''),
             );
             if (msg.webgpuError) console.log(`[Clarity] NLI WebGPU not used: ${msg.webgpuError}`);
@@ -354,13 +341,10 @@ export class NliClient {
   private readonly cache = new Map<string, NliProbs>();
   private loaded: NliBackendInfo | null = null;
   private readonly backend: NliBackend;
-  /** Fixed batch size; undefined = by the loaded backend (batchSizeFor). */
-  private readonly batchSize: number | undefined;
   private readonly cacheMax: number;
 
-  constructor(backend: NliBackend, batchSize?: number, cacheMax = NLI_CACHE_MAX) {
+  constructor(backend: NliBackend, cacheMax = NLI_CACHE_MAX) {
     this.backend = backend;
-    this.batchSize = batchSize;
     this.cacheMax = cacheMax;
   }
 
@@ -378,14 +362,15 @@ export class NliClient {
   }
 
   /**
-   * ms to score `pairs` in batches of the current batch size, as scorePairs
+   * ms to score `pairs` in batches of NLI_BATCH_SIZE, as scorePairs
    * would, after an untimed warm-up pass (WebGPU compiles its shaders on the
    * first run). Bypasses the cache.
    */
   async bench(pairs: NliPair[]): Promise<number> {
-    const size = this.currentBatchSize;
     const pass = async () => {
-      for (let i = 0; i < pairs.length; i += size) await this.backend.score(pairs.slice(i, i + size));
+      for (let i = 0; i < pairs.length; i += NLI_BATCH_SIZE) {
+        await this.backend.score(pairs.slice(i, i + NLI_BATCH_SIZE));
+      }
     };
     await pass();
     const started = performance.now();
@@ -393,25 +378,19 @@ export class NliClient {
     return performance.now() - started;
   }
 
-  /** Pairs per worker call: the fixed size, else by the loaded model (batchClassOf). */
-  get currentBatchSize(): number {
-    return this.batchSize ?? batchSizeFor(batchClassOf(this.loaded));
-  }
-
   /** Probabilities for every pair, in order, plus cache and truncation counts. */
   async scorePairs(pairs: NliPair[]): Promise<ScoredPairs> {
-    // The batch size depends on the backend, so load first (once)
-    if (!this.loaded && this.batchSize === undefined) await this.load();
+    // Load first (once), so `info` names the backend
+    if (!this.loaded) await this.load();
     const keys = await Promise.all(pairs.map(p => sha256(`${p.premise}\u0000${p.hypothesis}`)));
     const probs: (NliProbs | undefined)[] = keys.map(k => this.touch(k));
     const cached = probs.filter(Boolean).length;
 
-    // Distinct uncached pairs, scored in as few calls as the batch size allows
+    // Distinct uncached pairs, in order, in batches of NLI_BATCH_SIZE (the last one may be partial)
     const missing = [...new Set(keys.filter((_, i) => probs[i] === undefined))];
     const pairByKey = new Map(keys.map((k, i) => [k, pairs[i]]));
-    const batchSize = this.currentBatchSize;
-    for (let i = 0; i < missing.length; i += batchSize) {
-      const batchKeys = missing.slice(i, i + batchSize);
+    for (let i = 0; i < missing.length; i += NLI_BATCH_SIZE) {
+      const batchKeys = missing.slice(i, i + NLI_BATCH_SIZE);
       const scores = await this.backend.score(batchKeys.map(k => pairByKey.get(k) as NliPair));
       if (scores.length !== batchKeys.length) {
         throw new Error(`NLI returned ${scores.length} scores for ${batchKeys.length} pairs`);

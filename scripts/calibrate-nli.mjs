@@ -174,7 +174,7 @@ try {
   const sum = (k) => results.reduce((a, r) => a + r[k], 0);
   console.log(`\nTruncated pairs (> ${MAX_TOKENS} tokens): before ${sum('truncatedBefore')}/${results.length}, after ${sum('truncatedAfter')}/${sum('pairsAfter')}`);
 
-  // ── Timing proxy: whole simplified paragraphs, one batch per paragraph, one CPU thread
+  // ── Timing proxy: whole simplified paragraphs, in batches of NLI_BATCH_SIZE (score()), one CPU thread
   const before = [];
   const after = [];
   const paragraphDecisions = [];
@@ -219,7 +219,7 @@ try {
   }
   if (before.length) {
     console.log(
-      `\nNode CPU proxy (1 thread, ${before.length} simplified paragraphs, one batch each): ` +
+      `\nNode CPU proxy (1 thread, ${before.length} simplified paragraphs, batches of ${config.NLI_BATCH_SIZE}): ` +
       `before ${Math.round(mean(before))} ms per paragraph (${pairsBefore} pairs, ${truncBefore} truncated), ` +
       `after ${Math.round(mean(after))} ms per paragraph (${pairsAfter} pairs, ${truncAfter} truncated)`,
     );

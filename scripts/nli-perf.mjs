@@ -1,8 +1,9 @@
 /**
- * npm run nli:perf -- [report.json …] [--configs cpu1,cpu4,webgpu] [--json out.json]
- * — where the NLI meaning check spends its time, and whether a batching
- * change moves any verdict. Writes nothing unless --json is given; the
- * numbers go into eval/checker/NLI_PERF.md by hand.
+ * npm run nli:perf -- [report.json …] [--configs cpu1,cpu4,webgpu] [--baseline in.json] [--json out.json]
+ * — NLI time per scored version on the app's own batching (NLI_BATCH_SIZE),
+ * by backend, and whether any verdict differs between backends or from a
+ * saved run. Writes nothing unless --json is given; the numbers go into
+ * eval/checker/NLI_PERF.md by hand.
  *
  * Design decisions:
  *  - Inputs are real scored versions: every candidate with NLI time in the
@@ -12,22 +13,25 @@
  *    the app checked it. Identical (original, text) versions are scored once.
  *  - The app's own checkEntailment and NliClient run through the Vite
  *    loader, with word-overlap premise ranking (no Ollama needed, so every
- *    configuration scores the same pairs). Hinted words are not in the
- *    reports, so no glossary exemptions apply; that changes no pair count.
- *  - Batching strategies are applied inside a backend wrapper (the client
- *    sends a version's uncached pairs in one call): in-order-32 (the app on
- *    WebGPU before the fix), in-order-8 (wasm, and the calibration and
- *    checker fit), sorted (length-sorted batches with a token budget; tried,
- *    not adopted) and single (one pair per call, no padding at all).
+ *    configuration scores the same pairs), one fresh client per version.
+ *    Hinted words are not in the reports, so no glossary exemptions apply;
+ *    that changes no pair count.
+ *  - Batching is the app's only: NliClient sends the uncached pairs in order
+ *    in batches of NLI_BATCH_SIZE (config.ts), pinned because q8 scores
+ *    depend on batch composition (NLI_PERF.md). The backend wrapper only
+ *    counts padded and real tokens. The comparison strategies this script
+ *    used to run (in order 32, length-sorted, one pair per call) were removed
+ *    with the pin; their numbers are in eval/checker/nli-perf-before.json and
+ *    the script that made them is at commit 50f401d.
  *  - Configurations: onnxruntime-node on the CPU with 1 thread (the
- *    extension's wasm and the calibration setup), with 4 threads, and on
- *    ORT's native WebGPU EP (the C++ EP that the extension's asyncify wasm
- *    build also compiles). The WebGPU session is the one the probe in
- *    NLI_PERF.md showed placing every MatMulInteger and DynamicQuantizeLinear
- *    on the CPU EP.
+ *    calibration setup), with 4 threads (the extension's NLI_WASM_THREADS),
+ *    and on ORT's native WebGPU EP (the C++ EP that the extension's asyncify
+ *    wasm build also compiles; debug:nliDevice = 'webgpu').
  *  - Verdict agreement: the FULL combined score (frozen, config.ts) from the
  *    report's similarity and entity recall, the length ratio, and the NLI
- *    parts of each strategy, compared with in-order-32 and in-order-8.
+ *    parts, compared across configurations and, with --baseline, with the
+ *    same configuration of a saved --json run: its `app` results, or for a
+ *    file written before the pin its in-order run at NLI_BATCH_SIZE.
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -46,6 +50,7 @@ const flag = name => {
 };
 const configNames = (flag('--configs') ?? 'cpu1,cpu4,webgpu').split(',');
 const jsonOut = flag('--json');
+const baselinePath = flag('--baseline');
 const reportPaths = args.length > 0 ? args : [join(ROOT, 'eval/fixtures/runs/uk-wiki-2026-10-19.json')];
 
 const CONFIGS = {
@@ -90,66 +95,31 @@ for (const path of reportPaths) {
     }
   }
 }
-console.log(`[Clarity] ${versions.length} scored versions from ${reportPaths.length} report(s)`);
+console.log(
+  `[Clarity] ${versions.length} scored versions from ${reportPaths.length} report(s), ` +
+  `batches of ${config.NLI_BATCH_SIZE}`,
+);
 
-// ─── Batching ─────────────────────────────────────────────────────────────────
-
-/** Padded-token budget of one sorted batch (pairs × longest pair). */
-const SORTED_TOKEN_BUDGET = 2048;
-
-/**
- * Index batches sorted by token length, cut so no batch pads more than
- * `tokenBudget` tokens or holds more than `maxPairs` pairs (tried as a fix
- * and not adopted: NLI_PERF.md).
- */
-function sortedBatches(lengths, tokenBudget, maxPairs) {
-  const order = lengths.map((_, i) => i).sort((a, b) => lengths[a] - lengths[b] || a - b);
-  const batches = [];
-  let current = [];
-  for (const i of order) {
-    if (current.length > 0 && (current.length >= maxPairs || (current.length + 1) * lengths[i] > tokenBudget)) {
-      batches.push(current);
-      current = [];
-    }
-    current.push(i);
-  }
-  if (current.length > 0) batches.push(current);
-  return batches;
-}
-
-/** Index batches of `lengths` for one strategy. */
-function batchesFor(strategy, lengths) {
-  const order = lengths.map((_, i) => i);
-  if (strategy === 'single') return order.map(i => [i]);
-  if (strategy === 'sorted') return sortedBatches(lengths, SORTED_TOKEN_BUDGET, config.NLI_BATCH_SIZE_WEBGPU);
-  const size = strategy === 'in-order-8' ? 8 : 32;
-  const out = [];
-  for (let i = 0; i < order.length; i += size) out.push(order.slice(i, i + size));
-  return out;
-}
-
-/** An NliBackend that batches one call's pairs by `strategy` and counts tokens. */
-function strategyBackend(model, strategy, stats) {
-  return {
-    async score(pairs) {
-      const lengths = model.tokenLengths(pairs).map(n => Math.min(n, 512));
-      const out = new Array(pairs.length);
-      for (const batch of batchesFor(strategy, lengths)) {
-        const maxLen = Math.max(...batch.map(i => lengths[i]));
-        stats.padded += maxLen * batch.length;
-        stats.real += batch.reduce((sum, i) => sum + lengths[i], 0);
-        stats.batches += 1;
-        const probs = await model.score(batch.map(i => pairs[i]));
-        batch.forEach((i, j) => { out[i] = probs[j]; });
-      }
-      return out;
-    },
-  };
+const baseline = baselinePath ? JSON.parse(await readFile(baselinePath, 'utf8')) : null;
+if (baseline && JSON.stringify(baseline.versions) !== JSON.stringify(versions.map(v => v.source))) {
+  throw new Error(`${baselinePath} scored other versions; pass the same reports in the same order`);
 }
 
 // ─── Measure ──────────────────────────────────────────────────────────────────
 
-const STRATEGIES = ['in-order-32', 'in-order-8', 'sorted', 'single'];
+/** An NliBackend that scores what NliClient sends and counts padded and real tokens. */
+function countingBackend(model, stats) {
+  return {
+    async score(pairs) {
+      const lengths = model.tokenLengths(pairs).map(n => Math.min(n, 512));
+      stats.padded += Math.max(...lengths) * pairs.length;
+      stats.real += lengths.reduce((sum, n) => sum + n, 0);
+      stats.batches += 1;
+      return model.score(pairs);
+    },
+  };
+}
+
 const results = {};
 
 for (const name of configNames) {
@@ -164,36 +134,33 @@ for (const name of configNames) {
   }
   // Untimed warm-up (WebGPU compiles its shaders on the first shapes)
   await model.score(nli.benchPairs());
-  results[name] = {};
-  for (const strategy of STRATEGIES) {
-    const stats = { padded: 0, real: 0, batches: 0 };
-    const perVersion = [];
-    let pairs = 0;
-    for (const v of versions) {
-      const client = new nli.NliClient(strategyBackend(model, strategy, stats), Number.MAX_SAFE_INTEGER);
-      const started = performance.now();
-      const check = await nli.checkEntailment(v.original, v.text, [], client);
-      const ms = performance.now() - started;
-      pairs += check.pairs;
-      const lenRatio = checker.lengthRatioOf(v.original, toPlainText(v.text));
-      const { score } = checker.combinedScore(config.COMBINED_SCORE_FULL, {
-        sbert: v.similarity, entity: v.entityRecall, lenRatio,
-        nliMin: check.minEntailment, contra: check.maxContradiction,
-      });
-      perVersion.push({
-        ms, pairs: check.pairs, sentences: check.sentences, nliMin: check.minEntailment,
-        contra: check.maxContradiction, score, pass: score >= config.COMBINED_SCORE_FULL.threshold,
-        unsupported: check.unsupportedSentences.length, contradicted: check.contradictedSentences.length,
-      });
-    }
-    const total = perVersion.reduce((s, x) => s + x.ms, 0);
-    results[name][strategy] = { total, perVersion, pairs, ...stats };
-    console.log(
-      `[Clarity] ${name.padEnd(6)} ${strategy.padEnd(11)} ${Math.round(total / versions.length)} ms/version, ` +
-      `${pairs} pairs, ${stats.batches} batches, padded/real tokens ${stats.padded}/${stats.real} ` +
-      `(${(stats.padded / stats.real).toFixed(2)}x)`,
-    );
+  const stats = { padded: 0, real: 0, batches: 0 };
+  const perVersion = [];
+  let pairs = 0;
+  for (const v of versions) {
+    const client = new nli.NliClient(countingBackend(model, stats));
+    const started = performance.now();
+    const check = await nli.checkEntailment(v.original, v.text, [], client);
+    const ms = performance.now() - started;
+    pairs += check.pairs;
+    const lenRatio = checker.lengthRatioOf(v.original, toPlainText(v.text));
+    const { score } = checker.combinedScore(config.COMBINED_SCORE_FULL, {
+      sbert: v.similarity, entity: v.entityRecall, lenRatio,
+      nliMin: check.minEntailment, contra: check.maxContradiction,
+    });
+    perVersion.push({
+      ms, pairs: check.pairs, sentences: check.sentences, nliMin: check.minEntailment,
+      contra: check.maxContradiction, score, pass: score >= config.COMBINED_SCORE_FULL.threshold,
+      unsupported: check.unsupportedSentences.length, contradicted: check.contradictedSentences.length,
+    });
   }
+  const total = perVersion.reduce((s, x) => s + x.ms, 0);
+  results[name] = { app: { batchSize: config.NLI_BATCH_SIZE, total, perVersion, pairs, ...stats } };
+  console.log(
+    `[Clarity] ${name.padEnd(6)} ${Math.round(total / versions.length)} ms/version, ` +
+    `${pairs} pairs, ${stats.batches} batches, padded/real tokens ${stats.padded}/${stats.real} ` +
+    `(${(stats.padded / stats.real).toFixed(2)}x)`,
+  );
 }
 
 // ─── Agreement ────────────────────────────────────────────────────────────────
@@ -215,43 +182,41 @@ function agreement(a, b) {
   return { flips, reasonChanges, maxScore, maxNliMin, maxContra };
 }
 
-console.log('\n| Config | Strategy | vs | Verdict flips | Sentence-verdict changes | max |Δscore| | max |ΔnliMin| | max |Δcontra| |');
-console.log('|---|---|---|---|---|---|---|---|');
-for (const [name, byStrategy] of Object.entries(results)) {
-  for (const ref of ['in-order-32', 'in-order-8']) {
-    for (const strategy of STRATEGIES) {
-      if (strategy === ref) continue;
-      const g = agreement(byStrategy[ref], byStrategy[strategy]);
-      console.log(
-        `| ${name} | ${strategy} | ${ref} | ${g.flips}/${versions.length} | ${g.reasonChanges} | ` +
-        `${g.maxScore.toExponential(2)} | ${g.maxNliMin.toExponential(2)} | ${g.maxContra.toExponential(2)} |`,
-      );
-    }
-  }
-}
-// Across backends, same strategy (does the device change any number?)
-const names = Object.keys(results);
-for (let i = 1; i < names.length; i++) {
-  for (const strategy of STRATEGIES) {
-    const g = agreement(results[names[0]][strategy], results[names[i]][strategy]);
-    console.log(
-      `| ${names[i]} | ${strategy} | ${names[0]} ${strategy} | ${g.flips}/${versions.length} | ${g.reasonChanges} | ` +
-      `${g.maxScore.toExponential(2)} | ${g.maxNliMin.toExponential(2)} | ${g.maxContra.toExponential(2)} |`,
-    );
-  }
+/** A saved run's results for `name` at the app's batching (`app`, or the pre-pin in-order run). */
+function baselineOf(name) {
+  const saved = baseline?.results?.[name];
+  return saved?.app ?? saved?.[`in-order-${config.NLI_BATCH_SIZE}`] ?? null;
 }
 
-console.log('\n| Config | Strategy | Mean ms/version | p50 | Pairs/version | Padded/real tokens |');
-console.log('|---|---|---|---|---|---|');
-for (const [name, byStrategy] of Object.entries(results)) {
-  for (const strategy of STRATEGIES) {
-    const r = byStrategy[strategy];
-    const sorted = r.perVersion.map(x => x.ms).sort((a, b) => a - b);
-    const p50 = sorted[Math.floor(sorted.length / 2)];
-    console.log(
-      `| ${name} | ${strategy} | ${Math.round(r.total / versions.length)} | ${Math.round(p50)} | ` +
-      `${(r.pairs / versions.length).toFixed(1)} | ${(r.padded / r.real).toFixed(2)}x |`,
-    );
+const row = (label, vs, g) =>
+  `| ${label} | ${vs} | ${g.flips}/${versions.length} | ${g.reasonChanges} | ` +
+  `${g.maxScore.toExponential(2)} | ${g.maxNliMin.toExponential(2)} | ${g.maxContra.toExponential(2)} |`;
+
+console.log('\n| Config | vs | Verdict flips | Sentence-verdict changes | max |Δscore| | max |ΔnliMin| | max |Δcontra| |');
+console.log('|---|---|---|---|---|---|---|');
+const names = Object.keys(results);
+for (let i = 1; i < names.length; i++) {
+  console.log(row(names[i], names[0], agreement(results[names[0]].app, results[names[i]].app)));
+}
+for (const name of names) {
+  const ref = baselineOf(name);
+  if (ref) console.log(row(name, `${name} in ${baselinePath}`, agreement(ref, results[name].app)));
+}
+
+const msRow = (label, r) => {
+  const sorted = r.perVersion.map(x => x.ms).sort((a, b) => a - b);
+  const p50 = sorted[Math.floor(sorted.length / 2)];
+  return `| ${label} | ${Math.round(r.total / versions.length)} | ${Math.round(p50)} | ` +
+    `${(r.pairs / versions.length).toFixed(1)} | ${(r.padded / r.real).toFixed(2)}x |`;
+};
+
+console.log('\n| Config | Mean ms/version | p50 | Pairs/version | Padded/real tokens |');
+console.log('|---|---|---|---|---|');
+for (const name of names) {
+  console.log(msRow(`${name} (this run, batches of ${config.NLI_BATCH_SIZE})`, results[name].app));
+  // The saved run's timings, every batching it measured (another session: compare with care)
+  for (const [key, r] of Object.entries(baseline?.results?.[name] ?? {})) {
+    console.log(msRow(`${name} ${key} (baseline)`, r));
   }
 }
 

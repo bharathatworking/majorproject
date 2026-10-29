@@ -8,8 +8,8 @@
  *  - Auto measures instead of guessing from hardware: when the NLI model
  *    first loads, a realistic paragraph is timed (lib/quality/nli.ts
  *    prepareNli: NLI_BENCH_PARAGRAPH, ~150 words and 6 simplified sentences,
- *    the 18 pairs the check would score for it, in the backend's batch
- *    size) and stored as `nli:bench`. The old 8 short pairs, multiplied up,
+ *    the 18 pairs the check would score for it, in batches of
+ *    NLI_BATCH_SIZE) and stored as `nli:bench`. The old 8 short pairs, multiplied up,
  *    predicted 1256 ms per paragraph where real runs measured 4875 ms (UK
  *    run, WebGPU). Auto picks Lite only when there
  *    is no WebGPU AND that benchmark predicts more than
@@ -40,9 +40,11 @@ export const BENCH_PAIRS = NLI_TOP_PREMISES * NLI_TYPICAL_SENTENCES;
 
 /**
  * Format of NliBenchRecord; 2 = the realistic paragraph, 3 = q8 on threaded
- * wasm (2026-10-29). Older records are stale.
+ * wasm, 4 = batches of NLI_BATCH_SIZE on every machine (both 2026-10-29;
+ * format 3 timed machines with a WebGPU adapter in batches of 32). Older
+ * records are stale.
  */
-export const BENCH_FORMAT = 3;
+export const BENCH_FORMAT = 4;
 
 export interface QualityDecision {
   mode: QualityMode;

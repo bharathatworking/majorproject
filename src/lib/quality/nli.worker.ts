@@ -20,10 +20,9 @@
  *    threads. More threads give bit-identical scores (same kernels, same
  *    batches); only speed changes.
  *  - The adapter is still requested once per worker: its presence decides
- *    the batch size (lib/quality/nli.ts batchSizeFor: 32 with an adapter, 8
- *    without, as before the switch, because the q8 scores depend on which
- *    pairs share a batch) and the Auto quality mode, and its vendor is
- *    logged.
+ *    the Auto quality mode, and its vendor is logged. It does not decide the
+ *    batch size, which is NLI_BATCH_SIZE on every machine (lib/quality/nli.ts
+ *    NliClient), because the q8 scores depend on which pairs share a batch.
  *  - The WebGPU EP is still used for the fp16 experiment ('webgpu-fp16'),
  *    for debug:nliDevice = 'webgpu' (the old q8 path, to measure before vs
  *    after on one build), and as before when the page is not cross-origin

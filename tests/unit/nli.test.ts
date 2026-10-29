@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
-  batchClassOf, benchPairs, checkEntailment, checkMainClaim, createWorkerBackend, entailmentPairs, hypothesisFor, needsContext,
+  benchPairs, checkEntailment, checkMainClaim, createWorkerBackend, entailmentPairs, hypothesisFor, needsContext,
   NLI_BENCH_PARAGRAPH, NliClient, NliUnavailableError, prepareNli,
   splitSentences, type BenchStore, type NliBackend, type NliPair, type NliProbs, type NliRequest,
   type NliResponse, type WorkerLike,
 } from '../../src/lib/quality/nli';
 import {
-  CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_BATCH_SIZE_WASM, NLI_CONTRADICTION_AGG, NLI_TOP_PREMISES, NLI_TYPICAL_SENTENCES,
+  CONTRADICTION_MAX, ENTAILMENT_MIN, NLI_BATCH_SIZE, NLI_CONTRADICTION_AGG, NLI_TOP_PREMISES, NLI_TYPICAL_SENTENCES,
 } from '../../src/lib/quality/config';
 import { BENCH_FORMAT, BENCH_PAIRS } from '../../src/lib/quality/mode';
 import { cleanForModel } from '../../src/lib/segmentation/clutter';
@@ -70,49 +70,14 @@ describe('splitSentences', () => {
 // NliClient — batching and cache
 // ---------------------------------------------------------------------------
 describe('NliClient', () => {
-  it('batches pairs by the batch size, in order', async () => {
+  it('batches pairs in order, NLI_BATCH_SIZE per call', async () => {
     const { backend, batches } = fakeBackend();
-    const client = new NliClient(backend, 2);
-    const pairs = ['a.', 'b.', 'c.'].map(h => ({ premise: 'p', hypothesis: h }));
-    const { probs, cached } = await client.scorePairs(pairs);
-    expect(batches.map(b => b.map(p => p.hypothesis))).toEqual([['a.', 'b.'], ['c.']]);
-    expect(probs).toHaveLength(3);
-    expect(cached).toBe(0);
-  });
-
-  it.each([['webgpu', 32], ['wasm', 8]] as [NliBackendName, number][])(
-    'batches %s pairs by %i (the backend it loaded on)',
-    async (backendName, size) => {
-      const { backend, batches } = fakeBackend();
-      backend.load = vi.fn(async () => ({ backend: backendName, adapter: null, loadMs: 0 }));
-      const client = new NliClient(backend);
-      const pairs = Array.from({ length: 40 }, (_, i) => ({ premise: 'p', hypothesis: `h${i}.` }));
-      await client.scorePairs(pairs);
-      expect(backend.load).toHaveBeenCalledTimes(1);
-      expect(batches.map(b => b.length)).toEqual(
-        Array.from({ length: Math.ceil(40 / size) }, (_, i) => Math.min(size, 40 - i * size)),
-      );
-      expect(client.currentBatchSize).toBe(size);
-    },
-  );
-
-  it('keeps 32 pairs per batch on threaded wasm when the machine has a WebGPU adapter', async () => {
-    // q8 scores depend on batch composition, so the switch to wasm keeps each machine's old size
-    const { backend, batches } = fakeBackend();
-    backend.load = vi.fn(async () => ({
-      backend: 'wasm' as const, threads: 4, adapter: { vendor: 'nvidia', architecture: '', description: '' }, loadMs: 0,
-    }));
     const client = new NliClient(backend);
-    await client.scorePairs(Array.from({ length: 40 }, (_, i) => ({ premise: 'p', hypothesis: `h${i}.` })));
-    expect(batches.map(b => b.length)).toEqual([32, 8]);
-    expect(batchClassOf({ backend: 'wasm', adapter: null })).toBe('wasm');
-    expect(batchClassOf(null)).toBe('wasm');
-  });
-
-  it('uses the wasm batch size for a backend without load()', async () => {
-    const { backend, batches } = fakeBackend();
-    await new NliClient(backend).scorePairs(Array.from({ length: 9 }, (_, i) => ({ premise: 'p', hypothesis: `h${i}.` })));
-    expect(batches.map(b => b.length)).toEqual([8, 1]);
+    const pairs = Array.from({ length: 9 }, (_, i) => ({ premise: 'p', hypothesis: `h${i}.` }));
+    const { probs, cached } = await client.scorePairs(pairs);
+    expect(batches).toEqual([pairs.slice(0, 8), pairs.slice(8)]);
+    expect(probs).toHaveLength(9);
+    expect(cached).toBe(0);
   });
 
   it('answers repeated pairs from the cache without calling the worker', async () => {
@@ -142,7 +107,7 @@ describe('NliClient', () => {
 
   it('evicts the least recently used pair past the cap', async () => {
     const { backend } = fakeBackend();
-    const client = new NliClient(backend, 8, 2);
+    const client = new NliClient(backend, 2);
     const pair = (h: string) => [{ premise: 'p', hypothesis: h }];
     await client.scorePairs(pair('a.'));
     await client.scorePairs(pair('b.'));
@@ -155,6 +120,98 @@ describe('NliClient', () => {
   it('throws when the backend returns the wrong number of scores', async () => {
     const client = new NliClient({ score: async () => [] });
     await expect(client.scorePairs([{ premise: 'p', hypothesis: 'h.' }])).rejects.toThrow(/0 scores for 1/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NliClient — pinned batch size (reproducibility, not invariance)
+// ---------------------------------------------------------------------------
+/**
+ * These tests check the chunking logic only, with fake backends; the real
+ * model's behaviour under the pin is checked by npm run nli:perf (0 of 29
+ * verdict changes against the batch-8 baseline, eval/checker/NLI_PERF.md).
+ *
+ * Pinning gives reproducibility, not batch invariance: a q8 pair's score
+ * depends on its batch-mates (one quantization scale per batch), and the last,
+ * partial batch varies with how many pairs are queued. What the pin
+ * guarantees is that the same queue gives the same batches on every machine,
+ * under the rule the calibration used.
+ */
+describe('NliClient — pinned batch size', () => {
+  it('is 8, the batch size the combined score was calibrated with', () => {
+    // Must match the calibration run: npm run checker:extract -- --set calib
+    // (eval/checker/features_calib.csv), then npm run checker:fit on 2026-10-19
+    // (commit 0c2f5de, eval/checker/PREREG.md), scored by NliClient in batches
+    // of 8 on one CPU thread. Another size changes the scores the frozen
+    // COMBINED_SCORE_* weights and QUALITY_THRESHOLD were fitted on.
+    expect(NLI_BATCH_SIZE).toBe(8);
+  });
+
+  const ADAPTER = { vendor: 'nvidia', architecture: '', description: '' };
+  const LOADS: [string, NliBackend['load']][] = [
+    ['webgpu', async () => ({ backend: 'webgpu', adapter: ADAPTER, loadMs: 0 })],
+    ['wasm with a WebGPU adapter', async () => ({ backend: 'wasm', threads: 4, adapter: ADAPTER, loadMs: 0 })],
+    ['wasm', async () => ({ backend: 'wasm', adapter: null, loadMs: 0 })],
+    ['a backend without load()', undefined],
+  ];
+
+  it.each(LOADS)('sends chunks of exactly NLI_BATCH_SIZE plus a remainder, in order, on %s', async (_, load) => {
+    for (const queued of [1, 7, 8, 9, 20, 40, 100]) {
+      const { backend, batches } = fakeBackend();
+      if (load) backend.load = load;
+      const pairs = Array.from({ length: queued }, (_, i) => ({ premise: 'p', hypothesis: `h${i}.` }));
+      await new NliClient(backend).scorePairs(pairs);
+      const full = Math.floor(queued / NLI_BATCH_SIZE);
+      const sizes = [...Array(full).fill(NLI_BATCH_SIZE), ...(queued % NLI_BATCH_SIZE ? [queued % NLI_BATCH_SIZE] : [])];
+      expect(batches.map(b => b.length)).toEqual(sizes);
+      expect(batches.flat()).toEqual(pairs);
+    }
+  });
+
+  /**
+   * Fake q8 backend: every pair's probabilities depend on its batch (the
+   * longest hypothesis and the batch length), like DynamicQuantizeLinear's
+   * one scale per batch tensor, padding included.
+   */
+  function batchSensitiveBackend(): NliBackend {
+    return {
+      score: async (pairs) => {
+        const longest = Math.max(...pairs.map(p => p.hypothesis.length));
+        return pairs.map(p => {
+          const entailment = (p.hypothesis.length / longest) * (0.9 + pairs.length / 100);
+          const contradiction = (1 - entailment) / 2;
+          return { entailment, contradiction, neutral: 1 - entailment - contradiction };
+        });
+      },
+    };
+  }
+
+  // Hypotheses of different lengths, so batch composition matters to the fake
+  const PAIRS: NliPair[] = Array.from({ length: 24 }, (_, i) => ({ premise: 'p', hypothesis: `${'x'.repeat(1 + (i * 7) % 23)}.` }));
+
+  async function scoreInGroups(sizes: number[]): Promise<NliProbs[]> {
+    const client = new NliClient(batchSensitiveBackend());
+    const out: NliProbs[] = [];
+    let start = 0;
+    for (const size of sizes) {
+      out.push(...(await client.scorePairs(PAIRS.slice(start, start + size))).probs);
+      start += size;
+    }
+    return out;
+  }
+
+  it('gives identical scores for one call and for groups aligned to NLI_BATCH_SIZE', async () => {
+    const oneCall = await scoreInGroups([24]);
+    expect(await scoreInGroups([NLI_BATCH_SIZE, NLI_BATCH_SIZE, NLI_BATCH_SIZE])).toEqual(oneCall);
+    expect(await scoreInGroups([2 * NLI_BATCH_SIZE, NLI_BATCH_SIZE])).toEqual(oneCall);
+  });
+
+  it('guard: other groupings give different scores, so the fake is batch-sensitive', async () => {
+    // Without this, the previous test could pass vacuously. This is also why
+    // the size is pinned and why scoring is not batch-invariant: a retry whose
+    // cache hits shift the batches (as in the calibration's shared client)
+    // scores its new pairs with other batch-mates.
+    expect(await scoreInGroups([5, 19])).not.toEqual(await scoreInGroups([24]));
   });
 });
 
@@ -443,7 +500,7 @@ describe('createWorkerBackend', () => {
     const info = await backend.load();
     expect(info).toMatchObject({ backend: 'wasm', threads: 4, adapter: { vendor: 'nvidia' } });
     expect(log).toHaveBeenCalledWith(expect.stringMatching(
-      /^\[Clarity\] NLI model .* loaded on wasm 4 threads \(webgpu adapter nvidia ampere\) in \d+ ms$/,
+      /^\[Clarity\] NLI model .* loaded on wasm 4 threads \(webgpu adapter nvidia ampere\) in \d+ ms, batches of 8$/,
     ));
   });
 
@@ -467,7 +524,7 @@ describe('createWorkerBackend', () => {
     expect(worker.received[0]).toMatchObject({ type: 'init', device: 'webgpu-fp16' });
     expect(info.dtype).toBe('fp16');
     expect(log).toHaveBeenCalledWith(expect.stringMatching(
-      /loaded on webgpu fp16 \(nvidia ampere\) in \d+ ms \(webgpu-fp16 requested by debug:nliDevice\)$/,
+      /loaded on webgpu fp16 \(nvidia ampere\) in \d+ ms, batches of 8 \(webgpu-fp16 requested by debug:nliDevice\)$/,
     ));
   });
 
@@ -563,7 +620,7 @@ describe('NLI benchmark', () => {
     expect(scored).toEqual(entailmentPairs(NLI_BENCH_PARAGRAPH.original, NLI_BENCH_PARAGRAPH.simplified));
   });
 
-  it('times the pairs in the backend batch size after an untimed warm-up, bypassing the cache', async () => {
+  it('times the pairs in batches of NLI_BATCH_SIZE after an untimed warm-up, bypassing the cache', async () => {
     const backend = loadingBackend('wasm');
     const client = new NliClient(backend);
     await client.load();
@@ -571,8 +628,8 @@ describe('NLI benchmark', () => {
     await client.scorePairs(pairs);
     backend.score.mockClear();
     expect(await client.bench(pairs)).toBeGreaterThanOrEqual(0);
-    // wasm batches of 8: 18 pairs = 3 calls per pass, warm-up + timed pass
-    expect(backend.score).toHaveBeenCalledTimes(2 * Math.ceil(pairs.length / NLI_BATCH_SIZE_WASM));
+    // 18 pairs = 3 calls per pass, warm-up + timed pass
+    expect(backend.score).toHaveBeenCalledTimes(2 * Math.ceil(pairs.length / NLI_BATCH_SIZE));
   });
 
   it('loads, benchmarks and stores a fresh record', async () => {

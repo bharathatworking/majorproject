@@ -12,11 +12,16 @@
  *  - score() tokenizes like nli.worker.ts (pairs over 512 tokens are scored
  *    truncated and flagged), so a script can wrap it as an NliBackend and run
  *    the app's own checkEntailment.
+ *  - score() runs the pairs in order in batches of NLI_BATCH_SIZE, read from
+ *    the app's config.ts (Node strips its types; it has no imports), so a
+ *    script that calls it directly batches like the app and the calibration.
+ *    Scripts that go through NliClient already send at most NLI_BATCH_SIZE.
  */
 
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { NLI_BATCH_SIZE } from '../../src/lib/quality/config.ts';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -101,8 +106,16 @@ export async function loadModel(modelId, dtype = 'q8', { device = 'cpu', threads
   const index = { entailment: find('entailment'), contradiction: find('contradiction'), neutral: find('neutral') };
   if (Object.values(index).some(Number.isNaN)) throw new Error('model labels missing');
 
-  /** Probabilities and truncation flags for a batch of pairs (same code path as nli.worker.ts). */
+  /** Probabilities and truncation flags for pairs, in order, in batches of NLI_BATCH_SIZE. */
   async function score(pairs) {
+    const out = [];
+    for (let i = 0; i < pairs.length; i += NLI_BATCH_SIZE) {
+      out.push(...await scoreBatch(pairs.slice(i, i + NLI_BATCH_SIZE)));
+    }
+    return out;
+  }
+  /** One inference call (same code path as nli.worker.ts). */
+  async function scoreBatch(pairs) {
     if (pairs.length === 0) return [];
     const full = tokenizer(pairs.map(p => p.premise), {
       text_pair: pairs.map(p => p.hypothesis), padding: false, truncation: false, return_tensor: false,

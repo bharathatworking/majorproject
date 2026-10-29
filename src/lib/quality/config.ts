@@ -159,13 +159,22 @@ export const THESIS_COVERAGE_MIN = 0.9;
 export const NLI_MODEL_ID = 'Xenova/nli-deberta-v3-xsmall';
 
 /**
- * Most premise/hypothesis pairs per worker inference call, by backend. A
- * batch is padded to its longest pair, so a smaller batch wastes less work
- * on padding; WebGPU still gains from 32 pairs at once, while wasm (one
- * thread) gains nothing from big batches and pads more.
+ * Premise/hypothesis pairs per NLI inference call: on every machine, backend
+ * and quality mode, in the browser and in every Node script. Pinned, not
+ * tuned: q8 scores depend on which pairs share a batch (DynamicQuantizeLinear
+ * takes one int8 scale per batch tensor, padding included), and the frozen
+ * combined score (COMBINED_SCORE_FULL / LITE) and QUALITY_THRESHOLD were fitted
+ * on features scored in batches of 8 (npm run checker:extract -- --set calib,
+ * 2026-10-19, commit 0c2f5de). Batch 32 instead flipped 3 of 29 fixture
+ * verdicts (eval/checker/NLI_PERF.md).
+ *
+ * This gives reproducibility, not batch invariance: a pair's score still
+ * depends on its batch-mates, and the last, partial batch varies with how
+ * many pairs are queued. The same input gives the same batches, and so the
+ * same verdicts, on any machine, under the rule the calibration used.
+ * Never change it for speed.
  */
-export const NLI_BATCH_SIZE_WEBGPU = 32;
-export const NLI_BATCH_SIZE_WASM = 8;
+export const NLI_BATCH_SIZE = 8;
 
 /**
  * wasm threads for the q8 NLI model (at most the machine's cores; 1 when the
@@ -208,7 +217,7 @@ export const NLI_SCORE_TIMEOUT_MS = 30_000;
  * to the chrome://extensions Errors page, which stays for real errors.
  * Raised from 1000 on 2026-10-29 (eval/checker/NLI_PERF.md): qwen3 writes
  * about 12 sentences per paragraph, so a paragraph is about 36 pairs, and
- * even native 4-thread CPU (Node, the same q8 model and batches) took
+ * even native 4-thread CPU (Node, the same q8 model, batches of 32) took
  * 1943 ms per paragraph on average on the fixtures; 1000 ms was always
  * exceeded. 3000 is AUTO_LITE_PARAGRAPH_MS, the point where Auto already
  * calls NLI too slow for Full.

@@ -31,7 +31,7 @@ A unit test now pins this (`tests/unit/nli.test.ts`, "NLI pair count"). The UK f
 ### 2. Dtype, model reuse, batch size: as reported
 
 - The worker loads q8 (`model_quantized.onnx`) once per worker (`loaded ??=`), not per call or per batch.
-- The client sends batches of 32 on WebGPU (`batchSizeFor`).
+- The client sent batches of 32 on WebGPU (`batchSizeFor`). *Superseded: since the pin below, every machine uses `NLI_BATCH_SIZE` = 8.*
 
 ### 3. The cause: "WebGPU" was a single CPU thread
 
@@ -72,7 +72,7 @@ What this means:
 - **Before this change the app already judged differently per machine.** WebGPU machines used batches of 32 and wasm machines batches of 8. The calibration and the combined-score fit (`scripts/checker/extract-features.mjs`, an `NliClient` without `load()`) also scored in batches of 8.
 - **The pair cache adds more of the same.** A retry scores only the pairs it hasn't seen, so its batches differ from a cold run's.
 - **Any change to batching changes verdicts**, so length-sorted batching was **not adopted** (it was also not consistently faster on the CPU).
-- **Making scoring batch-invariant is a meaning change, not a speed fix.** That is one pair per call, or batches of equal-length pairs. It needs a re-calibration or at least a pre-registered decision, so it is left as an open item.
+- **Making scoring batch-invariant is a meaning change, not a speed fix.** That is one pair per call, or batches of equal-length pairs. It needs a re-calibration or at least a pre-registered decision. It is not planned; the batch size is pinned instead (see "Pinned batch size" below).
 
 ## The fix
 
@@ -80,7 +80,7 @@ What this means:
 
 - **Manifest:** `cross_origin_embedder_policy: require-corp` and `cross_origin_opener_policy: same-origin`. These make the extension pages cross-origin isolated, which gives the worker SharedArrayBuffer. This is not a CSP change, and `key` is unchanged. Everything the app loads is same-origin, and Ollama answers CORS (`OLLAMA_ORIGINS`).
 - **Worker:** with isolation, q8 loads on wasm with `NLI_WASM_THREADS` (4, at most the core count). Ollama runs alongside, which is why it is not more.
-  - The WebGPU adapter is still requested. Its presence keeps the batch size at 32, exactly as before, and keeps Auto's "has WebGPU" rule.
+  - The WebGPU adapter is still requested. Its presence kept the batch size at 32, exactly as before (*superseded by the pin below*), and keeps Auto's "has WebGPU" rule.
   - Without isolation, the old path is kept: WebGPU EP, one thread.
   - The fp16 experiment stays on WebGPU.
   - `debug:nliDevice = 'webgpu'` forces the old q8 path, so one build can measure before and after.
@@ -99,6 +99,8 @@ Times are NLI scoring per version, with word-overlap premise ranking. Laptop CPU
 | CPU, 1 thread (≈ before, on a wasm machine) | in order, 8 | 6764 | 4349 |
 | **CPU, 4 threads (after, WebGPU machine)** | in order, 32 | **1943** | **1088** |
 | **CPU, 4 threads (after, wasm machine)** | in order, 8 | **2195** | **1208** |
+
+*The WebGPU-machine row is superseded: since the pin below, every machine scores in order in batches of 8.*
 
 So the after configuration is about **1.8× faster** than the WebGPU EP on a WebGPU machine, and about **3× faster** than one thread on a machine without one.
 
@@ -123,8 +125,47 @@ Build (`npm run build`), load `dist/`, paste `eval/fixtures/uk-wiki-paste.txt`, 
 
 3000 ms is `AUTO_LITE_PARAGRAPH_MS`, the point at which Auto already judges NLI too slow for Full. If the Chrome "after" row is well under it, this can be lowered again.
 
+## Pinned batch size (2026-10-29)
+
+`NLI_BATCH_SIZE` = 8 (`src/lib/quality/config.ts`) is now the only NLI batch size: in the browser and in every Node script, on every machine, backend and quality mode. `batchSizeFor`, `batchClassOf`, the `NliClient` batch-size argument and the 32 / 8 pair of constants are gone. `scripts/lib/nli-node.mjs` `score()` reads the same constant, so the scripts that call the model directly (`calibrate-nli.mjs`) batch like the app.
+
+**Why 8: it is the calibrated condition.** The combined score's weights (`COMBINED_SCORE_FULL` / `LITE`) and `QUALITY_THRESHOLD` (0.718) were fitted on features from `npm run checker:extract -- --set calib` (2026-10-19, commit `0c2f5de`), which scored through an `NliClient` without `load()`, so in batches of 8 on one CPU thread. Machines with a WebGPU adapter scored in batches of 32, which flips 3 of the 29 verdicts below. Pinning to 8 restores the calibrated condition on those machines. It is not a pre-registration change: no weight, threshold or scoring rule changed.
+
+**What the pin guarantees: reproducibility, not batch invariance.** A q8 pair's score still depends on its batch-mates (one quantization scale per batch), and the last, partial batch varies with how many pairs are queued (and with cache hits on a retry). What the pin guarantees is that the same input produces the same batches, and so the same verdicts, on any machine, under the same rule the calibration used. The calibration had the same dependence: `extract-features.mjs` shares one cached client across items.
+
+**What verifies what.**
+- The unit tests (`tests/unit/nli.test.ts`, "NliClient — pinned batch size") verify the **chunking logic** with fake backends:
+  - the constant is 8;
+  - any queue length on any load result is sent as chunks of exactly 8 plus a remainder, in order;
+  - one call and 8-aligned groups give identical scores under a batch-sensitive fake;
+  - a guard: a 5 + 19 grouping gives different scores, so the previous check can't pass vacuously.
+- The perf run below verifies the **model's behaviour**.
+
+### Measured (onnxruntime-node, same q8 model, the 29 versions)
+
+Inputs: `eval/fixtures/runs/uk-wiki-2026-10-19.json` (20 versions) and `clarity-run-report-karnataka-a-is-a-state-on-the-southweste-2026-10-27.json` (9 versions; a downloaded Chrome run report that is **not in git**).
+
+1. **Before the change**, with the old script (the batching strategies of commit `50f401d`): `node scripts/nli-perf.mjs <both reports> --configs cpu1,cpu4 --json eval/checker/nli-perf-before.json`
+2. **After the change**: `npm run nli:perf -- <both reports> --configs cpu1,cpu4 --baseline eval/checker/nli-perf-before.json --json eval/checker/nli-perf-after.json`
+
+Both JSON files are committed.
+
+| Run | Config | Batching | Mean ms/version | p50 | Batches | Padded/real tokens |
+|---|---|---|---|---|---|---|
+| before | CPU, 4 threads | in order, 32 | 1546 | 1649 | 50 | 1.57× |
+| before | CPU, 4 threads | in order, 8 | 1400 | 1445 | 144 | 1.40× |
+| **after (pinned)** | **CPU, 4 threads** | **8** | **1039** | **1071** | 144 | 1.40× |
+| after (pinned) | CPU, 1 thread | 8 | 2158 | 2166 | 144 | 1.40× |
+
+- **Cost of batch 8 versus 32: none.** In the same session, at 4 threads, batch 8 was 9.4% faster than batch 32 (1400 vs 1546 ms mean; 1445 vs 1649 p50). Smaller batches pad less (1.40× vs 1.57× the real tokens). The after run's 1039 ms is from another session, so it is not compared with the before numbers.
+- The 1-thread timings of the before session are not usable (in order 32 took 8564 ms there, against 2832 and 4628 ms in earlier runs, and in order 8 took 10146 ms against 2158 ms after), probably because of other load on the laptop. The verdict comparisons do not depend on timing.
+- **Verdicts: 0 of 29 changes against the batch-8 baseline.** After vs before in order 8 gives 0/29 verdict flips, 0 sentence-verdict changes and max |Δscore|, |ΔnliMin| and |Δcontra| all 0, on both 1 and 4 threads. The scores are bit-identical (same batches, so same numbers). 4 threads vs 1 thread is also 0 / 0 / 0.
+- Against the old batch-32 path (machines with an adapter) the before run shows the expected 3/29 flips, 8 sentence-verdict changes, max |ΔnliMin| 0.318 and max |Δcontra| 0.349. Those machines now judge like the calibration.
+
+The Chrome benchmark format is now `BENCH_FORMAT` 4, so a stored benchmark timed in batches of 32 is re-measured.
+
 ## Open items (not done here)
 
-- **Batch-invariant scoring.** Use one pair per call, or equal-length batches, so a verdict no longer depends on batch neighbours, the cache, or the machine. This changes scores, so it needs a decision and probably a re-run of `npm run checker:extract` and `checker:fit` under a new pre-registration.
+- ~~**Batch-invariant scoring.**~~ **Closed 2026-10-29** by pinning the calibrated rule (`NLI_BATCH_SIZE` = 8, above), not by making scoring invariant: scores still depend on batch-mates and the cache, exactly as during the calibration. True invariance (one pair per call, or equal-length batches) would change scores and need a new calibration under a new pre-registration; it is not planned.
 - **The benchmark paragraph has 6 sentences, but real qwen3 outputs average about 12.** `predictedParagraphMs` therefore underestimates real paragraphs by about 2×, and Auto's Lite decision inherits that.
 - **fp16 on WebGPU would actually use the GPU.** But it is different weights, so it needs its own calibration (`clarityNliExperiment()` exists for this).

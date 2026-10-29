@@ -7,7 +7,7 @@
  *    lib/quality/nli.ts prepareNli writes it; the run's Auto quality mode and
  *    the Settings page read it (lib/quality/mode.ts).
  *  - `debug:nliDevice` = 'wasm' forces the wasm backend and ignores the
- *    WebGPU adapter (batch size 8, Auto may pick Lite), so one machine can be
+ *    WebGPU adapter (Auto may pick Lite), so one machine can be
  *    measured as a machine without a GPU. 'webgpu' runs q8 on the WebGPU EP,
  *    the path before 2026-10-29 (eval/checker/NLI_PERF.md: before vs after on
  *    one build). 'webgpu-fp16' runs WebGPU with the fp16
